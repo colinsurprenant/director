@@ -267,3 +267,15 @@ How a director should run sessions under this system (the rationale is §4.4):
   - `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` = % of capacity at which autocompact fires (default ~95; ≥95 no-op; lower fires earlier). Set it as a **pure safety-net floor** (e.g. near your empirical degradation line), not as the primary control — the boundary-flush habit is the control.
   - `CLAUDE_CODE_AUTO_COMPACT_WINDOW` sets the capacity in tokens if you want a smaller effective window.
   - `SessionStart` hook with `matcher: compact` re-injects CHARTER + LOG digest so an *accidental* autocompaction is recoverable rather than lossy.
+
+## 15. Eng-review decisions (2026-06-04)
+
+Locked in `/plan-eng-review`; these **supersede** earlier sections where noted.
+
+1. **Language:** the `director` CLI is **Go** (single static binary; ms cold start; zero runtime-dep). v1 builds locally (`go build`); cross-compile CI (goreleaser) + `curl|sh` installer deferred to the OSS-release milestone.
+2. **Storage — supersedes §4.1 & §5.2:** events are stored as **NDJSON, one append-only file per repo** (`<hub>/projects/<repo-key>/log.ndjson`), written by the Go CLI via atomic `O_APPEND`. *Rationale:* the ~61% concurrent-append loss that motivated one-file-per-entry is a property of Claude's `Edit`/`Write` tool, **not** of file appends; with a Go writer doing atomic line-sized `O_APPEND`, one-file-per-entry is unnecessary and incurs inode/dir-scan debt. Markdown lives only at the **render** layer. When multi-machine sync arrives, shard one NDJSON per repo×machine to stay git-merge-clean.
+3. **Two emit paths:** hooks emit **liveness** (SessionStart=register, multiple hook events=heartbeat, Stop/SessionEnd=status); the model emits **semantic** events (decision|blocker|handoff|note) via the skill.
+4. **Liveness model:** stale = **derived from heartbeat-age (TTL/lease)**, never self-set — also covers crash cleanup (a dead session stops heartbeating → stale → reaper archives). Fleet state keys on **workstream + session-uuid** (collapsed by workstream at render) so concurrent sessions on one branch don't clobber.
+5. **Render/perf:** `fold` sorts by ULID, applies resolve/supersede marker lines; reads **tail + open-set**; `--since` spans active + archive; snapshotting deferred.
+6. **Cheap hardening (Codex outside-voice):** `schema_version` field from event #1; `resolve` targets a CLI-surfaced ULID (model copies, never invents) and is validated; identity is **derive-once-then-read-persisted** (survives branch rename); volatile fleet/heartbeat files **gitignored** (only the durable log is committable — no churn); hook-internal verbs hidden under `director _hook …`; the Needs-you band has a hard cap + "+N more" summarization.
+7. **v1 honesty:** atomic ≠ durable (add `fsync` for power-loss safety if wanted); ULID ≈ causal only on one machine (fine for single-machine v1); CC hooks are an external contract — isolate behind a thin adapter, degrade gracefully; secret-scan required **before** any sync/OSS-share (§8).
