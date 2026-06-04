@@ -76,15 +76,18 @@ Every easy heuristic fails on the real machine: basename collides (`ollama` → 
 
 **Required test matrix:** linked worktree · no-remote repo · fork-vs-upstream · same-basename-different-repo.
 
-### 4.4 The WRITE is the engineered guarantee (hook-forced flush)
+### 4.4 The WRITE is the engineered guarantee — and only the MODEL can make it
 
-Append-only protects data already written; it does nothing to make the write *happen*. Pain B's loss is the deferred item never getting flushed before compaction. **A 40%-complete ledger is worse than none** — it looks authoritative while silently missing items.
+Append-only protects data already written; it does nothing to make the write *happen*. Pain B's loss is the item never getting written before context is lost. **A 40%-complete ledger is worse than none** — it looks authoritative while silently missing items.
 
-**Resolution:**
-- **PreCompact + Stop hooks inject an instruction to flush open items + update fleet status BEFORE context is lost.**
-- A fixed rolling-handoff template (current task · in-flight next action · working hypotheses · "deferred this session").
-- Anti-loss rule: deferred items are pushed to the append-only LOG, never left only in the disposable render.
-- **State plainly: the hook-driven flush, not the storage format, is the real guarantee against B.**
+**Verified constraint (claude-code-guide, 2026-06-03):** hooks are *shell-only*, with **no model turn** and **no transcript access**. A `PreCompact` hook therefore **cannot** make the model flush, and cannot read the model's in-flight state to flush it. *No automatic mechanism can snapshot the model's transient working state at compaction.* Only the model, during a normal turn, can persist its own state.
+
+**Resolution — three layers, priority order:**
+1. **Primary — continuous model-driven boundary-flush.** The protocol (skill) makes the session write durable state to the LOG *as it works*: decisions and open-items the moment they arise; the rolling-handoff (current task · next action · hypotheses · deferred-this-session) at each natural boundary. This is the load-bearing habit — the only reliable capture of transient state.
+2. **Secondary — context-monitor nudge.** A `PostToolUse` hook (concept imported from GSD's `gsd-context-monitor`, no dependency) that, when context fill crosses a threshold, *injects a reminder* to flush now while context is healthy. Best-effort (it nudges; the model acts next turn).
+3. **Backstop — early autocompact + re-injection.** `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` set low keeps a session out of the degradation zone; a `SessionStart` hook with `matcher: compact` re-injects CHARTER + LOG digest so an autocompaction (or a fresh start) is recoverable.
+
+**State plainly:** the durable LOG survives compaction unconditionally (it is on disk). Transient working state survives only if the *model* flushed it during a turn — so the boundary-flush habit, not any hook, is the real guarantee against B. Prefer **flush-often + start-fresh-at-a-boundary** over letting a session autocompact repeatedly (which compounds summary-of-summary loss).
 
 ### 4.5 Autonomy escalation reads the LOG fresh, never the render
 
@@ -149,8 +152,9 @@ Single tiny tool; the **only** sanctioned writer of log/fleet surfaces.
 
 Existing hooks observed: SessionStart (`gsd-check-update.js`), PostToolUse (`gsd-context-monitor.js`). New hooks must **append**, never replace; an error must **never** block session start; success/failure is logged loudly to `health/`. Director **coexists with** these but does **not** depend on them (§14).
 
-- **SessionStart:** derive stable workstream id → `register`/`heartbeat` → auto-load CHARTER + a **bounded** rendered digest (fixed token budget; never raw growing logs). Filter out subagent/throwaway sessions so they don't pollute `fleet/`.
-- **Stop + PreCompact:** inject the flush instruction (§4.4).
+- **SessionStart (incl. `matcher: compact`):** derive stable workstream id → `register`/`heartbeat` → auto-load CHARTER + a **bounded** rendered digest (fixed token budget; never raw growing logs); re-inject after an autocompaction. Filter out subagent/throwaway sessions so they don't pollute `fleet/`.
+- **PostToolUse (context-monitor):** above a fill threshold, inject a "flush now while healthy" reminder (best-effort; concept imported, no dependency).
+- **Stop / SessionEnd:** shell-only end-of-session bookkeeping (mark fleet status). **PreCompact is best-effort only** — it cannot flush the model's state (§4.4).
 
 ### 5.5 Liveness model (fleet GC)
 
