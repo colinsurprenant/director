@@ -254,3 +254,16 @@ Director is **standalone and dependency-free**: it relies only on Claude Code pl
 - **Note:** GSD itself is a moving target (it ships a `gsd:update`); relying on it would force upgrade + change-assessment cycles. Avoiding the dependency removes that burden entirely.
 
 Rationale (§3.8): an always-on coordination substrate must not be coupled to external module versions or upgrade cycles.
+
+## Appendix A — Context & compaction operating guidance
+
+How a director should run sessions under this system (the rationale is §4.4):
+
+- **Avoid *repeated* autocompaction, not compaction per se.** A single compaction is first-generation loss (its summary even helps rehydrate recent mid-task state for one hop). Loss compounds only when compactions *chain* in one session (`summary-of-summary`, `f^n` decay, uncurated). So: let a session compact at most once to get past a rough mid-task spot, then **start fresh at the next boundary** to reset the generation counter to zero.
+- **The LOG is the handoff.** Because the session writes durable state to the LOG continuously as it works (§4.4 layer 1), a fresh start is already covered — no need to hand-compose a handoff at a fill threshold. This replaces the manual "watch the gauge → ask for a handoff" ritual with **continuous flush + cheap fresh-start.**
+- **Stay in the low-context zone.** Long-context models dilute mid-fill even at 1M; output quality degrades well before the window is full. Keep sessions low; fresh-start rather than ride a session up into the degradation zone.
+- **Rehydration quality is bounded by artifact quality, not model capability.** A fresh session reading a rich LOG + curated boundary-handoff + arc42 CHARTER rehydrates *better* than continuing a degraded high-fill session. Invest in the artifacts.
+- **Env knobs (operational):**
+  - `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` = % of capacity at which autocompact fires (default ~95; ≥95 no-op; lower fires earlier). Set it as a **pure safety-net floor** (e.g. near your empirical degradation line), not as the primary control — the boundary-flush habit is the control.
+  - `CLAUDE_CODE_AUTO_COMPACT_WINDOW` sets the capacity in tokens if you want a smaller effective window.
+  - `SessionStart` hook with `matcher: compact` re-injects CHARTER + LOG digest so an *accidental* autocompaction is recoverable rather than lossy.
