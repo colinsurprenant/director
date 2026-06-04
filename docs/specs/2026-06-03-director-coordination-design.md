@@ -37,6 +37,7 @@ Only the rendered view and staleness flags are true projections.
 5. **Coordinator:** **not a session** — a stateless `director render` function any session/hook/cron invokes. (Supersedes the earlier "coordinator session" idea; cleaner and more faithful to "reconstructible.")
 6. **Documentation:** records vs living docs (records are frozen + dated + superseded; living docs are deliberately re-projected). Framework stack: **Diátaxis** organizes the corpus by reader need → **arc42** templates the architecture doc (its §9 *is* ADRs) → **ADR** structures each decision. Volatility comes from an explicit doc `status` field, **not** the Diátaxis quadrant.
 7. **Multi-machine:** single-machine v1, hub kept as a clean git repo so push/pull sync is trivial to add later.
+8. **Zero third-party dependencies:** Director depends only on Claude Code platform primitives (hooks, the `Agent`/`Explore`/`Workflow` tools, `git`, `bash`) and its own code — **never** on installed plugins (GSD, gstack, …). Attractive ideas from other tools are **reimplemented minimally as our own**, not called. Rationale: an always-on coordination substrate must not be coupled to external module versions or upgrade cycles. (See §14.)
 
 ## 4. Critical corrections from adversarial review (must be honored)
 
@@ -146,7 +147,7 @@ Single tiny tool; the **only** sanctioned writer of log/fleet surfaces.
 
 ### 5.4 Hooks (additive, failure-isolated, health-logged)
 
-Existing hooks observed: SessionStart (`gsd-check-update.js`), PostToolUse (`gsd-context-monitor.js`). New hooks must **append**, never replace; an error must **never** block session start; success/failure is logged loudly to `health/`.
+Existing hooks observed: SessionStart (`gsd-check-update.js`), PostToolUse (`gsd-context-monitor.js`). New hooks must **append**, never replace; an error must **never** block session start; success/failure is logged loudly to `health/`. Director **coexists with** these but does **not** depend on them (§14).
 
 - **SessionStart:** derive stable workstream id → `register`/`heartbeat` → auto-load CHARTER + a **bounded** rendered digest (fixed token budget; never raw growing logs). Filter out subagent/throwaway sessions so they don't pollute `fleet/`.
 - **Stop + PreCompact:** inject the flush instruction (§4.4).
@@ -163,7 +164,7 @@ Existing hooks observed: SessionStart (`gsd-check-update.js`), PostToolUse (`gsd
 Default adoption = hub dir + CHARTER stub + fleet register (~5 min). The **heavy** adoption is a separate, explicitly-invoked tool (a fan-out workflow) for the repos that pay off (e.g. the elasticsearch fork overlay):
 
 1. **Inventory** existing docs (path, `git log` last-touched, apparent type).
-2. **Map the code** with parallel mapper agents — *code = ground truth, docs = unverified claims.*
+2. **Map the code** with parallel mapper agents (built-in `Explore`/`Agent` tools or a small fan-out — no plugin dependency) — *code = ground truth, docs = unverified claims.*
 3. **Reconcile** each doc vs the map → `confirmed-living` / `stale-living` / `record` / `rot`. Rescue rationale ("why") aggressively, captured **as back-dated reconstructed ADRs**. Quarantine rot (flag, never delete).
 4. **Synthesize** living projections → the architecture overview is produced by **populating an arc42 skeleton** (subset by default — context, building blocks, runtime, crosscutting, risks; fuller sections only where they earn their place), plus a doc index and CHARTER → **human checkpoint on the CHARTER** (intent/non-goals/upcoming-changes are not in the code).
 5. **Seed** the LOG + fleet. Do **not** seed every unknown — auto-seed open-items only above a relevance bar; dump the long tail into a dated `adoption-report.md` **record** (else a big repo buries the meaningful TBDs in rot).
@@ -236,3 +237,16 @@ Tests:
 3. **Resume-after-compaction** — a resumed session re-derives the same workstream id and updates the same fleet row (validates §4.2).
 4. **Render determinism** — same inputs → byte-identical render; `--verify` passes.
 5. **Hook failure isolation** — a deliberately-broken hook never blocks session start; failure shows in `health/`.
+
+## 14. Relationship to GSD / gstack
+
+Director is **standalone and dependency-free**: it relies only on Claude Code platform primitives (hooks, the `Agent`/`Explore`/`Workflow` tools, `git`, `bash`) and its own code — never on installed plugins.
+
+- **Axes differ.** GSD is *vertical* (depth within one project: roadmap→phase→plan→execute→verify, durable in-repo `.planning/`). gstack is *task/lifecycle execution* (qa, review, ship, deploy). Director is *horizontal* (coordinate many concurrent sessions across many repos). A GSD-managed project is simply one **workstream** in Director's fleet.
+- **What Director adds that GSD structurally can't:** the cross-worktree, cross-repo fleet/cockpit layer. GSD's `.planning/` is in-repo, so it is siloed per worktree and blind across projects — exactly Director's gap. Director sits *above* GSD, not beside it.
+- **gstack is orthogonal** — it is what an executor session *does*; Director records and routes the consequences.
+- **Concepts imported, never called** (reimplemented minimally as our own): GSD's pause/resume **handoff discipline** → rolling-handoff template (§4.4); GSD's **parallel codebase mapping** → §6.2 via built-in agents; GSD's **health/session-report** → observability (§9) + `director status`. We may *study* GSD/gstack internals for ideas during implementation, but take **no runtime dependency**.
+- **Coexistence, not dependency:** Director's hooks are additive and failure-isolated so they run alongside any installed plugin hooks (e.g. GSD's) without coupling to them.
+- **Note:** GSD itself is a moving target (it ships a `gsd:update`); relying on it would force upgrade + change-assessment cycles. Avoiding the dependency removes that burden entirely.
+
+Rationale (§3.8): an always-on coordination substrate must not be coupled to external module versions or upgrade cycles.
