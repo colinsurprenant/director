@@ -84,7 +84,9 @@ Append-only protects data already written; it does nothing to make the write *ha
 
 **Resolution — three layers, priority order:**
 1. **Primary — continuous model-driven boundary-flush.** The protocol (skill) makes the session write durable state to the LOG *as it works*: decisions and open-items the moment they arise; the rolling-handoff (current task · next action · hypotheses · deferred-this-session) at each natural boundary. This is the load-bearing habit — the only reliable capture of transient state.
-2. **Secondary — context-monitor nudge.** A `PostToolUse` hook (concept imported from GSD's `gsd-context-monitor`, no dependency) that, when context fill crosses a threshold, *injects a reminder* to flush now while context is healthy. Best-effort (it nudges; the model acts next turn).
+2. **Secondary — nudges (two surfaces, concepts imported, no dependency).** Best-effort prompts that make the *model* flush — they never flush it themselves (a hook has no model turn, see opening of §4.4):
+   - **Fill-threshold nudge** — a `PostToolUse` hook (concept from GSD's `gsd-context-monitor`) that, when context fill crosses a threshold, injects a "flush now while healthy" reminder; the model acts next turn.
+   - **Emit-guard at Stop** — a `Stop` hook (concept from claude-hooks' `stop_guard`, §14.1) that heuristically detects a turn which *looks* like it made a decision/blocker/handoff but never called `director emit`, and returns `decision: block` with a correction so the model emits the missing event before the session ends. Conservative by design (low false-positive bar); respects `stop_hook_active` to avoid loops and an explicit-wrap-up escape so a deliberately-finished session isn't trapped. It **nudges, never flushes** — it forces the model to write, it does not write semantic state itself. This is the load-bearing reinforcement against the system's #1 risk (model under-emit); the durable long-term answer is deriving signal from git/PostToolUse activity (see TODOS).
 3. **Backstop — early autocompact + re-injection.** `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` set low keeps a session out of the degradation zone; a `SessionStart` hook with `matcher: compact` re-injects CHARTER + LOG digest so an autocompaction (or a fresh start) is recoverable.
 
 **State plainly:** the durable LOG survives compaction unconditionally (it is on disk). Transient working state survives only if the *model* flushed it during a turn — so the boundary-flush habit, not any hook, is the real guarantee against B. Prefer **flush-often + start-fresh-at-a-boundary** over letting a session autocompact repeatedly (which compounds summary-of-summary loss).
@@ -146,15 +148,18 @@ Single tiny tool; the **only** sanctioned writer of log/fleet surfaces.
 - `director log --type … --area … [--risk …] [--to …] [--refs …] <body>` — mints ULID, writes one file.
 - `director register` / `director heartbeat` / `director done` — fleet row lifecycle.
 - `director render [--project <key>] [--verify]` — deterministic fold over the LOG (open-set for open-items, supersession resolution for decisions) → the digest used by SessionStart and `director status`. Same inputs → byte-identical output. Emits a **manifest** (sources read, counts, last-verified ids) to `health/`.
+- `director brief [--project <key>]` — human re-orientation view (§16). Shares `render`'s deterministic fold; composes CHARTER outlook + latest handoff per workstream + open blockers + decisions-since-last-review into an on-demand "bigger picture." Fleet altitude when `--project` is omitted. `--synthesize` (model-narrated prose) is deferred (§11).
 - `director status` — one-line-per-workstream cockpit (handle · status · recency · blocked-on).
 
 ### 5.4 Hooks (additive, failure-isolated, health-logged)
 
-Existing hooks observed: SessionStart (`gsd-check-update.js`), PostToolUse (`gsd-context-monitor.js`). New hooks must **append**, never replace; an error must **never** block session start; success/failure is logged loudly to `health/`. Director **coexists with** these but does **not** depend on them (§14).
+Existing hooks observed: SessionStart (`gsd-check-update.js`), PostToolUse (`gsd-context-monitor.js`). New hooks must **append**, never replace; an error must **never** block session start; success/failure is logged loudly to `health/`. Director **coexists with** these but does **not** depend on them (§14, §14.1).
+
+**Installation — idempotent, tagged merge (concept imported from claude-hooks, §14.1):** Director writes its hook entries into `~/.claude/settings.json` via an idempotent merge; every entry it owns carries a `_managedBy: "director"` tag. Re-install is a no-op on already-present entries; `director uninstall` removes **only** tagged entries, leaving hand-rolled hooks and other plugins' hooks (GSD's, …) untouched. This is the concrete mechanism behind the coexistence guarantee above.
 
 - **SessionStart (incl. `matcher: compact`):** derive stable workstream id → `register`/`heartbeat` → auto-load CHARTER + a **bounded** rendered digest (fixed token budget; never raw growing logs); re-inject after an autocompaction. Filter out subagent/throwaway sessions so they don't pollute `fleet/`.
 - **PostToolUse (context-monitor):** above a fill threshold, inject a "flush now while healthy" reminder (best-effort; concept imported, no dependency).
-- **Stop / SessionEnd:** shell-only end-of-session bookkeeping (mark fleet status). **PreCompact is best-effort only** — it cannot flush the model's state (§4.4).
+- **Stop / SessionEnd:** shell-only end-of-session bookkeeping (mark fleet status); also runs the **emit-guard** (§4.4 layer 2) against model-under-emit. **PreCompact is best-effort only** — it cannot flush the model's state (§4.4).
 
 ### 5.5 Liveness model (fleet GC)
 
@@ -205,7 +210,7 @@ ULID on every entry (sortable, collision-resistant, doubles as filename). **Wall
 ## 11. Scope
 
 ### In v1
-Lean hook-first core (§5) + the explicitly-invoked brownfield adoption tool (§6). The human's only manual action is ~3 lines of CHARTER per project.
+Lean hook-first core (§5) + the explicitly-invoked brownfield adoption tool (§6). The human's only manual action is ~3 lines of CHARTER per project. Includes `director brief` (§16) — the deterministic, on-demand bigger-picture view.
 
 ### Deferred (logged, not killed — with rationale)
 - Coordinator **session** → already replaced by stateless `director render`.
@@ -217,6 +222,7 @@ Lean hook-first core (§5) + the explicitly-invoked brownfield adoption tool (§
 - Real-time mid-flight cross-session watch/notify → **do not build.**
 - Separate approval queue for escalations → **do not build** (for a solo user, "escalate and wait" is the same channel — the human reading the fleet).
 - Reversal/dispute path for autonomous low-risk adaptations → cheap to spec later (`reverted: <id>` append; "built upon by N" escalates risk).
+- `director brief --synthesize` (model-narrated prose over the deterministic brief) → deferred; ship the deterministic brief first, add synthesis only if it proves insufficient in real use (§16).
 
 ## 12. Open questions / risks
 
@@ -239,7 +245,7 @@ Tests:
 1. **Concurrency smoke test** — N sessions append simultaneously via `director log`; assert zero lost entries (validates §4.1).
 2. **Repo-key matrix** — the four cases in §4.3 resolve to stable, collision-free keys.
 3. **Resume-after-compaction** — a resumed session re-derives the same workstream id and updates the same fleet row (validates §4.2).
-4. **Render determinism** — same inputs → byte-identical render; `--verify` passes.
+4. **Render determinism** — same inputs → byte-identical render (and `director brief`); `--verify` passes.
 5. **Hook failure isolation** — a deliberately-broken hook never blocks session start; failure shows in `health/`.
 
 ## 14. Relationship to GSD / gstack
@@ -254,6 +260,16 @@ Director is **standalone and dependency-free**: it relies only on Claude Code pl
 - **Note:** GSD itself is a moving target (it ships a `gsd:update`); relying on it would force upgrade + change-assessment cycles. Avoiding the dependency removes that burden entirely.
 
 Rationale (§3.8): an always-on coordination substrate must not be coupled to external module versions or upgrade cycles.
+
+### 14.1 Relationship to claude-hooks (memory ≠ coordination)
+
+[`mann1x/claude-hooks`](https://github.com/mann1x/claude-hooks) is the closest prior art for the hook substrate, but it solves a **different** problem and is **not** a dependency or a substitute.
+
+- **Axis differs.** claude-hooks shares *ambient memory*: per-session vector/KG recall injected at `UserPromptSubmit`, written back at `Stop`. Its cross-session sharing is async, semantic-similarity-gated, and has **no liveness, no addressing, no fleet** — it cannot answer "who is working on X now" or "this decision affects your area." It overlaps Director only on **pain B (continuity)** and the hook plumbing; it does nothing for **A/C/D**. Director is the structured, liveness-aware coordination layer that sits *above* such memory, exactly as it sits above GSD (§14).
+- **Concepts imported, never called** (reimplemented minimally per §14): the `_managedBy`-tagged idempotent `settings.json` merge (§5.4); `stop_guard` → the **emit-guard** (§4.4 layer 2); SessionStart-on-compact re-injection — which independently confirms §4.4 layer 3.
+- **Decisions it validates.** Its long-lived daemon + HMAC RPC + per-file session-affinity locks exist purely to dodge Python's 100–300 ms hook cold-start — exactly the subsystem Director's single static **Go** binary avoids (§15.1). Its non-blocking hooks (exit 0 on failure) and typed/structured events match §5.4 and §15.2.
+- **What we explicitly refuse.** Vector-DB semantic recall — probabilistic and similarity-gated, the opposite of Director's deterministic, reconstructible `render`/`brief` (§13 test 4). And its scope sprawl (API proxy, stats dashboard, LSP engine, two vector backends, Ollama/llamafile, a multi-agent council) is precisely the accretion Director's §8 zero-dependency rule and §11 deferral discipline exist to prevent — kept here as a cautionary before/after.
+- **Coexistence, not dependency.** Both install SessionStart/Stop/PostToolUse hooks; the `_managedBy`-tagged merge (§5.4) is how Director's hooks run alongside claude-hooks' (or GSD's) without clobbering.
 
 ## Appendix A — Context & compaction operating guidance
 
@@ -279,3 +295,20 @@ Locked in `/plan-eng-review`; these **supersede** earlier sections where noted.
 5. **Render/perf:** `fold` sorts by ULID, applies resolve/supersede marker lines; reads **tail + open-set**; `--since` spans active + archive; snapshotting deferred.
 6. **Cheap hardening (Codex outside-voice):** `schema_version` field from event #1; `resolve` targets a CLI-surfaced ULID (model copies, never invents) and is validated; identity is **derive-once-then-read-persisted** (survives branch rename); volatile fleet/heartbeat files **gitignored** (only the durable log is committable — no churn); hook-internal verbs hidden under `director _hook …`; the Needs-you band has a hard cap + "+N more" summarization.
 7. **v1 honesty:** atomic ≠ durable (add `fsync` for power-loss safety if wanted); ULID ≈ causal only on one machine (fine for single-machine v1); CC hooks are an external contract — isolate behind a thin adapter, degrade gracefully; secret-scan required **before** any sync/OSS-share (§8).
+
+## 16. Bigger-picture brief (2026-06-05)
+
+Validates pain **B** from the *human* side: across the session→handoff→compact churn, the director loses the project's **bigger picture** — where we are, what's next, the overall outlook. The ingredients already existed (CHARTER, `render`, `status`, handoffs), but nothing was framed as an on-demand human re-orientation view, and nothing held the **moving project-level narrative** sitting between stable CHARTER (the destination) and the per-session handoff (this one step).
+
+**Decision — add `director brief`,** a human-facing render-mode that *projects* (never stores) the bigger picture by composing artifacts we already keep:
+
+- CHARTER goal / non-goals / risk-line → **outlook** (where we're headed)
+- latest handoff per workstream → **where we are + what's next**
+- open blockers (open-set) → **what's stuck**
+- decisions since last review → **what changed**
+
+Deterministic, on-demand, available at both `--project` and fleet altitude. It shares `render`'s byte-identical fold — the human reads the *same* brief a fresh session reads (consistent with "rehydration quality is bounded by artifact quality," Appendix A). `render` stays the machine/hook digest; `status` stays the one-line fleet cockpit; `brief` is the human catch-up narrative-of-record.
+
+**Explicitly NOT built:** a stored `STATE.md` the model keeps updating. It would become a second handoff that drifts and would fight CHARTER's deliberate stability. The narrative is **reconstructed from the log on demand**, not persisted.
+
+**Deferred — `director brief --synthesize` (§11):** a model pass that turns the structured brief into prose ("you're ~60% through X, blocked on Y, next is Z"). Non-deterministic and costs a model turn. Ship the deterministic structured brief first; add synthesis only if real use (§12, one-week reassessment) proves the structured version insufficient.
