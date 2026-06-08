@@ -40,8 +40,12 @@ func run(args []string) int {
 		return runBrief(rest)
 	case "status":
 		return runStatus(rest)
-	case "adopt", "install", "uninstall": // adoption & install (Phase 5/7)
-		return notImplemented(verb)
+	case "adopt": // adoption (Phase 7)
+		return runAdopt(rest)
+	case "install": // installer (Phase 5)
+		return runInstall(rest)
+	case "uninstall":
+		return runUninstall(rest)
 	case "_hook":
 		return runHook(rest)
 	case "help", "-h", "--help":
@@ -52,22 +56,6 @@ func run(args []string) int {
 		usage(os.Stderr)
 		return 2
 	}
-}
-
-// runHook dispatches the hidden hook verbs (§15.6). The hook path must never
-// crash a session, so it is fail-safe by construction: it exits 0 even on
-// misuse. Real handlers — which log loudly to health/ — land in Phase 5.
-func runHook(args []string) int {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "director _hook: missing event name")
-		return 0
-	}
-	return 0
-}
-
-func notImplemented(verb string) int {
-	fmt.Fprintf(os.Stderr, "director: %q is not implemented yet\n", verb)
-	return 1
 }
 
 func usage(w io.Writer) {
