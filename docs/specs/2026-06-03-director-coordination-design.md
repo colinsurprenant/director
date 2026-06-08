@@ -28,6 +28,8 @@ A single human ("the director") runs **many concurrent Claude Code sessions acro
 
 Only the rendered view and staleness flags are true projections.
 
+**Routing rule — which record does a fact belong to?** An *open loop you carry forward* (follow-up, deferred, TBD) → an **`open-item` event in the LOG** (its single home). *Durable structured knowledge* (intent, architecture, a decision's rationale) → the **living docs**. This is the daily payoff of the two-records model: deferred items stop scattering between memory and per-project docs (rationale + canonical kinds in §17).
+
 ## 3. Locked design decisions
 
 1. **Topology:** a shared "team room" (blackboard) is the everyday foundation, *not* an orchestrator-centric model (an orchestrator concentrates context into one session and fights the human's compaction constraint). Orchestrator/Workflow fan-out is reserved for tightly-coupled bursts.
@@ -83,13 +85,15 @@ Append-only protects data already written; it does nothing to make the write *ha
 **Verified constraint (claude-code-guide, 2026-06-03):** hooks are *shell-only*, with **no model turn** and **no transcript access**. A `PreCompact` hook therefore **cannot** make the model flush, and cannot read the model's in-flight state to flush it. *No automatic mechanism can snapshot the model's transient working state at compaction.* Only the model, during a normal turn, can persist its own state.
 
 **Resolution — three layers, priority order:**
-1. **Primary — continuous model-driven boundary-flush.** The protocol (skill) makes the session write durable state to the LOG *as it works*: decisions and open-items the moment they arise; the rolling-handoff (current task · next action · hypotheses · deferred-this-session) at each natural boundary. This is the load-bearing habit — the only reliable capture of transient state.
+1. **Primary — continuous model-driven boundary-flush.** The protocol (skill) makes the session write durable state to the LOG *as it works*: decisions and open-items the moment they arise (a deferred loop is its own `open-item` event, §17 — not packed into the handoff); the rolling-handoff (current task · next action · hypotheses) at each natural boundary. This is the load-bearing habit — the only reliable capture of transient state.
 2. **Secondary — nudges (two surfaces, concepts imported, no dependency).** Best-effort prompts that make the *model* flush — they never flush it themselves (a hook has no model turn, see opening of §4.4):
    - **Fill-threshold nudge** — a `PostToolUse` hook (concept from GSD's `gsd-context-monitor`) that, when context fill crosses a threshold, injects a "flush now while healthy" reminder; the model acts next turn.
-   - **Emit-guard at Stop** — a `Stop` hook (concept from claude-hooks' `stop_guard`, §14.1) that heuristically detects a turn which *looks* like it made a decision/blocker/handoff but never called `director emit`, and returns `decision: block` with a correction so the model emits the missing event before the session ends. Conservative by design (low false-positive bar); respects `stop_hook_active` to avoid loops and an explicit-wrap-up escape so a deliberately-finished session isn't trapped. It **nudges, never flushes** — it forces the model to write, it does not write semantic state itself. This is the load-bearing reinforcement against the system's #1 risk (model under-emit); the durable long-term answer is deriving signal from git/PostToolUse activity (see TODOS).
+   - **Emit-guard at Stop** — a `Stop` hook (concept from claude-hooks' `stop_guard`, §14.1) that heuristically detects a turn which *looks* like it made a decision/open-item/handoff but never called `director emit`, and returns `decision: block` with a correction so the model emits the missing event before the session ends. Conservative by design (low false-positive bar); respects `stop_hook_active` to avoid loops and an explicit-wrap-up escape so a deliberately-finished session isn't trapped. It **nudges, never flushes** — it forces the model to write, it does not write semantic state itself. This is the load-bearing reinforcement against the system's #1 risk (model under-emit); the durable long-term answer is deriving signal from git/PostToolUse activity (see TODOS).
 3. **Backstop — early autocompact + re-injection.** `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` set low keeps a session out of the degradation zone; a `SessionStart` hook with `matcher: compact` re-injects CHARTER + LOG digest so an autocompaction (or a fresh start) is recoverable.
 
 **State plainly:** the durable LOG survives compaction unconditionally (it is on disk). Transient working state survives only if the *model* flushed it during a turn — so the boundary-flush habit, not any hook, is the real guarantee against B. Prefer **flush-often + start-fresh-at-a-boundary** over letting a session autocompact repeatedly (which compounds summary-of-summary loss).
+
+**Read-side mirror — injected state must be marked authoritative (Ground Truth, §14.2).** The flush guarantees state is *written*; it does not guarantee a fresh session *uses* it. Handed CHARTER + a digest, a model will by default re-derive project state from scratch — re-reading docs, re-scanning the log, re-confirming what it was already given — which burns the very context the bounded digest (§5.4) was sized to save and accelerates the compaction this section fights. So the SessionStart injection **and** the protocol skill must explicitly instruct the model that the injected state is its **authoritative current picture: build on it, do not rebuild it.** This is the read-side twin of the write-side rule above — both are model-behaviour guarantees no hook can enforce; injection without the instruction degrades to "memory-zero" (perfect context, ignored).
 
 ### 4.5 Autonomy escalation reads the LOG fresh, never the render
 
@@ -113,7 +117,7 @@ The render can be stale; a safety-critical "should I escalate?" check cannot run
 │   └── archive/<date>/                  ← terminal 'done' rows (archived, not deleted)
 └── projects/<repo-key>/
     ├── CHARTER.md                       ← living source of record: goal, non-goals, risk-line
-    └── log/<ulid>-<workstream>.md       ← append-only entries: decisions | open-items | notes (typed)
+    └── log/<ulid>-<workstream>.md       ← append-only typed events: decision · open-item · handoff · note (§17)
 ```
 
 In-worktree, per repo: `.director/workstream-id`, `.director/repo-key` (tiny; commit-vs-ignore decided per ownership — see §12).
@@ -125,10 +129,10 @@ Front-matter + body. Type tag distinguishes what we deferred-splitting in v1:
 ```
 ---
 id: <ulid>
-type: decision | open-item | note
+type: decision | open-item | handoff | note   # canonical 4 — §17
 workstream: <repo>-<branch>-<shortid>
 area: <subsystem/path tag>           # joins to docs/code for later freshness
-risk: low | escalate                  # decisions only
+risk: low | escalate                  # decisions; also marks needs-you open-items (§17)
 status: open | closed                 # open-items; closed via a marker entry
 addressed-to: @next-on-<x>            # optional (replaces the inbox for v1)
 refs: [<id>...]                       # supersedes/closes/reverts target ids
@@ -138,7 +142,7 @@ ts: <iso, display-only>
 ```
 
 - **Decisions** carry a `risk` tag and a pointer to the full in-repo ADR (the FEED holds metadata + pointer, not content — single source of truth).
-- **Open-items** carry a stable id; closing is a new marker entry (`type: note, refs: [<id>], status: closed`). The renderer flags orphan/double closes.
+- **Open-items** (open loops / follow-ups / deferred — the canonical home for "documented, not dropped", §17) carry a stable id; closing is a new marker entry (`type: open-item, status: closed, refs: [<id>]`). The renderer flags orphan/double closes. The `risk: escalate` subset is the "needs a human" signal that feeds the cockpit's Needs-you band (§15.6) — this absorbs the earlier `blocker` kind.
 - **Cross-session messages** are just `addressed-to` log lines — no separate inbox in v1.
 
 ### 5.3 The `director` CLI (the write path + render)
@@ -148,7 +152,7 @@ Single tiny tool; the **only** sanctioned writer of log/fleet surfaces.
 - `director log --type … --area … [--risk …] [--to …] [--refs …] <body>` — mints ULID, writes one file.
 - `director register` / `director heartbeat` / `director done` — fleet row lifecycle.
 - `director render [--project <key>] [--verify]` — deterministic fold over the LOG (open-set for open-items, supersession resolution for decisions) → the digest used by SessionStart and `director status`. Same inputs → byte-identical output. Emits a **manifest** (sources read, counts, last-verified ids) to `health/`.
-- `director brief [--project <key>]` — human re-orientation view (§16). Shares `render`'s deterministic fold; composes CHARTER outlook + latest handoff per workstream + open blockers + decisions-since-last-review into an on-demand "bigger picture." Fleet altitude when `--project` is omitted. `--synthesize` (model-narrated prose) is deferred (§11).
+- `director brief [--project <key>]` — human re-orientation view (§16). Shares `render`'s deterministic fold; composes CHARTER outlook + latest handoff per workstream + open items (open-set; `risk: escalate` = needs-you) + decisions-since-last-review into an on-demand "bigger picture." Fleet altitude when `--project` is omitted. `--synthesize` (model-narrated prose) is deferred (§11).
 - `director status` — one-line-per-workstream cockpit (handle · status · recency · blocked-on).
 
 ### 5.4 Hooks (additive, failure-isolated, health-logged)
@@ -157,7 +161,7 @@ Existing hooks observed: SessionStart (`gsd-check-update.js`), PostToolUse (`gsd
 
 **Installation — idempotent, tagged merge (concept imported from claude-hooks, §14.1):** Director writes its hook entries into `~/.claude/settings.json` via an idempotent merge; every entry it owns carries a `_managedBy: "director"` tag. Re-install is a no-op on already-present entries; `director uninstall` removes **only** tagged entries, leaving hand-rolled hooks and other plugins' hooks (GSD's, …) untouched. This is the concrete mechanism behind the coexistence guarantee above.
 
-- **SessionStart (incl. `matcher: compact`):** derive stable workstream id → `register`/`heartbeat` → auto-load CHARTER + a **bounded** rendered digest (fixed token budget; never raw growing logs); re-inject after an autocompaction. Filter out subagent/throwaway sessions so they don't pollute `fleet/`.
+- **SessionStart (incl. `matcher: compact`):** derive stable workstream id → `register`/`heartbeat` → auto-load CHARTER + a **bounded** rendered digest (fixed token budget; never raw growing logs); re-inject after an autocompaction. Filter out subagent/throwaway sessions so they don't pollute `fleet/`. The injected block is framed as the session's **authoritative current state — build on it, don't rebuild it** (Ground Truth, §4.4 / §14.2); without that framing the model re-derives what it was handed and wastes the budget.
 - **PostToolUse (context-monitor):** above a fill threshold, inject a "flush now while healthy" reminder (best-effort; concept imported, no dependency).
 - **Stop / SessionEnd:** shell-only end-of-session bookkeeping (mark fleet status); also runs the **emit-guard** (§4.4 layer 2) against model-under-emit. **PreCompact is best-effort only** — it cannot flush the model's state (§4.4).
 
@@ -271,6 +275,14 @@ Rationale (§3.8): an always-on coordination substrate must not be coupled to ex
 - **What we explicitly refuse.** Vector-DB semantic recall — probabilistic and similarity-gated, the opposite of Director's deterministic, reconstructible `render`/`brief` (§13 test 4). And its scope sprawl (API proxy, stats dashboard, LSP engine, two vector backends, Ollama/llamafile, a multi-agent council) is precisely the accretion Director's §8 zero-dependency rule and §11 deferral discipline exist to prevent — kept here as a cautionary before/after.
 - **Coexistence, not dependency.** Both install SessionStart/Stop/PostToolUse hooks; the `_managedBy`-tagged merge (§5.4) is how Director's hooks run alongside claude-hooks' (or GSD's) without clobbering.
 
+### 14.2 Relationship to memory-os (sequential memory ≠ concurrent coordination)
+
+[`ClaudioDrews/memory-os`](https://github.com/ClaudioDrews/memory-os) is a 7-layer persistent-memory stack for a *single* agent (Hermes, not Claude Code). Same orthogonality as §14.1, more extreme: it is about **one** agent remembering across **sequential** sessions — no fleet, no liveness, no routing, no concurrency. It overlaps Director only on **pain B**, and there it is far heavier (Docker + Qdrant + Redis + ARQ worker, vector recall, LLM extraction, trust scores) — the probabilistic, heavy-infra path Director's §8 deliberately refuses.
+
+- **One concept imported, never called — "Ground Truth."** memory-os's hardest-won lesson: *injecting context is necessary but not sufficient.* Without an explicit instruction that injected memory is **authoritative**, the agent re-queries and rediscovers what it already holds — "memory-zero behaviour despite perfect injection." Director adopts this as the **read-side mirror** of its write-side thesis (§4.4): the SessionStart inject + skill mark injected state authoritative (§5.4, Appendix A). Pure prompt/skill text — zero dependency.
+- **Convergent validation.** memory-os independently ships a `fabric_brief` re-orientation tool — confirming the `director brief` primitive (§16). Theirs is LLM-synthesized, which both validates the value of our deferred `--synthesize` and shows its cost (an entire LLM-extraction layer), vindicating deterministic-first staging.
+- **What we refuse (as in §14.1):** vector recall, LLM-extraction, multi-store sync-by-background-worker. Director keeps one append-only LOG + living docs as the only records, everything else a disposable deterministic projection (§2).
+
 ## Appendix A — Context & compaction operating guidance
 
 How a director should run sessions under this system (the rationale is §4.4):
@@ -279,6 +291,7 @@ How a director should run sessions under this system (the rationale is §4.4):
 - **The LOG is the handoff.** Because the session writes durable state to the LOG continuously as it works (§4.4 layer 1), a fresh start is already covered — no need to hand-compose a handoff at a fill threshold. This replaces the manual "watch the gauge → ask for a handoff" ritual with **continuous flush + cheap fresh-start.**
 - **Stay in the low-context zone.** Long-context models dilute mid-fill even at 1M; output quality degrades well before the window is full. Keep sessions low; fresh-start rather than ride a session up into the degradation zone.
 - **Rehydration quality is bounded by artifact quality, not model capability.** A fresh session reading a rich LOG + curated boundary-handoff + arc42 CHARTER rehydrates *better* than continuing a degraded high-fill session. Invest in the artifacts.
+- **Tell the fresh session its injected state is authoritative (Ground Truth, §14.2).** A rich artifact only helps if the model *trusts* it instead of re-deriving. The SessionStart inject and the skill must state plainly that CHARTER + the digest are the authoritative current picture — build on them, don't re-confirm them. Without this, injection degrades to "memory-zero": perfect context, ignored, every rediscovery burning the budget you spent flushing.
 - **Env knobs (operational):**
   - `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` = % of capacity at which autocompact fires (default ~95; ≥95 no-op; lower fires earlier). Set it as a **pure safety-net floor** (e.g. near your empirical degradation line), not as the primary control — the boundary-flush habit is the control.
   - `CLAUDE_CODE_AUTO_COMPACT_WINDOW` sets the capacity in tokens if you want a smaller effective window.
@@ -290,7 +303,7 @@ Locked in `/plan-eng-review`; these **supersede** earlier sections where noted.
 
 1. **Language:** the `director` CLI is **Go** (single static binary; ms cold start; zero runtime-dep). v1 builds locally (`go build`); cross-compile CI (goreleaser) + `curl|sh` installer deferred to the OSS-release milestone.
 2. **Storage — supersedes §4.1 & §5.2:** events are stored as **NDJSON, one append-only file per repo** (`<hub>/projects/<repo-key>/log.ndjson`), written by the Go CLI via atomic `O_APPEND`. *Rationale:* the ~61% concurrent-append loss that motivated one-file-per-entry is a property of Claude's `Edit`/`Write` tool, **not** of file appends; with a Go writer doing atomic line-sized `O_APPEND`, one-file-per-entry is unnecessary and incurs inode/dir-scan debt. Markdown lives only at the **render** layer. When multi-machine sync arrives, shard one NDJSON per repo×machine to stay git-merge-clean.
-3. **Two emit paths:** hooks emit **liveness** (SessionStart=register, multiple hook events=heartbeat, Stop/SessionEnd=status); the model emits **semantic** events (decision|blocker|handoff|note) via the skill.
+3. **Two emit paths:** hooks emit **liveness** (SessionStart=register, multiple hook events=heartbeat, Stop/SessionEnd=status); the model emits **semantic** events (decision|open-item|handoff|note — §17 supersedes the earlier `blocker`) via the skill.
 4. **Liveness model:** stale = **derived from heartbeat-age (TTL/lease)**, never self-set — also covers crash cleanup (a dead session stops heartbeating → stale → reaper archives). Fleet state keys on **workstream + session-uuid** (collapsed by workstream at render) so concurrent sessions on one branch don't clobber.
 5. **Render/perf:** `fold` sorts by ULID, applies resolve/supersede marker lines; reads **tail + open-set**; `--since` spans active + archive; snapshotting deferred.
 6. **Cheap hardening (Codex outside-voice):** `schema_version` field from event #1; `resolve` targets a CLI-surfaced ULID (model copies, never invents) and is validated; identity is **derive-once-then-read-persisted** (survives branch rename); volatile fleet/heartbeat files **gitignored** (only the durable log is committable — no churn); hook-internal verbs hidden under `director _hook …`; the Needs-you band has a hard cap + "+N more" summarization.
@@ -304,7 +317,7 @@ Validates pain **B** from the *human* side: across the session→handoff→compa
 
 - CHARTER goal / non-goals / risk-line → **outlook** (where we're headed)
 - latest handoff per workstream → **where we are + what's next**
-- open blockers (open-set) → **what's stuck**
+- open items (open-set; `risk: escalate` = needs-you) → **what's stuck / carried forward**
 - decisions since last review → **what changed**
 
 Deterministic, on-demand, available at both `--project` and fleet altitude. It shares `render`'s byte-identical fold — the human reads the *same* brief a fresh session reads (consistent with "rehydration quality is bounded by artifact quality," Appendix A). `render` stays the machine/hook digest; `status` stays the one-line fleet cockpit; `brief` is the human catch-up narrative-of-record.
@@ -312,3 +325,24 @@ Deterministic, on-demand, available at both `--project` and fleet altitude. It s
 **Explicitly NOT built:** a stored `STATE.md` the model keeps updating. It would become a second handoff that drifts and would fight CHARTER's deliberate stability. The narrative is **reconstructed from the log on demand**, not persisted.
 
 **Deferred — `director brief --synthesize` (§11):** a model pass that turns the structured brief into prose ("you're ~60% through X, blocked on Y, next is Z"). Non-deterministic and costs a model turn. Ship the deterministic structured brief first; add synthesis only if real use (§12, one-week reassessment) proves the structured version insufficient.
+
+## 17. Event-kind reconciliation (2026-06-08)
+
+Three earlier passes left the event-kind set inconsistent — §5.2 `decision|open-item|note`; §15.3 `decision|blocker|handoff|note`; the `dogfood.md` cheat-sheet `decision|blocker|handoff|done|note` — with two overloaded terms (`done`; `blocker` vs `open-item`). The dogfood's *value* question ("does surfacing these surface what I'd otherwise lose?") was settled by lived experience; this section locks the *schema* question that exercise would otherwise have hardened.
+
+**Observed texture (Colin).** Across multi-session handovers, what accumulates *systematically* at every boundary is the broad deferred concept — "one open loop carried into memory," "items to follow up on," "deferred (documented, not dropped)." The narrow "I'm blocked, need a human" is the minority case. The real pain: these deferred items have **no single home** — they scatter between MEMORY and per-project docs depending on each repo's structure. Giving them one canonical home is a core daily payoff of the LOG.
+
+**Canonical model-emitted semantic kinds (4) — supersedes §5.2 and §15.3:**
+
+| Kind | Meaning | Lifecycle |
+|---|---|---|
+| **decision** | a choice + what it affects | — (`risk: low\|escalate`) |
+| **open-item** | open loop / follow-up / deferred — the canonical home for "documented, not dropped" | **open → closed** (closed via an `open-item` marker w/ `refs`; render shows the open-set) |
+| **handoff** | current task · next action · hypotheses (positional snapshot) | — |
+| **note** | FYI / context for a parallel or future session | — |
+
+- **`blocker` is absorbed, not a kind.** "Stuck, needs a human" = an `open-item` with `risk: escalate`; that escalate-flagged open-set is exactly what the cockpit's Needs-you band surfaces (§15.6). If "halted-waiting" (a session idle on a human — pain D) later proves a distinct, high-value state, split it out then (§11 discipline); the texture doesn't show it yet.
+- **`done` is fleet-liveness only** — the terminal workstream transition (§5.5). Task-completion folds into `handoff`'s "what's done." The word lives in one layer.
+- **LOG-vs-docs routing rule (kills the scatter):** an open loop carried forward → an `open-item` event in the LOG (its one home); durable structured knowledge (intent, architecture, a decision's rationale) → the living docs. Stated as a principle in §2; reinforces §7's single-source-of-truth.
+- **Handoff stops embedding the deferred list.** Deferred items are emitted as durable `open-item` events, not packed into the handoff blob; `brief`/`render` *join* handoff (position) + the open-item open-set (carried loops). Removes a duplication (§7: duplication is the staleness engine). Supersedes the `deferred-this-session` field formerly in §4.4 layer 1.
+- **Closed-marker format:** `type: open-item, status: closed, refs: [<id>]` — an `open-item`-typed marker, not a generic `note` — so the fold resolves one kind cleanly. Supersedes the `type: note` close-marker formerly in §5.2.
