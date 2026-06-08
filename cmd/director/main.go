@@ -34,8 +34,13 @@ func run(args []string) int {
 		return runHeartbeat(rest)
 	case "done":
 		return runDone(rest)
-	case "render", "brief", "status", // projections (Phase 4)
-		"adopt", "install", "uninstall": // adoption & install (Phase 5/7)
+	case "render": // projections (Phase 4)
+		return runRender(rest)
+	case "brief":
+		return runBrief(rest)
+	case "status":
+		return runStatus(rest)
+	case "adopt", "install", "uninstall": // adoption & install (Phase 5/7)
 		return notImplemented(verb)
 	case "_hook":
 		return runHook(rest)

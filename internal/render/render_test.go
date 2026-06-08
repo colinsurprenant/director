@@ -1,0 +1,127 @@
+package render
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/colinsurprenant/director/internal/event"
+)
+
+// TestDigestByteIdentical is the §13 t4 gate at the render layer: the same event
+// set renders to a byte-for-byte identical digest across repeated calls AND
+// across input shuffles. This is what lets `--verify` assert determinism and a
+// fresh session trust the digest it is handed.
+func TestDigestByteIdentical(t *testing.T) {
+	events, _ := richSet(t)
+	want := Digest(Fold(events), "widget")
+
+	// Repeated calls on the same input.
+	for i := 0; i < 5; i++ {
+		if got := Digest(Fold(events), "widget"); got != want {
+			t.Fatalf("digest not stable across repeated calls (iter %d)", i)
+		}
+	}
+	// Across shuffled inputs.
+	for _, seed := range []int64{1, 7, 99, 2026} {
+		if got := Digest(Fold(shuffled(events, seed)), "widget"); got != want {
+			t.Fatalf("digest changed under input shuffle seed %d:\n--- want ---\n%s\n--- got ---\n%s", seed, want, got)
+		}
+	}
+}
+
+// TestDigestThroughStore folds events that round-tripped through the real NDJSON
+// store (not just in-memory structs), so the byte-identical guarantee holds end
+// to end — appended, re-read, folded, rendered — twice.
+func TestDigestThroughStore(t *testing.T) {
+	hub := t.TempDir()
+	store := event.NewStore(hub, "widget")
+	events, _ := richSet(t)
+	for _, ev := range events {
+		if err := store.Append(ev); err != nil {
+			t.Fatalf("append %s: %v", ev.ID, err)
+		}
+	}
+
+	read1, err := store.ReadAll()
+	if err != nil {
+		t.Fatalf("read1: %v", err)
+	}
+	read2, err := store.ReadAll()
+	if err != nil {
+		t.Fatalf("read2: %v", err)
+	}
+	d1 := Digest(Fold(read1), "widget")
+	d2 := Digest(Fold(read2), "widget")
+	if d1 != d2 {
+		t.Fatalf("digest differed across two reads of the same store:\n%s\n---\n%s", d1, d2)
+	}
+
+	// The escalate open-item must be marked in the digest.
+	if !strings.Contains(d1, "[risk:escalate]") {
+		t.Errorf("digest missing the risk:escalate marker:\n%s", d1)
+	}
+}
+
+// TestDigestEmptyLogStable confirms an empty project still renders a stable,
+// fully-populated skeleton — every section header present with "(none)".
+func TestDigestEmptyLogStable(t *testing.T) {
+	d := Digest(Fold(nil), "empty")
+	for _, header := range []string{"## decisions", "## open-items", "## handoffs"} {
+		if !strings.Contains(d, header) {
+			t.Errorf("empty digest missing header %q:\n%s", header, d)
+		}
+	}
+	if strings.Count(d, "(none)") != 3 {
+		t.Errorf("empty digest expected three (none) sections, got:\n%s", d)
+	}
+}
+
+// TestWriteManifest confirms the §9 artifact lands at the expected path with the
+// counts and last-id the fold produced.
+func TestWriteManifest(t *testing.T) {
+	hub := t.TempDir()
+	events, ids := richSet(t)
+	proj := Fold(events)
+	m := BuildManifest(proj, "widget", "/some/log.ndjson", events)
+
+	if err := WriteManifest(hub, m); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+	path := filepath.Join(hub, "health", "render-manifest.widget.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	var got Manifest
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("parse manifest: %v", err)
+	}
+	if got.Events != len(events) {
+		t.Errorf("manifest events = %d, want %d", got.Events, len(events))
+	}
+	if got.LastID != lastIDOf(events) {
+		t.Errorf("manifest last_id = %q, want %q", got.LastID, lastIDOf(events))
+	}
+	// decA superseded, supersedeA + decB active → 2 active decisions.
+	if got.Decisions != 2 {
+		t.Errorf("manifest decisions = %d, want 2", got.Decisions)
+	}
+	// openOpen open, openClosed closed → 1 in the open-set.
+	if got.OpenItems != 1 {
+		t.Errorf("manifest open_items = %d, want 1", got.OpenItems)
+	}
+	_ = ids
+}
+
+func lastIDOf(events []event.Event) string {
+	last := ""
+	for _, e := range events {
+		if e.ID > last {
+			last = e.ID
+		}
+	}
+	return last
+}

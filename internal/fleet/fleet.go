@@ -42,6 +42,7 @@ var ErrRowNotFound = errors.New("fleet: row not found")
 type Row struct {
 	Workstream string `json:"workstream"`
 	UUID       string `json:"uuid"`
+	RepoKey    string `json:"repo_key,omitempty"` // canonical repo-key; locates this workstream's LOG for status' blocked-on (§5.3)
 	Handle     string `json:"handle,omitempty"`
 	Heartbeat  string `json:"heartbeat"`        // RFC3339Nano, set from the injected now
 	Status     string `json:"status,omitempty"` // terminal marker only; "" while live

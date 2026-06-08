@@ -29,10 +29,11 @@ const (
 type Liveness struct {
 	Workstream string    `json:"workstream"`
 	State      State     `json:"state"`
-	UUID       string    `json:"uuid"`             // newest-heartbeat session
-	Handle     string    `json:"handle,omitempty"` // newest-heartbeat session
-	Heartbeat  time.Time `json:"heartbeat"`        // newest across the workstream's rows
-	Sessions   int       `json:"sessions"`         // live rows collapsed into this entry
+	UUID       string    `json:"uuid"`               // newest-heartbeat session
+	RepoKey    string    `json:"repo_key,omitempty"` // newest-heartbeat session; locates the workstream's LOG (§5.3)
+	Handle     string    `json:"handle,omitempty"`   // newest-heartbeat session
+	Heartbeat  time.Time `json:"heartbeat"`          // newest across the workstream's rows
+	Sessions   int       `json:"sessions"`           // live rows collapsed into this entry
 }
 
 // List reads every live row under <hub>/fleet/ (the archive dir is ignored),
@@ -100,6 +101,7 @@ func List(hub string, now time.Time, staleAfter, abandonedAfter time.Duration, b
 			Workstream: ws,
 			State:      derive(a.newestHB, now, staleAfter, abandonedAfter, branchAlive(ws)),
 			UUID:       a.newest.UUID,
+			RepoKey:    a.newest.RepoKey,
 			Handle:     a.newest.Handle,
 			Heartbeat:  a.newestHB,
 			Sessions:   a.count,

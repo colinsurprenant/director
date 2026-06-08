@@ -21,6 +21,7 @@ func runRegister(args []string) int {
 	row := fleet.Row{
 		Workstream: ws.ID,
 		UUID:       sessionUUID(),
+		RepoKey:    ws.RepoKey,
 		Handle:     ws.ID,
 		Heartbeat:  now.Format(time.RFC3339Nano),
 	}
