@@ -21,12 +21,23 @@ func runAdopt(args []string) int {
 	var importAll, noImport bool
 	fs.BoolVar(&importAll, "import-all", false, "import every discovered open-loop without prompting")
 	fs.BoolVar(&noImport, "no-import", false, "Tier 0 only — skip the open-loop import")
-	if err := fs.Parse(args); err != nil {
-		return 2
-	}
+
+	// Pull the optional <dir> positional out before flag parsing so flags work in
+	// any position — Go's flag package otherwise stops at the first positional and
+	// would silently ignore a trailing --import-all. adopt's flags are all
+	// booleans, so any non-dash token is the dir.
 	dir := "."
-	if fs.NArg() >= 1 {
-		dir = fs.Arg(0)
+	seenDir := false
+	flags := make([]string, 0, len(args))
+	for _, a := range args {
+		if !seenDir && !strings.HasPrefix(a, "-") {
+			dir, seenDir = a, true
+			continue
+		}
+		flags = append(flags, a)
+	}
+	if err := fs.Parse(flags); err != nil {
+		return 2
 	}
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
