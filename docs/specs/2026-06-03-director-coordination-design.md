@@ -40,6 +40,7 @@ Only the rendered view and staleness flags are true projections.
 6. **Documentation:** records vs living docs (records are frozen + dated + superseded; living docs are deliberately re-projected). Framework stack: **Diátaxis** organizes the corpus by reader need → **arc42** templates the architecture doc (its §9 *is* ADRs) → **ADR** structures each decision. Volatility comes from an explicit doc `status` field, **not** the Diátaxis quadrant.
 7. **Multi-machine:** single-machine v1, hub kept as a clean git repo so push/pull sync is trivial to add later.
 8. **Zero third-party dependencies:** Director depends only on Claude Code platform primitives (hooks, the `Agent`/`Explore`/`Workflow` tools, `git`, `bash`) and its own code — **never** on installed plugins (GSD, gstack, …). Attractive ideas from other tools are **reimplemented minimally as our own**, not called. Rationale: an always-on coordination substrate must not be coupled to external module versions or upgrade cycles. (See §14.)
+   - **Build-time Go deps are a separate category (clarified 2026-06-08).** §8 governs *runtime* coupling to installed CC plugins, whose versions and upgrade cycles are outside Director's control. A third-party Go module compiled into the static binary has no such runtime coupling, so it is **not** forbidden here — it is governed by a build-time policy: stdlib-first; a module is admitted only when it (a) solves something non-trivial and easy to get subtly wrong, (b) has minimal/zero *transitive* deps, (c) is widely vetted, (d) is pinned in `go.sum`. Each earns its place. (First instance: `github.com/oklog/ulid/v2` — pure-Go, zero transitive deps — for ULID correctness.)
 
 ## 4. Critical corrections from adversarial review (must be honored)
 
@@ -172,9 +173,11 @@ Existing hooks observed: SessionStart (`gsd-check-update.js`), PostToolUse (`gsd
 - Terminal `done` **archives** to `fleet/archive/<date>/`, never deletes.
 - A **single authorized reaper** (the Phase-3 monitor) is the only GC actor.
 
-## 6. Brownfield adoption tool (in v1, explicitly-invoked)
+## 6. Adoption (tiered; Tier 0+1 in v1, Tier 2 fast-follow)
 
-Default adoption = hub dir + CHARTER stub + fleet register (~5 min). The **heavy** adoption is a separate, explicitly-invoked tool (a fan-out workflow) for the repos that pay off (e.g. the elasticsearch fork overlay):
+**v1 line (decided 2026-06-08).** Adoption of *existing* repos is on the critical path (a director's projects already exist — greenfield-only is unusable). It is tiered: **Tier 0** (default adoption — identity + CHARTER stub + register, via `director adopt`) **and Tier 1** (assisted import of a repo's *existing* open loops into the LOG — consolidating the §17 MEMORY-vs-docs scatter into its one home) **ship in v1**. **Tier 2** — the heavy fan-out below (steps 2–4: parallel code-mapping, doc living/record/rot reconciliation, arc42 synthesis, back-dated ADRs) — is the immediate **fast-follow**, built for the repos that pay off once adoption is felt. Tier 2's value concentrates on cold/unfamiliar/inherited repos; it does **not** gate the coordination value, which accrues forward from adoption.
+
+Default adoption = hub dir + CHARTER stub + fleet register (~5 min). The **heavy** adoption (Tier 2) is a separate, explicitly-invoked tool (a fan-out workflow) for the repos that pay off (e.g. the elasticsearch fork overlay):
 
 1. **Inventory** existing docs (path, `git log` last-touched, apparent type).
 2. **Map the code** with parallel mapper agents (built-in `Explore`/`Agent` tools or a small fan-out — no plugin dependency) — *code = ground truth, docs = unverified claims.*
@@ -214,7 +217,7 @@ ULID on every entry (sortable, collision-resistant, doubles as filename). **Wall
 ## 11. Scope
 
 ### In v1
-Lean hook-first core (§5) + the explicitly-invoked brownfield adoption tool (§6). The human's only manual action is ~3 lines of CHARTER per project. Includes `director brief` (§16) — the deterministic, on-demand bigger-picture view.
+Lean hook-first core (§5) + adoption Tier 0+1 (§6 — `director adopt`: identity + CHARTER + register + assisted open-loop import). The human's only manual action is ~3 lines of CHARTER per project. Includes `director brief` (§16) — the deterministic, on-demand bigger-picture view.
 
 ### Deferred (logged, not killed — with rationale)
 - Coordinator **session** → already replaced by stateless `director render`.
@@ -227,6 +230,7 @@ Lean hook-first core (§5) + the explicitly-invoked brownfield adoption tool (§
 - Separate approval queue for escalations → **do not build** (for a solo user, "escalate and wait" is the same channel — the human reading the fleet).
 - Reversal/dispute path for autonomous low-risk adaptations → cheap to spec later (`reverted: <id>` append; "built upon by N" escalates risk).
 - `director brief --synthesize` (model-narrated prose over the deterministic brief) → deferred; ship the deterministic brief first, add synthesis only if it proves insufficient in real use (§16).
+- **Tier-2 brownfield fan-out** (§6 steps 2–4: parallel code-mapping · doc living/record/rot reconciliation · arc42 synthesis · back-dated ADRs) → **immediate fast-follow**; v1 ships adoption Tier 0+1. Value concentrates on cold/inherited repos, not the ones you already run.
 
 ## 12. Open questions / risks
 
