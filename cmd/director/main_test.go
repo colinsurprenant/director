@@ -14,7 +14,7 @@ func TestDispatchExitCodes(t *testing.T) {
 		{"no args shows usage, non-zero", nil, 2},
 		{"help is zero", []string{"help"}, 0},
 		{"unknown verb is non-zero", []string{"bogus"}, 2},
-		{"public verb stub is non-zero", []string{"emit"}, 1},
+		{"unimplemented verb stub is non-zero", []string{"render"}, 1},
 		{"hook without event is fail-safe", []string{"_hook"}, 0},
 		{"hook with event is fail-safe", []string{"_hook", "sessionstart"}, 0},
 	}

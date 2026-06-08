@@ -24,10 +24,18 @@ func run(args []string) int {
 
 	verb, rest := args[0], args[1:]
 	switch verb {
-	case "emit", "resolve", // write path (model-emitted)
-		"render", "brief", "status", // projections
-		"register", "heartbeat", "done", // fleet lifecycle (hook-emitted)
-		"adopt", "install", "uninstall": // adoption & install
+	case "emit": // write path (model-emitted)
+		return runEmit(rest)
+	case "resolve":
+		return runResolve(rest)
+	case "register": // fleet lifecycle (hook-emitted)
+		return runRegister(rest)
+	case "heartbeat":
+		return runHeartbeat(rest)
+	case "done":
+		return runDone(rest)
+	case "render", "brief", "status", // projections (Phase 4)
+		"adopt", "install", "uninstall": // adoption & install (Phase 5/7)
 		return notImplemented(verb)
 	case "_hook":
 		return runHook(rest)
