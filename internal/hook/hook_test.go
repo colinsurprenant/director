@@ -76,6 +76,20 @@ func assistantLine(text string) string {
 	return `{"type":"assistant","message":{"content":[{"type":"text","text":` + jsonString(text) + `}]}}`
 }
 
+// assistantToolUseLine builds an assistant record with a text block plus a Bash
+// tool_use block running command — the shape an actual `director emit` produces.
+func assistantToolUseLine(text, command string) string {
+	return `{"type":"assistant","message":{"content":[` +
+		`{"type":"text","text":` + jsonString(text) + `},` +
+		`{"type":"tool_use","name":"Bash","input":{"command":` + jsonString(command) + `}}` +
+		`]}}`
+}
+
+// userLine builds a genuine human user record (string content) — a turn boundary.
+func userLine(text string) string {
+	return `{"type":"user","message":{"content":` + jsonString(text) + `}}`
+}
+
 // jsonString quotes s as a JSON string literal (test-local; avoids pulling the
 // encoder into asserts).
 func jsonString(s string) string {
@@ -129,6 +143,20 @@ func TestDispatchUnknownEventAllows(t *testing.T) {
 	}
 	if !strings.Contains(readHealth(t, hub), "unknown hook event") {
 		t.Fatalf("expected unknown-event failure in health log")
+	}
+}
+
+// TestHealthDetailStaysOneLine verifies a multi-line/tabbed detail is flattened so
+// it can't split a health record across lines (one record = one greppable line).
+func TestHealthDetailStaysOneLine(t *testing.T) {
+	hub := t.TempDir()
+	logFailure(hub, EventStop, "s1", "line one\nline two\twith tab")
+	lines := strings.Split(strings.TrimRight(readHealth(t, hub), "\n"), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("health detail split across %d lines, want 1: %q", len(lines), lines)
+	}
+	if !strings.Contains(lines[0], "line one line two with tab") {
+		t.Errorf("detail not flattened to spaces: %q", lines[0])
 	}
 }
 
@@ -234,11 +262,14 @@ func TestEmitGuardBlocksDecisionWithoutEmit(t *testing.T) {
 }
 
 // TestEmitGuardAllowsWhenEmitted verifies the guard stands down when the turn
-// already invoked the sanctioned write path.
+// actually ran the sanctioned write path via a Bash tool_use (L2: detection comes
+// from the tool call, not prose).
 func TestEmitGuardAllowsWhenEmitted(t *testing.T) {
 	hub := t.TempDir()
 	repo := gitRepo(t, "widget", "main")
-	transcript := writeTranscript(t, assistantLine("I've decided to use NDJSON. I ran `director emit --type decision --area log \"use ndjson\"` to record it."))
+	transcript := writeTranscript(t, assistantToolUseLine(
+		"I've decided to use NDJSON for the log.",
+		`director emit --type decision --area log "use ndjson"`))
 
 	in := stopInput(repo, transcript, false)
 	var out bytes.Buffer
@@ -246,7 +277,70 @@ func TestEmitGuardAllowsWhenEmitted(t *testing.T) {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
 	if out.Len() != 0 {
-		t.Fatalf("expected allow (no output) when emit present, got %q", out.String())
+		t.Fatalf("expected allow (no output) when an emit tool_use is present, got %q", out.String())
+	}
+}
+
+// TestEmitGuardProseMentionBlocks verifies a turn that only TALKS about emitting
+// (prose mention, no actual tool call) is not treated as having emitted — a
+// decision-like turn that never ran `director emit` still blocks (L2 false-negative
+// fix: prose is no longer mistaken for an emit).
+func TestEmitGuardProseMentionBlocks(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	transcript := writeTranscript(t, assistantLine(
+		"I've decided to use NDJSON. I should run `director emit` to record it."))
+
+	in := stopInput(repo, transcript, false)
+	var out bytes.Buffer
+	if code := Dispatch(EventStop, strings.NewReader(in), &out, hub); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if !strings.Contains(out.String(), `"decision":"block"`) {
+		t.Fatalf("a prose-only emit mention should still block, got %q", out.String())
+	}
+}
+
+// TestEmitGuardEmitInCurrentTurnAllows verifies an emit anywhere in the current
+// turn-cluster (even before the final text-only message) suppresses the nudge.
+func TestEmitGuardEmitInCurrentTurnAllows(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	transcript := writeTranscript(t,
+		userLine("make the call"),
+		assistantToolUseLine("Recording it.", `director emit --type decision "use msgpack"`),
+		assistantLine("I've decided on msgpack. The plan is to ship it."),
+	)
+
+	in := stopInput(repo, transcript, false)
+	var out bytes.Buffer
+	if code := Dispatch(EventStop, strings.NewReader(in), &out, hub); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("an emit in the current turn should allow, got %q", out.String())
+	}
+}
+
+// TestEmitGuardEmitInEarlierTurnStillBlocks verifies emit-detection is scoped to
+// the current turn: an emit BEFORE the last human message does not suppress a nudge
+// for a later decision-like turn that didn't emit (L2 turn-cluster reset).
+func TestEmitGuardEmitInEarlierTurnStillBlocks(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	transcript := writeTranscript(t,
+		assistantToolUseLine("Recording the earlier call.", `director emit --type note "old"`),
+		userLine("now do the next thing"),
+		assistantLine("I've decided to switch to msgpack. The plan is to ship it."),
+	)
+
+	in := stopInput(repo, transcript, false)
+	var out bytes.Buffer
+	if code := Dispatch(EventStop, strings.NewReader(in), &out, hub); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if !strings.Contains(out.String(), `"decision":"block"`) {
+		t.Fatalf("an emit in a prior turn must not suppress this turn's nudge, got %q", out.String())
 	}
 }
 

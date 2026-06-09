@@ -36,6 +36,26 @@ func TestLifecycleRegisterCreatesRow(t *testing.T) {
 	}
 }
 
+// TestRowFileDistinctForSluggingCollision is L3: two distinct workstream ids whose
+// filename slugs coincide ("a-b" and "a_b" both slug to "a_b") must still map to
+// separate row files — the identity hash in the filename guarantees it — so one
+// never clobbers the other.
+func TestRowFileDistinctForSluggingCollision(t *testing.T) {
+	hub := t.TempDir()
+	for _, ws := range []string{"a-b", "a_b"} {
+		if err := Register(hub, Row{Workstream: ws, UUID: "u", Heartbeat: fixedTime.Format(heartbeatLayout)}); err != nil {
+			t.Fatalf("Register(%s): %v", ws, err)
+		}
+	}
+	got, _, err := List(hub, fixedTime, staleTTL, abandonedTTL, alive)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("slug-colliding workstreams clobbered on disk: got %d entries, want 2: %+v", len(got), got)
+	}
+}
+
 func TestLifecycleRegisterRejectsMissingFields(t *testing.T) {
 	hub := t.TempDir()
 	cases := []Row{

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -24,13 +25,14 @@ func hookLogPath(hub string) string {
 }
 
 // healthLine is one record in the hook health log. The shape is intentionally
-// flat and stable so it greps cleanly and a future reader can diff outcomes.
+// flat and stable so it greps cleanly (the log is written as one tab-separated line
+// per record, not JSON) and a future reader can diff outcomes.
 type healthLine struct {
-	TS      string `json:"ts"`                // RFC3339Nano, when the outcome was recorded
-	Event   string `json:"event"`             // hook event name (sessionstart/stop/…)
-	OK      bool   `json:"ok"`                // true on success, false on a handled failure
-	Detail  string `json:"detail,omitempty"`  // human note: what happened / why
-	Session string `json:"session,omitempty"` // CC session id when known, for correlation
+	TS      string // RFC3339Nano, when the outcome was recorded
+	Event   string // hook event name (sessionstart/stop/…)
+	OK      bool   // true on success, false on a handled failure
+	Detail  string // human note: what happened / why
+	Session string // CC session id when known, for correlation
 }
 
 // logHealth appends one outcome record to the health log. It is best-effort by
@@ -50,9 +52,11 @@ func logHealth(hub string, line healthLine, now time.Time) error {
 	}
 	// One line per record, single Write, so concurrent hook processes appending
 	// to the shared log don't interleave (the same line-sized-append property the
-	// event store relies on — §15.2).
+	// event store relies on — §15.2). Detail is sanitized to keep one record on one
+	// line: an error message with an embedded newline/tab would otherwise split the
+	// record and corrupt the grep-one-line-per-outcome contract.
 	record := fmt.Sprintf("%s\t%s\tok=%t\tsession=%s\t%s\n",
-		line.TS, line.Event, line.OK, line.Session, line.Detail)
+		line.TS, line.Event, line.OK, oneField(line.Session), oneField(line.Detail))
 
 	f, err := os.OpenFile(hookLogPath(hub), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -79,4 +83,11 @@ func logFailure(hub, event, session, detail string) {
 	if err := logHealth(hub, healthLine{Event: event, OK: false, Detail: detail, Session: session}, time.Now()); err != nil {
 		fmt.Fprintf(os.Stderr, "director hook: health log write failed: %v\n", err)
 	}
+}
+
+// oneField flattens a free-text field to a single tab-free line so it can't break
+// the one-record-per-line health format. Newlines, carriage returns, and tabs all
+// collapse to a single space.
+func oneField(s string) string {
+	return strings.NewReplacer("\n", " ", "\r", " ", "\t", " ").Replace(s)
 }

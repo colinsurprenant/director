@@ -11,6 +11,8 @@
 package fleet
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -122,11 +124,16 @@ func Done(hub, workstream, uuid string, now time.Time) error {
 	return nil
 }
 
-// rowFile is the per-row filename: <workstream>--<uuid>.json. Both components are
-// slugged so a branch-derived workstream or an odd uuid can't escape the dir or
-// collide on a path separator.
+// rowFile is the per-row filename: <workstream>--<uuid>-<hash>.json. The slugged
+// components keep it readable and prevent a branch-derived workstream or an odd
+// uuid from escaping the dir or colliding on a path separator; the 8-hex SHA-256 of
+// the EXACT (workstream, uuid) makes the path collision-proof — two distinct
+// identities whose slugs happen to coincide (slugging collapses punctuation) still
+// get distinct files. The row body always carries the exact ids regardless.
 func rowFile(workstream, uuid string) string {
-	return slug(workstream) + "--" + slug(uuid) + rowExt
+	sum := sha256.Sum256([]byte(workstream + "\x00" + uuid))
+	short := hex.EncodeToString(sum[:])[:8]
+	return slug(workstream) + "--" + slug(uuid) + "-" + short + rowExt
 }
 
 func rowPath(hub, workstream, uuid string) string {

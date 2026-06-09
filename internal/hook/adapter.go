@@ -20,13 +20,33 @@ import (
 )
 
 // Hook event names. These are the suffixes the hidden `director _hook <event>`
-// verb takes and the names the hooks/ shims pass. They mirror CC's
-// hook_event_name values, lowercased for the CLI surface.
+// verb takes and the names the shims pass. They mirror CC's hook_event_name
+// values, lowercased for the CLI surface.
 const (
 	EventSessionStart = "sessionstart"
 	EventPostToolUse  = "posttooluse"
 	EventStop         = "stop"
 )
+
+// manualUUID is the fleet-row session id used when no CC session id is available
+// (a manual or odd invocation). It mirrors cmd/director's sessionUUID fallback so
+// the hook and CLI surfaces key a workstream's rows identically.
+const manualUUID = "manual"
+
+// sessionUUID resolves the fleet-row session id for a hook invocation. CC supplies
+// it in the stdin payload (in.SessionID); if that's absent we fall back to the
+// CLAUDE_CODE_SESSION_ID env var — the SAME value the CLI's sessionUUID reads — so
+// a hook and a hand-run CLI verb resolve the same row; only then to manualUUID.
+// This is the single uuid-resolution rule shared by every handler.
+func sessionUUID(in Input) string {
+	if in.SessionID != "" {
+		return in.SessionID
+	}
+	if v := os.Getenv("CLAUDE_CODE_SESSION_ID"); v != "" {
+		return v
+	}
+	return manualUUID
+}
 
 // Input is the typed projection of CC's hook stdin JSON. Only the fields
 // Director's handlers use are modeled; unknown fields are ignored by the JSON

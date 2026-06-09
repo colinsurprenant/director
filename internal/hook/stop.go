@@ -17,21 +17,24 @@ import (
 // done), then the emit-guard (§4.4 layer 2) — the load-bearing reinforcement
 // against the system's #1 risk, model under-emit.
 //
-// The emit-guard is CONSERVATIVE by design (low false-positive bar). It reads
-// the tail of the session transcript and blocks the stop ONLY when ALL of:
+// The emit-guard is CONSERVATIVE by design (low false-positive bar). It reads the
+// CURRENT turn (everything since the last human message) and blocks the stop ONLY
+// when ALL of:
 //   - stop_hook_active == false      (never block on a re-entrant Stop — loop guard)
 //   - the last assistant turn LOOKS like it made a decision/open-item/handoff
 //     (a simple, tunable keyword signal — see decisionLikeSignals)
-//   - that same turn shows NO `director emit` invocation
+//   - no `director emit`/`resolve` actually ran this turn — detected from the
+//     tool_use blocks (the real tool call), not the prose, so a real emit is seen
+//     even when unnarrated and a prose-only mention isn't mistaken for one
 //   - the model didn't explicitly ask to wrap up (the escape hatch)
 // Otherwise it allows the stop (writes nothing, exit 0). It NUDGES, never
 // flushes — the block feeds a correction back to the model so the model writes
 // the missing event; the hook never writes semantic state itself.
 //
-// v1 heuristic note: keyword matching on the last turn is deliberately crude and
-// will both miss and over-fire at the margins. The durable signal is deriving
-// "a decision happened" from git/PostToolUse activity rather than prose (TODOS).
-// This guard is the placeholder that proves the block-with-correction loop.
+// v1 heuristic note: the decision-like keyword match is deliberately crude and
+// will still over-fire at the margins (one bounded nudge, with the wrap-up escape).
+// The durable signal is deriving "a decision happened" from git/PostToolUse
+// activity rather than prose. This guard proves the block-with-correction loop.
 
 // decisionLikeSignals are the lowercased phrases that mark a turn as having
 // likely produced coordination-worthy state. Kept short and high-signal to hold
@@ -56,7 +59,8 @@ var decisionLikeSignals = []string{
 	"picking up where",
 	"open question",
 	"still need to",
-	"we should",
+	// "we should" was dropped: it matches ordinary discussion far too often (a
+	// false-positive source). Re-add only with real-transcript evidence.
 }
 
 // wrapUpSignals are the explicit escape hatch: if the last turn says the session
@@ -74,9 +78,12 @@ var wrapUpSignals = []string{
 	"no need to emit",
 }
 
-// emitInvocationSignals indicate the model already emitted in this turn, so the
-// guard must NOT block. Matching the command surface (not prose) keeps this
-// precise: the model ran the sanctioned write path.
+// emitInvocationSignals indicate the model actually ran the sanctioned write path,
+// so the guard must NOT block. These are matched against the tool_use blocks of the
+// current turn (the Bash command that ran), NOT the assistant prose — so a turn
+// that emitted via a tool call is correctly detected even when the model didn't
+// narrate it, and a turn that merely *mentions* `director emit` in prose without
+// running it is not mistaken for a real emit.
 var emitInvocationSignals = []string{
 	"director emit",
 	"director resolve",
@@ -130,11 +137,7 @@ func markFleetDone(in Input, hub string) {
 		logFailure(hub, EventStop, in.SessionID, fmt.Sprintf("resolve workstream from %q: %v", in.CWD, err))
 		return
 	}
-	uuid := in.SessionID
-	if uuid == "" {
-		uuid = "manual"
-	}
-	if err := fleet.Done(hub, ws.ID, uuid, time.Now()); err != nil {
+	if err := fleet.Done(hub, ws.ID, sessionUUID(in), time.Now()); err != nil {
 		// ErrRowNotFound is an expected, benign outcome (nothing to archive);
 		// log it at the same loud level so the timeline stays complete but it
 		// never blocks the stop.
@@ -151,7 +154,7 @@ func emitGuardVerdict(transcriptPath string) (block bool, reason string) {
 	if strings.TrimSpace(transcriptPath) == "" {
 		return false, ""
 	}
-	turn, err := lastAssistantText(transcriptPath)
+	turn, emitInvoked, err := lastAssistantTurn(transcriptPath)
 	if err != nil || turn == "" {
 		return false, ""
 	}
@@ -161,8 +164,9 @@ func emitGuardVerdict(transcriptPath string) (block bool, reason string) {
 	if containsAny(lower, wrapUpSignals) {
 		return false, ""
 	}
-	// Already emitted in this turn → allow.
-	if containsAny(lower, emitInvocationSignals) {
+	// An actual `director emit`/`resolve` ran in this turn (detected from the
+	// tool_use blocks, not prose) → the model already wrote → allow.
+	if emitInvoked {
 		return false, ""
 	}
 	// Looks like coordination-worthy state was produced but not written → block.
@@ -172,28 +176,29 @@ func emitGuardVerdict(transcriptPath string) (block bool, reason string) {
 	return false, ""
 }
 
-// lastAssistantText returns the concatenated TEXT of the most recent assistant
-// turn in the transcript JSONL (tool_use/tool_result blocks are skipped — the
-// emit signal lives in prose and the emit-invocation signal we surface from the
-// turn's text mentioning `director emit`). It streams the file and keeps only the
-// last assistant text seen, so a long transcript stays O(1) in memory beyond the
-// final turn.
+// lastAssistantTurn streams the transcript JSONL and returns, for the CURRENT turn
+// (everything since the last genuine human message), the concatenated assistant
+// TEXT and whether an emit/resolve was actually invoked via a tool_use block.
 //
-// The CC transcript is one JSON object per line; an assistant record has
-// type=="assistant" with a message.content array of typed blocks. We tolerate
-// unknown shapes: a line that doesn't parse, or a record without recognizable
-// text, is skipped rather than treated as a hard error — fail-open.
-func lastAssistantText(path string) (string, error) {
+// Scoping to the current turn matters in both directions: an emit from an EARLIER
+// turn must not suppress a nudge now (so emitInvoked resets on each human message),
+// and the decision/wrap-up signals are read from the latest assistant text. The
+// scan stays O(1) in memory — it carries only the current turn's accumulated state.
+//
+// The CC transcript is one JSON object per line: an assistant record has
+// type=="assistant"; a human message is a type=="user" record whose content is not
+// a tool_result. We tolerate unknown shapes (a line that doesn't parse is skipped)
+// — fail-open.
+func lastAssistantTurn(path string) (text string, emitInvoked bool, err error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return "", fmt.Errorf("open transcript: %w", err)
+		return "", false, fmt.Errorf("open transcript: %w", err)
 	}
 	defer f.Close()
 
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), maxTranscriptLineBytes)
 
-	var lastText string
 	for sc.Scan() {
 		raw := sc.Bytes()
 		if len(raw) == 0 {
@@ -203,17 +208,27 @@ func lastAssistantText(path string) (string, error) {
 		if err := json.Unmarshal(raw, &rec); err != nil {
 			continue // tolerate a non-JSON / partial line
 		}
-		if rec.Type != "assistant" {
-			continue
-		}
-		if text := rec.Message.text(); strings.TrimSpace(text) != "" {
-			lastText = text // keep overwriting; the last one wins
+		switch rec.Type {
+		case "user":
+			if rec.Message.isHumanMessage() {
+				// A new human turn begins: reset the per-turn accumulators so an
+				// emit (or text) from a prior turn can't leak into this verdict.
+				text, emitInvoked = "", false
+			}
+		case "assistant":
+			t, emit := rec.Message.assistantSignals()
+			if strings.TrimSpace(t) != "" {
+				text = t // last non-empty assistant text in the turn wins
+			}
+			if emit {
+				emitInvoked = true
+			}
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return "", fmt.Errorf("scan transcript: %w", err)
+		return "", false, fmt.Errorf("scan transcript: %w", err)
 	}
-	return lastText, nil
+	return text, emitInvoked, nil
 }
 
 // maxTranscriptLineBytes bounds one transcript line for the scanner. A single
@@ -232,41 +247,80 @@ type transcriptRecord struct {
 
 type transcriptMessage struct {
 	// Content is either a plain string (older shape) or an array of typed blocks.
-	// Decoded as RawMessage and resolved in text() to handle both without two
-	// incompatible struct definitions.
+	// Decoded as RawMessage and resolved by the methods below to handle both without
+	// two incompatible struct definitions.
 	Content json.RawMessage `json:"content"`
 }
 
-// text extracts the human-readable text of an assistant message, concatenating
-// all text blocks. It handles both the string form and the typed-block-array
-// form; anything it can't interpret yields "" (skipped upstream).
-func (m transcriptMessage) text() string {
+// contentBlock is the minimal projection of one content block. Input is kept raw
+// so an emit invocation can be detected from a tool_use block's payload (e.g. a
+// Bash command) without modeling every tool's input shape.
+type contentBlock struct {
+	Type  string          `json:"type"`
+	Text  string          `json:"text"`
+	Input json.RawMessage `json:"input"`
+}
+
+// assistantSignals extracts, from an assistant message, the concatenated text (for
+// the decision/wrap-up keyword signals) and whether any tool_use block actually
+// invoked `director emit`/`resolve`. Detecting the emit from the tool_use payload
+// (not prose) is what makes the guard precise: a real emit is seen even when
+// unnarrated, and a prose-only mention is not mistaken for one. Anything it can't
+// interpret yields ("", false) — skipped upstream (fail-open).
+func (m transcriptMessage) assistantSignals() (text string, emitInvoked bool) {
 	if len(m.Content) == 0 {
-		return ""
+		return "", false
 	}
-	// String form: "content": "..."
+	// String form: "content": "..." — no tool blocks, so emit can't be detected.
 	var asString string
 	if err := json.Unmarshal(m.Content, &asString); err == nil {
-		return asString
+		return asString, false
 	}
-	// Block-array form: [{ "type": "text", "text": "..." }, ...]
-	var blocks []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	}
+	var blocks []contentBlock
 	if err := json.Unmarshal(m.Content, &blocks); err != nil {
-		return ""
+		return "", false
 	}
 	var b strings.Builder
 	for _, blk := range blocks {
-		if blk.Type == "text" && blk.Text != "" {
-			if b.Len() > 0 {
-				b.WriteByte('\n')
+		switch blk.Type {
+		case "text":
+			if blk.Text != "" {
+				if b.Len() > 0 {
+					b.WriteByte('\n')
+				}
+				b.WriteString(blk.Text)
 			}
-			b.WriteString(blk.Text)
+		case "tool_use":
+			if containsAny(strings.ToLower(string(blk.Input)), emitInvocationSignals) {
+				emitInvoked = true
+			}
 		}
 	}
-	return b.String()
+	return b.String(), emitInvoked
+}
+
+// isHumanMessage reports whether a user record is a genuine human turn (the turn
+// boundary the guard resets on) rather than a tool_result the model is consuming.
+// String content is always human; block content is human only if it carries no
+// tool_result block.
+func (m transcriptMessage) isHumanMessage() bool {
+	if len(m.Content) == 0 {
+		return false
+	}
+	var asString string
+	if err := json.Unmarshal(m.Content, &asString); err == nil {
+		return true
+	}
+	var blocks []contentBlock
+	if err := json.Unmarshal(m.Content, &blocks); err != nil {
+		return false
+	}
+	for _, blk := range blocks {
+		if blk.Type == "tool_result" {
+			return false
+		}
+	}
+	return true
 }
 
 // containsAny reports whether haystack (already lowercased) contains any of the

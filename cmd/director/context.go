@@ -41,12 +41,18 @@ func resolveContext() (hub string, ws identity.Workstream, err error) {
 	return hub, ws, nil
 }
 
-// sessionUUID is the volatile per-start session id the fleet row keys on
-// alongside the workstream (§15.4). Hooks pass it via CLAUDE_CODE_SESSION_ID; a
-// manual invocation falls back to a single "manual" row.
+// manualUUID is the fleet-row session id for a manual (non-CC) CLI invocation. It
+// matches internal/hook's fallback so a hand-run verb and a hook key the same row.
+const manualUUID = "manual"
+
+// sessionUUID is the volatile per-start session id the fleet row keys on alongside
+// the workstream (§15.4). It reads CLAUDE_CODE_SESSION_ID — the SAME value CC puts
+// in the hook stdin payload as session_id — so the CLI and hook surfaces resolve a
+// workstream's rows identically (internal/hook.sessionUUID is the mirror); a manual
+// invocation with no session env falls back to a single manualUUID row.
 func sessionUUID() string {
 	if u := os.Getenv("CLAUDE_CODE_SESSION_ID"); u != "" {
 		return u
 	}
-	return "manual"
+	return manualUUID
 }

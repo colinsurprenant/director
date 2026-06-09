@@ -284,7 +284,22 @@ install/uninstall + adopt → emit → status → resolve → `render --verify`)
 | M5 | adopt resolves the repo root before `git ls-files` | `internal/adopt/scan.go` |
 | — | `install` embeds (`go:embed`) + writes the shims, executable; `uninstall` removes them; shims relocated to `internal/install/shims/` (repo-root `hooks/` removed) | `internal/install/install.go`, `cmd/director/installcmd.go` |
 
-**Deferred (not blocking):** L2 (emit-guard should also scan `tool_use` blocks), L3 (fleet filename hash —
-verified bounded), L5 (unify the two session-uuid sources), and the nits (health.go dead JSON tags,
-`Digest` "bounded" wording, ref de-dup, `decisionLikeSignals` tuning). Docs updated in `README.md` +
-`docs/getting-started.md`. **No merge/push — that's the user's call.**
+Docs updated in `README.md` + `docs/getting-started.md`. **No merge/push — that's the user's call.**
+
+### Lows + nits (resolved in a follow-up pass, also tested)
+- **L2** — emit-guard now detects a real `director emit`/`resolve` from the **tool_use** blocks of the
+  **current turn** (reset on each human message), not prose. Fixes both the false-positive (an unnarrated
+  emit no longer draws a spurious block) and the false-negative (a prose-only mention no longer counts as an
+  emit). `hook/stop.go`; new tests for tool_use-allow, prose-mention-block, and the turn-cluster reset.
+- **L3** — fleet row filename now carries an 8-hex SHA-256 of the exact `(workstream, uuid)`, so two
+  identities whose slugs coincide can't collide on disk. `fleet/fleet.go`; regression test
+  `TestRowFileDistinctForSluggingCollision`.
+- **L5** — both surfaces resolve the session uuid through one rule: `internal/hook.sessionUUID` (stdin →
+  `CLAUDE_CODE_SESSION_ID` → `manualUUID`) mirrors `cmd/director.sessionUUID`, documented as mirrors; the
+  `"manual"` literal is now a named const in each.
+- **Nits** — health.go: dropped the dead JSON tags (the log is TSV) and flatten `Detail` so a newline can't
+  split a record (`oneField`, tested); `Digest` doc corrected from "bounded" to "complete (v1)"; `emit`
+  de-dups `--refs`; dropped the over-firing `"we should"` signal from the emit-guard.
+
+Still open (genuinely deferred, design-level): bounded digest snapshot (§15.5), live git-branch liveness
+check, `brief --synthesize`, multi-machine sync.

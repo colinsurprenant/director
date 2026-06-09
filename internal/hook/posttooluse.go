@@ -91,11 +91,7 @@ func refreshHeartbeat(in Input, hub string) {
 		logFailure(hub, EventPostToolUse, in.SessionID, fmt.Sprintf("resolve workstream from %q: %v", in.CWD, err))
 		return
 	}
-	uuid := in.SessionID
-	if uuid == "" {
-		uuid = "manual"
-	}
-	if err := fleet.Heartbeat(hub, ws.ID, uuid, time.Now()); err != nil {
+	if err := fleet.Heartbeat(hub, ws.ID, sessionUUID(in), time.Now()); err != nil {
 		logFailure(hub, EventPostToolUse, in.SessionID, fmt.Sprintf("heartbeat: %v", err))
 	}
 }

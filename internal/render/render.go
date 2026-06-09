@@ -11,11 +11,15 @@ import (
 	"github.com/colinsurprenant/director/internal/event"
 )
 
-// Digest is the bounded, fully deterministic text projection a SessionStart hook
-// injects as Ground Truth (§5.4, §14.2). It is a pure function of the Projection:
-// no time.Now(), no map-iteration order — every section is sorted by a stable
-// key — so the same event set always renders byte-identically (§13 t4). repoKey
-// titles the digest so a multi-project injection stays unambiguous.
+// Digest is the fully deterministic text projection a SessionStart hook injects as
+// Ground Truth (§5.4, §14.2). It is a pure function of the Projection: no
+// time.Now(), no map-iteration order — every section is sorted by a stable key — so
+// the same event set always renders byte-identically (§13 t4). repoKey titles the
+// digest so a multi-project injection stays unambiguous.
+//
+// v1 renders the COMPLETE active set (every active decision, every open item, the
+// latest handoff per workstream); it is not yet size-bounded. A bounded snapshot
+// (top-N with overflow, like status' Needs-you band) is the §15.5 fast-follow.
 //
 // Sections, in fixed order:
 //   - active decisions (ULID order)

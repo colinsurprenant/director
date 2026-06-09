@@ -16,11 +16,11 @@ import (
 
 // sessionstart.go is the read-side of Director's central thesis (§4.4): the
 // SessionStart hook derives the workstream, registers/heartbeats it in the
-// fleet, and injects the project's CHARTER plus a bounded render digest as the
+// fleet, and injects the project's CHARTER plus the render digest as the
 // session's AUTHORITATIVE current state. The framing is load-bearing: handed
 // state without the "build on it, don't rebuild it" instruction, a model
-// re-derives what it was already given and burns the very budget the bounded
-// digest was sized to save — "memory-zero behaviour despite perfect injection"
+// re-derives what it was already given and burns the very budget the injected
+// digest was meant to save — "memory-zero behaviour despite perfect injection"
 // (§14.2, §4.4). source=compact is handled identically: re-inject after an
 // autocompaction so the resumed model is re-grounded.
 
@@ -52,7 +52,7 @@ func handleSessionStart(in Input, out io.Writer, hub string) error {
 	}
 
 	if !throwaway {
-		if err := refreshFleet(hub, ws, in.SessionID); err != nil {
+		if err := refreshFleet(hub, ws, sessionUUID(in)); err != nil {
 			// A fleet write failure must not stop the injection — visibility of
 			// current state is more valuable than the heartbeat. Log loudly and
 			// continue to build the Ground-Truth block.
@@ -78,13 +78,9 @@ func handleSessionStart(in Input, out io.Writer, hub string) error {
 // refreshFleet registers + heartbeats the workstream's row so a freshly-started
 // (or resumed/compacted) session shows up live in the cockpit. Register is
 // create-or-refresh, so calling it on every start — first run or resume — keeps
-// one row current rather than spawning duplicates. uuid falls back to "manual"
-// when CC didn't supply a session id, matching the CLI's convention.
-func refreshFleet(hub string, ws identity.Workstream, sessionID string) error {
-	uuid := sessionID
-	if uuid == "" {
-		uuid = "manual"
-	}
+// one row current rather than spawning duplicates. The caller resolves uuid via
+// sessionUUID so every surface keys the same row.
+func refreshFleet(hub string, ws identity.Workstream, uuid string) error {
 	now := time.Now()
 	row := fleet.Row{
 		Workstream: ws.ID,
@@ -103,8 +99,8 @@ func refreshFleet(hub string, ws identity.Workstream, sessionID string) error {
 }
 
 // buildGroundTruth assembles the injected block: the Ground-Truth preamble, the
-// project CHARTER (graceful when absent), and the bounded deterministic digest
-// folded from the LOG. The digest is the same one `director render` and
+// project CHARTER (graceful when absent), and the deterministic digest folded
+// from the LOG. The digest is the same one `director render` and
 // `--verify` anchor on, so what the session is handed is exactly what the
 // cockpit shows — no drift between injected and authoritative state.
 func buildGroundTruth(hub, repoKey string) (string, error) {

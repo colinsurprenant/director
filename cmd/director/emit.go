@@ -59,14 +59,16 @@ func runEmit(args []string) int {
 	return 0
 }
 
-// canonicalRefs splits a comma-separated --refs value and canonicalizes each
-// ULID, rejecting malformed ones at the boundary so only well-formed refs are
-// stored (Emit persists them verbatim).
+// canonicalRefs splits a comma-separated --refs value, canonicalizes each ULID,
+// rejects malformed ones at the boundary, and de-duplicates (a repeated ref carries
+// no extra meaning — the fold uses set membership — so only distinct, well-formed
+// refs are stored).
 func canonicalRefs(refs string) ([]string, error) {
 	if strings.TrimSpace(refs) == "" {
 		return nil, nil
 	}
 	var out []string
+	seen := make(map[string]bool)
 	for _, r := range strings.Split(refs, ",") {
 		r = strings.TrimSpace(r)
 		if r == "" {
@@ -76,6 +78,10 @@ func canonicalRefs(refs string) ([]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid --refs id %q: %w", r, err)
 		}
+		if seen[c] {
+			continue
+		}
+		seen[c] = true
 		out = append(out, c)
 	}
 	return out, nil
