@@ -133,16 +133,25 @@ func trackedFiles(dir string) ([]string, error) {
 
 // scanFile reads one tracked file (if it still exists on disk and is within the
 // size cap) and returns its open-loop hits. A file that vanished between ls-files
-// and the read, a symlink/special file, or one over the size cap is skipped —
-// skipping an over-cap file is reported via truncated so the caller knows the
-// picture is partial.
+// and the read or a symlink/special file is skipped quietly (it is not a source we
+// meant to scan). A real file we couldn't read or finish — an unreadable file
+// (perms/racing chmod), one over the size cap, or one with an over-long line — is
+// skipped but reported via truncated so the caller knows the picture is partial (§9).
 func scanFile(dir, rel string) (hits []Candidate, truncated bool, err error) {
 	full := filepath.Join(dir, filepath.FromSlash(rel))
 
 	info, err := os.Lstat(full)
-	if err != nil || !info.Mode().IsRegular() {
-		// A symlink, special file, or one removed since ls-files — skip quietly;
-		// it is not a readable source file with open loops.
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Removed between ls-files and the read — benign, nothing to scan.
+			return nil, false, nil
+		}
+		// A real tracked file we couldn't even stat (e.g. a permission error): skip
+		// it, but surface the partial picture rather than reporting a clean scan (§9).
+		return nil, true, nil
+	}
+	if !info.Mode().IsRegular() {
+		// A symlink or special file is not a readable source file with open loops.
 		return nil, false, nil
 	}
 	if info.Size() > maxFileBytes {
@@ -151,7 +160,9 @@ func scanFile(dir, rel string) (hits []Candidate, truncated bool, err error) {
 
 	f, err := os.Open(full)
 	if err != nil {
-		return nil, false, nil // unreadable now — skip rather than fail the whole scan.
+		// A real, regular, in-cap file we couldn't read (perms, racing chmod): skip
+		// it but flag truncation — a silent skip would report a complete scan (§9).
+		return nil, true, nil
 	}
 	defer f.Close()
 

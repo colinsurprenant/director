@@ -226,6 +226,39 @@ func TestScanOpenLoopsFromSubdir(t *testing.T) {
 	}
 }
 
+// TestScanOpenLoopsUnreadableFileIsTruncated locks the §9 fix: a tracked, regular,
+// in-cap file that can't be read (here chmod 0000) is skipped but reported via
+// truncated, so adopt never claims a complete scan when a real file was missed.
+func TestScanOpenLoopsUnreadableFileIsTruncated(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("chmod 0000 does not block reads when running as root")
+	}
+	repo := filepath.Join(t.TempDir(), "proj")
+	gitInit(t, repo)
+
+	writeFile(t, repo, "readable.go", "// TODO: this one scans fine\n")
+	unreadable := writeFile(t, repo, "locked.go", "// TODO: cannot read me\n")
+	mustGit(t, repo, "add", "readable.go", "locked.go")
+	mustGit(t, repo, "commit", "-q", "-m", "seed")
+
+	if err := os.Chmod(unreadable, 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o644) }) // let TempDir cleanup remove it
+
+	cands, truncated, err := ScanOpenLoops(repo)
+	if err != nil {
+		t.Fatalf("ScanOpenLoops: %v", err)
+	}
+	if !truncated {
+		t.Error("an unreadable tracked file must make the scan report truncated (partial)")
+	}
+	// The readable file's loop still surfaces — one bad file doesn't blind the scan.
+	if !hasCandidateContaining(cands, "this one scans fine") {
+		t.Errorf("readable file's loop missing despite an unreadable sibling: %+v", cands)
+	}
+}
+
 func hasCandidateContaining(cands []Candidate, sub string) bool {
 	for _, c := range cands {
 		if strings.Contains(c.Text, sub) {

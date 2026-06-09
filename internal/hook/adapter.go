@@ -28,6 +28,15 @@ const (
 	EventStop         = "stop"
 )
 
+// maxHookStdinBytes bounds the hook payload read. Real SessionStart/Stop payloads
+// are a few KB; only a PostToolUse payload carrying large tool_input/tool_response
+// can approach this — and that path needs only tool_name (a best-effort nudge), so
+// degrading an over-cap payload to a logged no-op is acceptable. Bounding the read
+// keeps a pathological payload from spiking the short-lived hook process's memory,
+// matching the codebase's other input caps (event.MaxBodyBytes, store.maxLineBytes,
+// adopt.maxFileBytes).
+const maxHookStdinBytes = 8 << 20 // 8 MiB
+
 // manualUUID is the fleet-row session id used when no CC session id is available
 // (a manual or odd invocation). It mirrors cmd/director's sessionUUID fallback so
 // the hook and CLI surfaces key a workstream's rows identically.
@@ -81,12 +90,17 @@ type Input struct {
 // surfaced as an error so the fail-safe boundary logs it, NOT silently treated as
 // an empty Input that would then take a wrong branch.
 func parseInput(r io.Reader) (Input, error) {
-	data, err := io.ReadAll(r)
+	// Read at most the cap + 1 byte: enough to detect an over-cap payload without
+	// pulling an unbounded blob into memory.
+	data, err := io.ReadAll(io.LimitReader(r, maxHookStdinBytes+1))
 	if err != nil {
 		return Input{}, fmt.Errorf("hook: read stdin: %w", err)
 	}
 	if len(data) == 0 {
 		return Input{}, fmt.Errorf("hook: empty stdin (no hook payload)")
+	}
+	if len(data) > maxHookStdinBytes {
+		return Input{}, fmt.Errorf("hook: payload exceeds the %d-byte cap", maxHookStdinBytes)
 	}
 	var in Input
 	if err := json.Unmarshal(data, &in); err != nil {

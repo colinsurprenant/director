@@ -155,6 +155,23 @@ func TestDispatchEmptyHubIsNoOp(t *testing.T) {
 	}
 }
 
+// TestParseInputRejectsOversizedPayload locks the stdin bound: a payload over the
+// cap is rejected (the fail-safe boundary then logs + no-ops) rather than read
+// unbounded into memory, while a normal payload still parses.
+func TestParseInputRejectsOversizedPayload(t *testing.T) {
+	big := `{"session_id":"s1","tool_name":"Bash","blob":"` + strings.Repeat("x", maxHookStdinBytes) + `"}`
+	if _, err := parseInput(strings.NewReader(big)); err == nil {
+		t.Fatal("oversized payload should be rejected, got nil error")
+	}
+	in, err := parseInput(strings.NewReader(`{"session_id":"s1","tool_name":"Bash"}`))
+	if err != nil {
+		t.Fatalf("normal payload should parse: %v", err)
+	}
+	if in.ToolName != "Bash" || in.SessionID != "s1" {
+		t.Errorf("normal payload parsed wrong: %+v", in)
+	}
+}
+
 // TestDispatchUnknownEventAllows ensures an unknown event name (a wiring bug)
 // allows the session and logs loudly rather than blocking.
 func TestDispatchUnknownEventAllows(t *testing.T) {
