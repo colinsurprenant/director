@@ -129,6 +129,13 @@ func derive(heartbeat, now time.Time, staleAfter, abandonedAfter time.Duration, 
 		return StateAbandoned
 	}
 	age := now.Sub(heartbeat)
+	if age < 0 {
+		// Clock skew: a heartbeat slightly in the future yields a negative age. Clamp
+		// it to 0 so a future-dated row reads as freshly active rather than relying on
+		// the switch's lower-bound cases to fall through — and so derive() matches
+		// render.recency(), which clamps the same way.
+		age = 0
+	}
 	switch {
 	case age >= abandonedAfter:
 		return StateAbandoned

@@ -44,9 +44,15 @@ func Status(hub string, now time.Time) (string, error) {
 	if len(live) == 0 {
 		b.WriteString("(no live workstreams)\n")
 	} else {
+		// One repo log is shared by every workstream/branch on that repo, so fold it
+		// once per RepoKey and reuse it for all of them — N branches in one repo would
+		// otherwise trigger N identical ReadAll()+Fold() scans of the same log. The
+		// cache is scoped to this single render, so every workstream in a repo also
+		// reads from one consistent snapshot of that log.
+		folds := make(map[string]Projection)
 		// fleet.List already returns rows sorted by workstream, giving a stable cockpit.
 		for _, l := range live {
-			blocked, err := needsYou(hub, l)
+			blocked, err := needsYou(hub, l, folds)
 			if err != nil {
 				return "", err
 			}
@@ -65,16 +71,23 @@ func Status(hub string, now time.Time) (string, error) {
 // — the blocked-on column. A workstream with no repo-key (an older row, or a
 // non-coordinating session) has no locatable LOG, so it reports "ok" rather than
 // erroring. The band is hard-capped at needsYouCap with a "+N more" overflow (§15.6).
-func needsYou(hub string, l fleet.Liveness) (string, error) {
+//
+// folds caches the fold per RepoKey for the lifetime of one Status() render so that
+// multiple workstreams sharing a repo log fold it once, not once each.
+func needsYou(hub string, l fleet.Liveness, folds map[string]Projection) (string, error) {
 	if l.RepoKey == "" {
 		return "ok", nil
 	}
-	store := event.NewStore(hub, l.RepoKey)
-	events, err := store.ReadAll()
-	if err != nil {
-		return "", fmt.Errorf("status: read log for %s: %w", l.Workstream, err)
+	proj, cached := folds[l.RepoKey]
+	if !cached {
+		store := event.NewStore(hub, l.RepoKey)
+		events, err := store.ReadAll()
+		if err != nil {
+			return "", fmt.Errorf("status: read log for %s: %w", l.Workstream, err)
+		}
+		proj = Fold(events)
+		folds[l.RepoKey] = proj
 	}
-	proj := Fold(events)
 
 	// The log is repo-scoped — one log shared by every workstream/branch on the
 	// repo — so filter the open-set to THIS workstream's escalations. Without the

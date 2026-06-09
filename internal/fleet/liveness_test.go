@@ -89,6 +89,20 @@ func TestLivenessMissingBranchIsAbandoned(t *testing.T) {
 	}
 }
 
+// TestLivenessFutureHeartbeatIsActive locks the clock-skew contract: a heartbeat
+// dated in the future (skew or a mis-set clock) must read active, never abandoned.
+// derive() clamps the resulting negative age to 0, matching render.recency().
+func TestLivenessFutureHeartbeatIsActive(t *testing.T) {
+	hub := t.TempDir()
+	now := fixedTime
+	registerAt(t, hub, "ws-future", "u1", "@a", now.Add(10*time.Minute)) // ahead of now
+
+	got := onlyEntry(t, hub, now, alive)
+	if got.State != StateActive {
+		t.Errorf("future-skewed heartbeat → %q, want %q", got.State, StateActive)
+	}
+}
+
 // TestLivenessCollapsesByWorkstream is the §15.4 read-time collapse: two uuid
 // rows on one workstream become a single entry, newest heartbeat wins, and the
 // surviving entry reflects the newest row's session identity.

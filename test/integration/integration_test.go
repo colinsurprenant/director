@@ -205,7 +205,10 @@ func TestT3ResumeAcrossCompaction(t *testing.T) {
 
 	// Resume: a brand-new session uuid must re-derive the identical workstream id.
 	h.runUUID(t, "sess-B", "register")
-	id2, _ := os.ReadFile(idPath)
+	id2, err := os.ReadFile(idPath)
+	if err != nil {
+		t.Fatalf("read resumed workstream id: %v", err)
+	}
 	if len(id1) == 0 || string(id1) != string(id2) {
 		t.Fatalf("workstream id shifted across resume: %q -> %q", id1, id2)
 	}
