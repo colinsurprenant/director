@@ -55,7 +55,17 @@ type Candidate struct {
 // a complete picture (false) or a capped sample (true). Callers MUST surface a
 // truncation rather than treat a capped result as exhaustive (§9: no silent caps).
 func ScanOpenLoops(dir string) (candidates []Candidate, truncated bool, err error) {
-	files, err := trackedFiles(dir)
+	// Resolve the repository toplevel first: `git ls-files` lists only the files
+	// beneath its working directory, so running the scan from a nested subdirectory
+	// would silently miss open loops elsewhere in the same repo (a §9 silent-cap
+	// violation). Listing and scanning from the root makes the import complete
+	// regardless of where adopt was invoked.
+	root, err := repoRoot(dir)
+	if err != nil {
+		return nil, false, err
+	}
+
+	files, err := trackedFiles(root)
 	if err != nil {
 		return nil, false, err
 	}
@@ -66,7 +76,7 @@ func ScanOpenLoops(dir string) (candidates []Candidate, truncated bool, err erro
 	}
 
 	for _, rel := range files {
-		hits, fileTruncated, err := scanFile(dir, rel)
+		hits, fileTruncated, err := scanFile(root, rel)
 		if err != nil {
 			return nil, false, err
 		}
@@ -81,6 +91,20 @@ func ScanOpenLoops(dir string) (candidates []Candidate, truncated bool, err erro
 		}
 	}
 	return candidates, truncated, nil
+}
+
+// repoRoot resolves the repository toplevel for dir via git, so the scan always
+// covers the whole repo rather than just the subtree under the invocation cwd.
+func repoRoot(dir string) (string, error) {
+	var stdout, stderr bytes.Buffer
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	cmd.Dir = dir
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("adopt: resolve repo root from %s: %w: %s", dir, err, strings.TrimSpace(stderr.String()))
+	}
+	return strings.TrimSpace(stdout.String()), nil
 }
 
 // trackedFiles lists the repo's tracked files relative to its root via git, the

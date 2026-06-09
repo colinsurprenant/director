@@ -86,29 +86,37 @@ var emitInvocationSignals = []string{
 // It names the missing action and the explicit wrap-up escape (§4.4).
 const emitGuardReason = "Director emit-guard: this turn looks like it produced a decision, open loop, or handoff, but no `director emit` ran. Emit the missing event now via `director emit --type <decision|open-item|handoff|note> ...` so the next session inherits it. If you intentionally have nothing to record, say \"wrap up\" to skip this check."
 
-// handleStop marks the fleet row done (bookkeeping), then runs the emit-guard.
-// Bookkeeping failures degrade gracefully (log + continue); the guard itself is
-// the only path that can emit a block, and only on a confident detection.
+// handleStop runs the emit-guard and, ONLY when the stop is actually allowed,
+// marks the fleet row done (bookkeeping). Archival is bound to the allow paths
+// because a blocked stop leaves the session RUNNING: archiving there would drop a
+// still-live session from the cockpit and make the next (real) Stop hit
+// row-not-found. Bookkeeping failures degrade gracefully (log + continue); the
+// guard is the only path that can emit a block, and only on a confident detection.
 func handleStop(in Input, out io.Writer, hub string) error {
-	markFleetDone(in, hub)
-
 	// Loop guard FIRST: a re-entrant Stop (one our own block triggered) must
 	// always allow, or we trap the session in a stop→block→stop cycle (§4.4).
+	// This is a genuine end-of-session, so archive the row here.
 	if in.StopHookActive {
+		markFleetDone(in, hub)
 		logSuccess(hub, EventStop, in.SessionID, "stop_hook_active=true — allow (loop guard)")
 		return nil
 	}
 
 	block, reason := emitGuardVerdict(in.TranscriptPath)
 	if !block {
+		// The stop is allowed → the session is ending → archive the row.
+		markFleetDone(in, hub)
 		logSuccess(hub, EventStop, in.SessionID, "emit-guard allow")
 		return nil
 	}
 
+	// Blocking: the session keeps running, so we must NOT archive its fleet row —
+	// the live row stays so the cockpit keeps showing the session and the eventual
+	// allow path does the bookkeeping.
 	if err := writeStopBlock(out, reason); err != nil {
 		return fmt.Errorf("write stop block: %w", err)
 	}
-	logSuccess(hub, EventStop, in.SessionID, "emit-guard block — nudging missing emit")
+	logSuccess(hub, EventStop, in.SessionID, "emit-guard block — nudging missing emit (row kept live)")
 	return nil
 }
 

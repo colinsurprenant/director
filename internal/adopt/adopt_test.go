@@ -195,6 +195,37 @@ func TestScanOpenLoops(t *testing.T) {
 	}
 }
 
+// TestScanOpenLoopsFromSubdir verifies the scan covers the WHOLE repo even when
+// invoked from a nested subdirectory — `git ls-files` from a subdir would
+// otherwise list only that subtree and silently miss loops elsewhere (M5).
+func TestScanOpenLoopsFromSubdir(t *testing.T) {
+	repo := filepath.Join(t.TempDir(), "proj")
+	gitInit(t, repo)
+
+	writeFile(t, repo, "root.go", "// TODO: at the repo root\n")
+	writeFile(t, repo, "sub/deep.go", "// FIXME: in a subdir\n")
+	mustGit(t, repo, "add", "root.go", "sub/deep.go")
+	mustGit(t, repo, "commit", "-q", "-m", "seed")
+
+	// Scan from the nested subdir: it must still find the repo-root loop.
+	cands, _, err := ScanOpenLoops(filepath.Join(repo, "sub"))
+	if err != nil {
+		t.Fatalf("ScanOpenLoops from subdir: %v", err)
+	}
+	if !hasCandidateContaining(cands, "TODO: at the repo root") {
+		t.Errorf("scan from subdir missed the repo-root loop; got %+v", cands)
+	}
+	if !hasCandidateContaining(cands, "FIXME: in a subdir") {
+		t.Errorf("scan from subdir missed the subdir loop; got %+v", cands)
+	}
+	// Paths are repo-root-relative (as ls-files reports from the root).
+	for _, c := range cands {
+		if strings.Contains(c.Text, "at the repo root") && c.File != "root.go" {
+			t.Errorf("root loop file = %q, want repo-root-relative root.go", c.File)
+		}
+	}
+}
+
 func hasCandidateContaining(cands []Candidate, sub string) bool {
 	for _, c := range cands {
 		if strings.Contains(c.Text, sub) {

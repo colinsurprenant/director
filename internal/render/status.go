@@ -35,7 +35,7 @@ const (
 // fixed clock; recency is the only time-derived field and it is intentionally
 // excluded from the determinism gate (§13 t4 covers render/brief, not status).
 func Status(hub string, now time.Time) (string, error) {
-	live, err := fleet.List(hub, now, StaleAfter, AbandonedAfter, func(string) bool { return true })
+	live, skipped, err := fleet.List(hub, now, StaleAfter, AbandonedAfter, func(string) bool { return true })
 	if err != nil {
 		return "", fmt.Errorf("status: list fleet: %w", err)
 	}
@@ -43,17 +43,20 @@ func Status(hub string, now time.Time) (string, error) {
 	var b strings.Builder
 	if len(live) == 0 {
 		b.WriteString("(no live workstreams)\n")
-		return b.String(), nil
-	}
-
-	// fleet.List already returns rows sorted by workstream, giving a stable cockpit.
-	for _, l := range live {
-		blocked, err := needsYou(hub, l)
-		if err != nil {
-			return "", err
+	} else {
+		// fleet.List already returns rows sorted by workstream, giving a stable cockpit.
+		for _, l := range live {
+			blocked, err := needsYou(hub, l)
+			if err != nil {
+				return "", err
+			}
+			fmt.Fprintf(&b, "%s · %s · %s · %s\n",
+				handleOf(l), l.State, recency(now, l.Heartbeat), blocked)
 		}
-		fmt.Fprintf(&b, "%s · %s · %s · %s\n",
-			handleOf(l), l.State, recency(now, l.Heartbeat), blocked)
+	}
+	// Surface any skipped corrupt rows rather than dropping them silently (§9).
+	if skipped > 0 {
+		fmt.Fprintf(&b, "(%d unreadable fleet row(s) skipped)\n", skipped)
 	}
 	return b.String(), nil
 }
@@ -73,9 +76,13 @@ func needsYou(hub string, l fleet.Liveness) (string, error) {
 	}
 	proj := Fold(events)
 
+	// The log is repo-scoped — one log shared by every workstream/branch on the
+	// repo — so filter the open-set to THIS workstream's escalations. Without the
+	// workstream filter, two active workstreams in one repo would each show the
+	// union of all escalations, attributing every blocker to every line.
 	var escalate []event.Event
 	for _, o := range proj.OpenItems {
-		if o.Risk == event.RiskEscalate {
+		if o.Workstream == l.Workstream && o.Risk == event.RiskEscalate {
 			escalate = append(escalate, o)
 		}
 	}

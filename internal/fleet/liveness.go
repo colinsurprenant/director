@@ -45,14 +45,22 @@ type Liveness struct {
 // regardless of heartbeat age. Entries are returned sorted by workstream for a
 // deterministic cockpit ordering. A missing fleet dir is not an error — it
 // yields an empty fleet.
-func List(hub string, now time.Time, staleAfter, abandonedAfter time.Duration, branchAlive func(workstream string) bool) ([]Liveness, error) {
+//
+// A single corrupt row (unreadable, or an unparseable heartbeat) is SKIPPED, not
+// fatal: one bad file must never blind the whole cockpit (§9 — silence reads as
+// healthy). The number skipped is returned so the caller can surface "N unreadable
+// rows" rather than silently dropping them (no silent caps). This is deliberately
+// more lenient than the event log's scan, which stays fail-loud: a liveness row is
+// ephemeral/derived, while a torn LOG line is durable-record corruption the human
+// must see.
+func List(hub string, now time.Time, staleAfter, abandonedAfter time.Duration, branchAlive func(workstream string) bool) (entries []Liveness, skipped int, err error) {
 	dir := filepath.Join(hub, fleetDir)
-	entries, err := os.ReadDir(dir)
+	files, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
-		return nil, nil
+		return nil, 0, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("fleet: read fleet dir: %w", err)
+		return nil, 0, fmt.Errorf("fleet: read fleet dir: %w", err)
 	}
 
 	// Collapse by workstream as we scan: keep the newest-heartbeat row and count
@@ -64,7 +72,7 @@ func List(hub string, now time.Time, staleAfter, abandonedAfter time.Duration, b
 	}
 	byWorkstream := make(map[string]*agg)
 
-	for _, e := range entries {
+	for _, e := range files {
 		// archive/ holds terminal rows; only files ending in our row extension are
 		// live rows — skip the archive subdir and any stray temp/other files.
 		if e.IsDir() || filepath.Ext(e.Name()) != rowExt {
@@ -73,14 +81,16 @@ func List(hub string, now time.Time, staleAfter, abandonedAfter time.Duration, b
 		path := filepath.Join(dir, e.Name())
 		row, err := readRow(path)
 		if err != nil {
-			return nil, err
+			skipped++ // a corrupt/unreadable row must not take down the whole cockpit
+			continue
 		}
 		if row.Workstream == "" {
 			continue // defensive: a row without a key can't be collapsed
 		}
 		hb, err := time.Parse(heartbeatLayout, row.Heartbeat)
 		if err != nil {
-			return nil, fmt.Errorf("fleet: parse heartbeat in %s: %w", path, err)
+			skipped++ // unparseable heartbeat → skip-and-count, don't abort the list
+			continue
 		}
 
 		a := byWorkstream[row.Workstream]
@@ -108,7 +118,7 @@ func List(hub string, now time.Time, staleAfter, abandonedAfter time.Duration, b
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Workstream < out[j].Workstream })
-	return out, nil
+	return out, skipped, nil
 }
 
 // derive computes a single workstream's State. A gone branch is abandoned no

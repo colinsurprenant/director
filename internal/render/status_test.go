@@ -58,6 +58,37 @@ func TestStatusBlockedOn(t *testing.T) {
 	}
 }
 
+// TestStatusBlockedOnPerWorkstream confirms that when two workstreams share one
+// repo log, each cockpit line shows only ITS OWN escalations — not the union (M4).
+func TestStatusBlockedOnPerWorkstream(t *testing.T) {
+	hub := t.TempDir()
+
+	// One repo, two workstreams, each with a distinct escalated open-item.
+	seedProject(t, hub, "shared", []event.Event{
+		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "wsA", Status: event.StatusOpen, Risk: event.RiskEscalate, Body: "A needs a decision"},
+		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "wsB", Status: event.StatusOpen, Risk: event.RiskEscalate, Body: "B needs a decision"},
+	})
+	registerRow(t, hub, "wsA", "shared", time.Minute)
+	registerRow(t, hub, "wsB", "shared", time.Minute)
+
+	out, err := Status(hub, statusNow)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 cockpit lines, got %d:\n%s", len(lines), out)
+	}
+	// Lines are sorted by workstream: wsA then wsB. Each must carry blocked(1) with
+	// only its own item — never the other workstream's.
+	if !strings.Contains(lines[0], "blocked(1)") || !strings.Contains(lines[0], "A needs") || strings.Contains(lines[0], "B needs") {
+		t.Errorf("wsA line should show only A's escalation: %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "blocked(1)") || !strings.Contains(lines[1], "B needs") || strings.Contains(lines[1], "A needs") {
+		t.Errorf("wsB line should show only B's escalation: %q", lines[1])
+	}
+}
+
 // TestStatusNeedsYouCap confirms the Needs-you band is hard-capped with a
 // "+N more" overflow summary (§15.6).
 func TestStatusNeedsYouCap(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/colinsurprenant/director/internal/id"
@@ -46,6 +47,7 @@ func TestSchemaValidate(t *testing.T) {
 		{"handoff", func(e *Event) { e.Type = KindHandoff }, false},
 		{"note", func(e *Event) { e.Type = KindNote }, false},
 		{"close-marker", func(e *Event) { e.Type = KindOpenItem; e.Status = StatusClosed; e.Refs = []string{tgt} }, false},
+		{"body at cap", func(e *Event) { e.Body = strings.Repeat("x", MaxBodyBytes) }, false},
 
 		// Rejections.
 		{"unknown type (blocker is absorbed)", func(e *Event) { e.Type = "blocker" }, true},
@@ -61,6 +63,7 @@ func TestSchemaValidate(t *testing.T) {
 		{"malformed id", func(e *Event) { e.ID = "not-a-ulid" }, true},
 		{"empty workstream", func(e *Event) { e.Workstream = "" }, true},
 		{"wrong schema version", func(e *Event) { e.SchemaVersion = 2 }, true},
+		{"body over cap", func(e *Event) { e.Body = strings.Repeat("x", MaxBodyBytes+1) }, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

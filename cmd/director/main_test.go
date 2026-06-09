@@ -16,6 +16,11 @@ func TestDispatchExitCodes(t *testing.T) {
 		{"unknown verb is non-zero", []string{"bogus"}, 2},
 		{"hook without event is fail-safe", []string{"_hook"}, 0},
 		{"hook with event is fail-safe", []string{"_hook", "sessionstart"}, 0},
+		// M1: a --project path-traversal value is rejected as user error (exit 2),
+		// never reaching the store/manifest path-build.
+		{"render rejects traversal project", []string{"render", "--project", "../../tmp/evil"}, 2},
+		{"render rejects dotdot project", []string{"render", "--project", ".."}, 2},
+		{"brief rejects traversal project", []string{"brief", "--project", "../../tmp/evil"}, 2},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

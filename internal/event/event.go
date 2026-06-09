@@ -15,6 +15,14 @@ import (
 // can branch on it without a flag day (§15.6).
 const SchemaVersion = 1
 
+// MaxBodyBytes caps the model-authored body so a single event's marshaled NDJSON
+// line can never exceed the read path's scanner limit (store.maxLineBytes, 1 MiB).
+// The body is the only unbounded, free-text field; 64 KiB is generous for prose
+// while leaving ample headroom for JSON escaping (worst case ~6×) plus the rest of
+// the event, so the writer can never emit a line ReadAll/Tail would reject as
+// too-long — which would otherwise brick every projection over that repo's log.
+const MaxBodyBytes = 64 * 1024
+
 // Kind is one of the four canonical model-emitted semantic kinds (§17).
 // `blocker` is absorbed into open-item+risk:escalate; `done` is fleet-liveness
 // only and never appears here.
@@ -73,6 +81,9 @@ func (e Event) Validate() error {
 	}
 	if e.Workstream == "" {
 		return fmt.Errorf("event: workstream is required")
+	}
+	if len(e.Body) > MaxBodyBytes {
+		return fmt.Errorf("event: body is %d bytes, exceeds the %d-byte cap", len(e.Body), MaxBodyBytes)
 	}
 
 	switch e.Type {

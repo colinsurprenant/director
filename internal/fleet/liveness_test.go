@@ -1,6 +1,8 @@
 package fleet
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -30,7 +32,7 @@ func registerAt(t *testing.T, hub, ws, uuid, handle string, hb time.Time) {
 
 func onlyEntry(t *testing.T, hub string, now time.Time, branchAlive func(string) bool) Liveness {
 	t.Helper()
-	got, err := List(hub, now, staleTTL, abandonedTTL, branchAlive)
+	got, _, err := List(hub, now, staleTTL, abandonedTTL, branchAlive)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -123,7 +125,7 @@ func TestLivenessSortedByWorkstream(t *testing.T) {
 	registerAt(t, hub, "alpha", "u2", "@a", now)
 	registerAt(t, hub, "mike", "u3", "@m", now)
 
-	got, err := List(hub, now, staleTTL, abandonedTTL, alive)
+	got, _, err := List(hub, now, staleTTL, abandonedTTL, alive)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -148,7 +150,7 @@ func TestLivenessIgnoresArchive(t *testing.T) {
 		t.Fatalf("Done: %v", err)
 	}
 
-	got, err := List(hub, now, staleTTL, abandonedTTL, alive)
+	got, _, err := List(hub, now, staleTTL, abandonedTTL, alive)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -159,11 +161,41 @@ func TestLivenessIgnoresArchive(t *testing.T) {
 
 func TestLivenessEmptyFleet(t *testing.T) {
 	hub := t.TempDir()
-	got, err := List(hub, fixedTime, staleTTL, abandonedTTL, alive)
+	got, _, err := List(hub, fixedTime, staleTTL, abandonedTTL, alive)
 	if err != nil {
 		t.Fatalf("List on empty hub: %v", err)
 	}
 	if len(got) != 0 {
 		t.Errorf("empty hub → %d entries, want 0", len(got))
+	}
+}
+
+// TestLivenessSkipsCorruptRow is M2: one corrupt row (bad JSON or unparseable
+// heartbeat) must be skipped-and-counted, not abort the whole list — a single bad
+// file can never blind the cockpit. The good rows still list; skipped reflects the
+// bad ones.
+func TestLivenessSkipsCorruptRow(t *testing.T) {
+	hub := t.TempDir()
+	now := fixedTime
+	registerAt(t, hub, "ws-good", "u1", "@a", now)
+
+	// Drop two corrupt rows directly into the fleet dir.
+	fleetPath := filepath.Join(hub, fleetDir)
+	if err := os.WriteFile(filepath.Join(fleetPath, "broken-json.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fleetPath, "bad-heartbeat.json"), []byte(`{"workstream":"ws-x","uuid":"u","heartbeat":"not-a-time"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, skipped, err := List(hub, now, staleTTL, abandonedTTL, alive)
+	if err != nil {
+		t.Fatalf("List should not error on corrupt rows: %v", err)
+	}
+	if len(got) != 1 || got[0].Workstream != "ws-good" {
+		t.Errorf("good row should still list despite corrupt siblings: %+v", got)
+	}
+	if skipped != 2 {
+		t.Errorf("skipped = %d, want 2 (the two corrupt rows)", skipped)
 	}
 }

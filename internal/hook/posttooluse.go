@@ -7,6 +7,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/colinsurprenant/director/internal/fleet"
+	"github.com/colinsurprenant/director/internal/identity"
 )
 
 // posttooluse.go is §4.4 layer 2: a best-effort "flush now while healthy" nudge.
@@ -32,10 +36,18 @@ import (
 // at the sanctioned write path, never flushing on the model's behalf.
 const flushNudgeText = "Director: context is accumulating. If you've made a decision, opened a loop, or reached a boundary, emit it now with `director emit` while context is healthy — don't wait for a compaction."
 
-// handlePostToolUse runs the gated, debounced flush nudge. It is best-effort
-// throughout: any bookkeeping failure logs and degrades to "no nudge", never an
-// error to CC.
+// handlePostToolUse refreshes the workstream's heartbeat, then runs the gated,
+// debounced flush nudge. It is best-effort throughout: any bookkeeping failure
+// logs and degrades, never an error to CC.
 func handlePostToolUse(in Input, out io.Writer, hub string) error {
+	// Heartbeat FIRST, regardless of the nudge setting: liveness is derived from
+	// heartbeat age (§5.5), and PostToolUse — firing on every tool call — is the
+	// signal that keeps a long-running ACTIVE session from aging into stale/
+	// abandoned while it is plainly still working. Without this, SessionStart is
+	// the only heartbeat source and any session older than the stale TTL misreads
+	// in the cockpit. Best-effort: failures log and continue.
+	refreshHeartbeat(in, hub)
+
 	every, on := nudgeInterval()
 	if !on {
 		// Disabled (the v1 default): nothing to do. Record success quietly so the
@@ -61,6 +73,31 @@ func handlePostToolUse(in Input, out io.Writer, hub string) error {
 	}
 	logSuccess(hub, EventPostToolUse, in.SessionID, fmt.Sprintf("flush nudge fired at tool #%d", count))
 	return nil
+}
+
+// refreshHeartbeat touches the workstream's fleet row so an active session keeps
+// reading live in the cockpit. It is gated by the same throwaway filter
+// SessionStart uses — a subagent/throwaway session (no session_id) must not
+// materialize a liveness row — and is best-effort: an identity or fleet failure
+// logs and returns rather than interfering with the tool flow. fleet.Heartbeat is
+// create-or-update, so it preserves an existing row's RepoKey/Handle and only
+// advances the heartbeat.
+func refreshHeartbeat(in Input, hub string) {
+	if isThrowawaySession(in) {
+		return
+	}
+	ws, err := identity.Resolve(in.CWD)
+	if err != nil {
+		logFailure(hub, EventPostToolUse, in.SessionID, fmt.Sprintf("resolve workstream from %q: %v", in.CWD, err))
+		return
+	}
+	uuid := in.SessionID
+	if uuid == "" {
+		uuid = "manual"
+	}
+	if err := fleet.Heartbeat(hub, ws.ID, uuid, time.Now()); err != nil {
+		logFailure(hub, EventPostToolUse, in.SessionID, fmt.Sprintf("heartbeat: %v", err))
+	}
 }
 
 // nudgeInterval reads the opt-in cadence from DIRECTOR_FLUSH_NUDGE_EVERY. A

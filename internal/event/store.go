@@ -16,7 +16,10 @@ import (
 
 // maxLineBytes bounds a single NDJSON line for the streaming reader. A LOG line
 // is one event's JSON; bodies can be long, so the default bufio.Scanner limit
-// (64 KiB) is too tight. 1 MiB is generous headroom without unbounded growth.
+// (64 KiB) is too tight. 1 MiB is generous headroom without unbounded growth. The
+// write side guarantees this is never hit: event.MaxBodyBytes (64 KiB) caps the
+// only unbounded field well below this, so the writer can never produce a line the
+// reader would reject as too-long (which would otherwise break every projection).
 const maxLineBytes = 1 << 20
 
 // Store is the append-only NDJSON log for one repo, addressed by a hub root and
@@ -46,9 +49,16 @@ func (s *Store) Path() string {
 
 // Append validates ev, then writes it as a single newline-terminated JSON line.
 // It opens the log with O_APPEND|O_CREATE|O_WRONLY and issues exactly one Write
-// of the whole line: on POSIX a line-sized append is atomic, so many short-lived
-// emit processes appending concurrently never interleave or drop a record (the
-// §4.1 loss was a property of Edit/Write, not of file appends — §15.2).
+// of the whole line, so many short-lived emit processes appending concurrently
+// never interleave or drop a record (the §4.1 loss was a property of Edit/Write,
+// not of file appends — §15.2).
+//
+// Atomicity caveat: POSIX guarantees an O_APPEND write is atomic only up to
+// PIPE_BUF for pipes; for regular files the all-or-nothing behavior is provided by
+// the kernel/filesystem and is reliable on local filesystems (APFS/ext4) but is
+// NOT guaranteed on NFS. event.MaxBodyBytes keeps lines small, which keeps them
+// within the atomic-append behavior of every local filesystem; a networked hub is
+// a known limitation (a multi-machine concern deferred past single-machine v1).
 func (s *Store) Append(ev Event) error {
 	if err := ev.Validate(); err != nil {
 		return fmt.Errorf("store: refusing to append invalid event: %w", err)

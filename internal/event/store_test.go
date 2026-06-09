@@ -2,6 +2,7 @@ package event
 
 import (
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -190,5 +191,36 @@ func TestAppendRejectsInvalid(t *testing.T) {
 	}
 	if len(all) != 0 {
 		t.Fatalf("invalid event was written: log has %d events, want 0", len(all))
+	}
+}
+
+// TestAppendBodySizeBound locks the M3 write/read invariant: a body at the cap
+// appends AND reads back (the largest write-accepted line is always within the
+// reader's scanner limit), while an over-cap body is rejected before any write.
+func TestAppendBodySizeBound(t *testing.T) {
+	store := NewStore(t.TempDir(), "bodysize-repo")
+
+	// At the cap: write-accepted and fully readable back.
+	if err := store.Append(newEvent(t, strings.Repeat("x", MaxBodyBytes))); err != nil {
+		t.Fatalf("Append at-cap body: %v", err)
+	}
+	got, err := store.ReadAll()
+	if err != nil {
+		t.Fatalf("ReadAll after at-cap append: %v", err)
+	}
+	if len(got) != 1 || len(got[0].Body) != MaxBodyBytes {
+		t.Fatalf("at-cap body did not round-trip: %d events, body len %d", len(got), len(got[0].Body))
+	}
+
+	// Over the cap: rejected before write, log unchanged.
+	if err := store.Append(newEvent(t, strings.Repeat("x", MaxBodyBytes+1))); err == nil {
+		t.Fatal("Append(over-cap) = nil, want error")
+	}
+	got, err = store.ReadAll()
+	if err != nil {
+		t.Fatalf("ReadAll after over-cap append: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("over-cap body must not be written: log has %d events, want 1", len(got))
 	}
 }

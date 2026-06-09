@@ -316,20 +316,107 @@ func TestEmitGuardMissingTranscriptAllows(t *testing.T) {
 	}
 }
 
+// TestStopBlockKeepsFleetRowLive verifies a BLOCKED stop does NOT archive the
+// row: the session keeps running, so it must stay live in the cockpit (H2).
+func TestStopBlockKeepsFleetRowLive(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+
+	// Register a live row via a real SessionStart (same uuid the stop carries).
+	ssIn := `{"session_id":"s-real","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	if code := Dispatch(EventSessionStart, strings.NewReader(ssIn), &bytes.Buffer{}, hub); code != 0 {
+		t.Fatalf("setup session start exit = %d", code)
+	}
+	if !fleetRowExists(t, hub, ws.ID) {
+		t.Fatal("setup: expected a live row after SessionStart")
+	}
+
+	// A decision-like, un-emitted last turn → the guard blocks the stop.
+	transcript := writeTranscript(t, assistantLine("I've decided to use NDJSON. The plan is to ship next."))
+	var out bytes.Buffer
+	if code := Dispatch(EventStop, strings.NewReader(stopInput(repo, transcript, false)), &out, hub); code != 0 {
+		t.Fatalf("stop exit = %d", code)
+	}
+	if !strings.Contains(out.String(), `"decision":"block"`) {
+		t.Fatalf("setup: expected a block, got %q", out.String())
+	}
+	if !fleetRowExists(t, hub, ws.ID) {
+		t.Error("blocked stop archived the row — the still-active session vanished from the cockpit")
+	}
+	if fleetArchivedRowExists(t, hub, ws.ID) {
+		t.Error("blocked stop should not have archived the row")
+	}
+}
+
+// TestStopAllowArchivesFleetRow verifies an ALLOWED stop archives the row: the
+// session is genuinely ending (H2).
+func TestStopAllowArchivesFleetRow(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+
+	ssIn := `{"session_id":"s-real","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	if code := Dispatch(EventSessionStart, strings.NewReader(ssIn), &bytes.Buffer{}, hub); code != 0 {
+		t.Fatalf("setup session start exit = %d", code)
+	}
+
+	// A plain, non-decision last turn → the guard allows the stop.
+	transcript := writeTranscript(t, assistantLine("Here is the file you asked for."))
+	var out bytes.Buffer
+	if code := Dispatch(EventStop, strings.NewReader(stopInput(repo, transcript, false)), &out, hub); code != 0 {
+		t.Fatalf("stop exit = %d", code)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("setup: expected an allow (no output), got %q", out.String())
+	}
+	if fleetRowExists(t, hub, ws.ID) {
+		t.Error("allowed stop should have archived the live row")
+	}
+	if !fleetArchivedRowExists(t, hub, ws.ID) {
+		t.Error("allowed stop should have moved the row to the archive")
+	}
+}
+
 // --- PostToolUse nudge ------------------------------------------------------
 
 // TestPostToolUseDisabledByDefault verifies the flush nudge is OFF unless opted
-// in, and emits nothing.
+// in, and emits nothing — but still heartbeats the workstream (H3).
 func TestPostToolUseDisabledByDefault(t *testing.T) {
 	t.Setenv("DIRECTOR_FLUSH_NUDGE_EVERY", "")
 	hub := t.TempDir()
-	in := `{"session_id":"s1","hook_event_name":"PostToolUse","tool_name":"Bash"}`
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+	in := `{"session_id":"s1","cwd":` + jsonString(repo) + `,"hook_event_name":"PostToolUse","tool_name":"Bash"}`
 	var out bytes.Buffer
 	if code := Dispatch(EventPostToolUse, strings.NewReader(in), &out, hub); code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
 	if out.Len() != 0 {
 		t.Fatalf("nudge should be disabled by default, got %q", out.String())
+	}
+	// H3: liveness is heartbeat-derived, so PostToolUse must refresh the row even
+	// with the nudge off — otherwise a long active session ages to stale/abandoned.
+	if !fleetRowExists(t, hub, ws.ID) {
+		t.Errorf("expected a heartbeat fleet row for %s even with the nudge disabled", ws.ID)
+	}
+}
+
+// TestPostToolUseThrowawayDoesNotHeartbeat verifies a throwaway/subagent session
+// (no session_id) does NOT materialize a liveness row from a PostToolUse
+// heartbeat — the same filter SessionStart applies (H3).
+func TestPostToolUseThrowawayDoesNotHeartbeat(t *testing.T) {
+	t.Setenv("DIRECTOR_FLUSH_NUDGE_EVERY", "")
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+	in := `{"cwd":` + jsonString(repo) + `,"hook_event_name":"PostToolUse","tool_name":"Bash"}`
+	var out bytes.Buffer
+	if code := Dispatch(EventPostToolUse, strings.NewReader(in), &out, hub); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if fleetRowExists(t, hub, ws.ID) {
+		t.Errorf("throwaway PostToolUse should not heartbeat a fleet row")
 	}
 }
 
@@ -338,7 +425,8 @@ func TestPostToolUseDisabledByDefault(t *testing.T) {
 func TestPostToolUseFiresOnInterval(t *testing.T) {
 	t.Setenv("DIRECTOR_FLUSH_NUDGE_EVERY", "3")
 	hub := t.TempDir()
-	in := `{"session_id":"s1","hook_event_name":"PostToolUse","tool_name":"Bash"}`
+	repo := gitRepo(t, "widget", "main")
+	in := `{"session_id":"s1","cwd":` + jsonString(repo) + `,"hook_event_name":"PostToolUse","tool_name":"Bash"}`
 
 	fired := 0
 	for i := 0; i < 6; i++ {
@@ -415,6 +503,25 @@ func slugForMatch(s string) string {
 		}
 	}
 	return strings.Trim(b.String(), "_")
+}
+
+// fleetArchivedRowExists reports whether an archived row file exists for ws under
+// fleet/archive/<date>/. Mirrors fleetRowExists but walks the dated archive dirs.
+func fleetArchivedRowExists(t *testing.T, hub, workstream string) bool {
+	t.Helper()
+	archive := filepath.Join(hub, "fleet", "archive")
+	prefix := slugForMatch(workstream)
+	found := false
+	_ = filepath.WalkDir(archive, func(_ string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if strings.HasPrefix(d.Name(), prefix) {
+			found = true
+		}
+		return nil
+	})
+	return found
 }
 
 func stopInput(cwd, transcript string, stopHookActive bool) string {

@@ -23,6 +23,12 @@ func runRender(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	if project != "" {
+		if err := validProjectKey(project); err != nil {
+			fmt.Fprintf(os.Stderr, "render: %v\n", err)
+			return 2
+		}
+	}
 
 	hub, repoKey, err := projectTarget(project)
 	if err != nil {
@@ -93,6 +99,13 @@ func runBrief(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	if project != "" {
+		if err := validProjectKey(project); err != nil {
+			fmt.Fprintf(os.Stderr, "brief: %v\n", err)
+			return 2
+		}
+	}
+
 	hub, err := hubRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "brief: %v\n", err)
@@ -130,4 +143,28 @@ func projectTarget(project string) (hub, repoKey string, err error) {
 		return "", "", err
 	}
 	return hub, ws.RepoKey, nil
+}
+
+// validProjectKey rejects a --project value that is not a canonical repo-key.
+// Derived keys are always slugged to [A-Za-z0-9._-] (internal/identity), but
+// --project takes a raw user string that flows straight into event.NewStore and
+// render.WriteManifest as a path segment — an unvalidated "../../tmp/evil" would
+// read/write OUTSIDE the hub. Constraining it to the canonical charset (and
+// rejecting the bare . / .. the charset alone would permit) keeps every path the
+// CLI builds inside the hub.
+func validProjectKey(project string) error {
+	if project == "" {
+		return fmt.Errorf("empty project key")
+	}
+	if project == "." || project == ".." {
+		return fmt.Errorf("invalid project key %q", project)
+	}
+	for _, r := range project {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+		default:
+			return fmt.Errorf("invalid project key %q: only [A-Za-z0-9._-] allowed", project)
+		}
+	}
+	return nil
 }
