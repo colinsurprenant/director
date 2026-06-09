@@ -9,10 +9,9 @@ import (
 )
 
 // runInstall merges Director's `_managedBy`-tagged hook entries into
-// settings.json (idempotent; never touches other plugins' hooks — §5.4). The
-// installed commands point at the hooks/ shims under the hooks dir; the shims
-// must be present there (set DIRECTOR_HOOKS_DIR to the repo's hooks/, or copy
-// them) — surfaced in the confirmation message.
+// settings.json (idempotent; never touches other plugins' hooks — §5.4) AND
+// materializes the embedded shims into the hooks dir, so install is self-contained
+// with no manual copy step. The confirmation reports both locations.
 func runInstall(args []string) int {
 	path, code := settingsPathFlag("install", args)
 	if path == "" {
@@ -24,12 +23,12 @@ func runInstall(args []string) int {
 	}
 	hooksDir, _ := install.DefaultHooksDir()
 	fmt.Printf("installed Director hooks into %s\n", path)
-	fmt.Printf("  shims expected in %s (set DIRECTOR_HOOKS_DIR to override)\n", hooksDir)
+	fmt.Printf("  shims written to %s (set DIRECTOR_HOOKS_DIR to override)\n", hooksDir)
 	return 0
 }
 
 // runUninstall removes only Director's tagged hook entries, leaving hand-rolled
-// and other-plugin (GSD) hooks intact (§5.4).
+// and other-plugin (GSD) hooks intact (§5.4), and removes the Director-owned shims.
 func runUninstall(args []string) int {
 	path, code := settingsPathFlag("uninstall", args)
 	if path == "" {

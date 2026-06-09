@@ -14,11 +14,21 @@
 package install
 
 import (
+	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 )
+
+// shimFS embeds the hook shim scripts into the binary so `director install` is
+// self-contained — it writes the shims to the hooks dir itself, with no manual
+// copy step. internal/install/shims/ is the single source of truth for the shims;
+// the on-disk copies install writes can therefore never drift from the binary.
+//
+//go:embed shims/*.sh
+var shimFS embed.FS
 
 // managedByKey / managedByValue tag every command object Director owns. CC
 // ignores unknown fields, so the tag is invisible to the platform but lets
@@ -64,9 +74,10 @@ func DefaultSettingsPath() (string, error) {
 }
 
 // DefaultHooksDir resolves the standard hooks/ shim directory,
-// ~/.claude/director/hooks. The installer writes shim paths under here into
-// settings.json; the caller is responsible for placing the actual shims there
-// (or pointing DIRECTOR_HOOKS_DIR at the repo's hooks/).
+// ~/.claude/director/hooks. Install both writes the shim paths under here into
+// settings.json AND materializes the embedded shims there (writeShims), so the
+// directory is fully provisioned by `director install` with no manual step.
+// DIRECTOR_HOOKS_DIR overrides the location.
 func DefaultHooksDir() (string, error) {
 	if d := os.Getenv(hooksDirEnv); d != "" {
 		return d, nil
@@ -88,15 +99,26 @@ func Install(settingsPath string) error {
 	if err != nil {
 		return err
 	}
+	// Materialize the embedded shims FIRST: if this fails we return before touching
+	// settings.json, so the file never ends up pointing at shims that aren't there.
+	if err := writeShims(hooksDir); err != nil {
+		return err
+	}
 	root, err := loadSettings(settingsPath)
 	if err != nil {
 		return err
 	}
 
-	hooks := mapAt(root, "hooks")
+	hooks, ok := typedMap(root, "hooks")
+	if !ok {
+		return fmt.Errorf("install: refusing to modify %s: \"hooks\" is present but not an object", settingsPath)
+	}
 
 	for _, e := range directorEntries {
-		groups := arrayAt(hooks, e.event)
+		groups, ok := typedArray(hooks, e.event)
+		if !ok {
+			return fmt.Errorf("install: refusing to modify %s: hooks.%s is present but not an array", settingsPath, e.event)
+		}
 		command := commandFor(hooksDir, e.shim)
 
 		gi := findMatcherGroup(groups, e.matcher)
@@ -112,7 +134,10 @@ func Install(settingsPath string) error {
 		}
 
 		group := asMap(groups[gi])
-		cmds := arrayIn(group, "hooks")
+		cmds, ok := typedArray(group, "hooks")
+		if !ok {
+			return fmt.Errorf("install: refusing to modify %s: hooks.%s[%d].hooks is present but not an array", settingsPath, e.event, gi)
+		}
 		if hasManagedCommand(cmds, command) {
 			continue // already installed — idempotent no-op
 		}
@@ -137,10 +162,16 @@ func Uninstall(settingsPath string) error {
 	if err != nil {
 		return err
 	}
-	hooks := mapAt(root, "hooks")
+	hooks, ok := typedMap(root, "hooks")
+	if !ok {
+		return fmt.Errorf("install: refusing to uninstall from %s: \"hooks\" is present but not an object", settingsPath)
+	}
 
 	for event := range hooks {
-		groups := arrayAt(hooks, event)
+		groups, ok := typedArray(hooks, event)
+		if !ok {
+			return fmt.Errorf("install: refusing to uninstall from %s: hooks.%s is present but not an array", settingsPath, event)
+		}
 		kept := make([]any, 0, len(groups))
 		for _, g := range groups {
 			group := asMap(g)
@@ -148,7 +179,13 @@ func Uninstall(settingsPath string) error {
 				kept = append(kept, g) // not a shape we own; leave it
 				continue
 			}
-			cmds := arrayIn(group, "hooks")
+			cmds, ok := typedArray(group, "hooks")
+			if !ok {
+				// A foreign group with a wrong-typed "hooks": leave the whole group
+				// untouched rather than risk dropping data we don't understand.
+				kept = append(kept, g)
+				continue
+			}
 			survivors := make([]any, 0, len(cmds))
 			for _, c := range cmds {
 				if !isManaged(c) {
@@ -174,7 +211,87 @@ func Uninstall(settingsPath string) error {
 	} else {
 		root["hooks"] = hooks
 	}
-	return writeSettings(settingsPath, root)
+	if err := writeSettings(settingsPath, root); err != nil {
+		return err
+	}
+	// Remove the Director-owned shims too — the inverse of Install's writeShims
+	// (best-effort: only the exact Director filenames, never foreign files).
+	if hooksDir, err := DefaultHooksDir(); err == nil {
+		removeShims(hooksDir)
+	}
+	return nil
+}
+
+// writeShims materializes the embedded hook shims into hooksDir, creating the dir
+// and overwriting any existing shims so they always match THIS binary. Writing is
+// idempotent (re-install reproduces the same files) and atomic per file (temp +
+// chmod + rename) so a concurrent reader never sees a half-written or non-exec
+// shim. The shims are written executable (0o755).
+func writeShims(hooksDir string) error {
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		return fmt.Errorf("install: create hooks dir %s: %w", hooksDir, err)
+	}
+	entries, err := fs.ReadDir(shimFS, "shims")
+	if err != nil {
+		return fmt.Errorf("install: read embedded shims: %w", err)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		data, err := shimFS.ReadFile("shims/" + e.Name())
+		if err != nil {
+			return fmt.Errorf("install: read embedded shim %s: %w", e.Name(), err)
+		}
+		if err := writeExecutable(filepath.Join(hooksDir, e.Name()), data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeExecutable writes data to path with mode 0o755 via temp + chmod + rename so
+// the file appears atomically and already executable.
+func writeExecutable(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("install: create temp shim: %w", err)
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return fmt.Errorf("install: write temp shim: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("install: close temp shim: %w", err)
+	}
+	if err := os.Chmod(tmpName, 0o755); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("install: chmod shim: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("install: rename shim into place: %w", err)
+	}
+	return nil
+}
+
+// removeShims deletes the Director-owned shim files from hooksDir — the inverse of
+// writeShims — touching ONLY the exact embedded filenames so a foreign file in the
+// dir is never removed, then drops the dir if it is left empty. Best-effort: every
+// error is swallowed because uninstall must succeed even if a shim was already gone
+// or the dir holds other files.
+func removeShims(hooksDir string) {
+	entries, err := fs.ReadDir(shimFS, "shims")
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		_ = os.Remove(filepath.Join(hooksDir, e.Name()))
+	}
+	_ = os.Remove(hooksDir) // succeeds only if now empty; a dir with foreign files is left intact
 }
 
 // commandFor builds the shell command settings.json invokes for a shim. It is
@@ -306,30 +423,39 @@ func marshalStable(root map[string]any) ([]byte, error) {
 
 // --- small typed accessors over the generic settings tree ------------------
 //
-// These keep the merge logic readable and centralize the "tolerate a foreign /
-// unexpected shape" rule: an accessor that meets a value it doesn't understand
-// returns a fresh empty container rather than panicking, so a hand-rolled or
-// other-plugin settings shape can never crash the installer.
+// These centralize the rule that makes the merge structure-preserving: a key that
+// is ABSENT is safe to create, but a key that is PRESENT with an unexpected type is
+// foreign data we don't understand — and overwriting it would silently lose it
+// (H1). So typedMap/typedArray return ok=false in that case and the caller refuses
+// the whole operation, mirroring loadSettings' "never overwrite a settings file we
+// failed to understand" stance. Read-only coercion (asMap/stringAt) stays lenient.
 
-// mapAt returns root[key] as a map, creating an empty one if absent or wrong-typed.
-func mapAt(root map[string]any, key string) map[string]any {
-	if m, ok := root[key].(map[string]any); ok {
-		return m
+// typedMap returns root[key] as a map. ok is true when the key is absent/null (the
+// caller may safely create it) OR already a map; ok is FALSE when the key is
+// present but a different type — the caller must then refuse rather than clobber
+// foreign data.
+func typedMap(root map[string]any, key string) (m map[string]any, ok bool) {
+	v, present := root[key]
+	if !present || v == nil {
+		return map[string]any{}, true
 	}
-	return map[string]any{}
+	if mm, isMap := v.(map[string]any); isMap {
+		return mm, true
+	}
+	return nil, false
 }
 
-// arrayAt returns m[key] as a slice, or an empty slice if absent/wrong-typed.
-func arrayAt(m map[string]any, key string) []any {
-	if a, ok := m[key].([]any); ok {
-		return a
+// typedArray is typedMap for a []any value: absent/null → fresh empty slice + ok;
+// present-but-wrong-typed → ok=false so the caller refuses instead of clobbering.
+func typedArray(m map[string]any, key string) (a []any, ok bool) {
+	v, present := m[key]
+	if !present || v == nil {
+		return []any{}, true
 	}
-	return []any{}
-}
-
-// arrayIn is arrayAt for a group's nested "hooks" command list.
-func arrayIn(group map[string]any, key string) []any {
-	return arrayAt(group, key)
+	if aa, isArr := v.([]any); isArr {
+		return aa, true
+	}
+	return nil, false
 }
 
 // asMap coerces v to a map, or nil if it isn't one.
