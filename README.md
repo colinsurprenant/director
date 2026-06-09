@@ -4,24 +4,32 @@ A standalone Go CLI for a human ("the director") running **many concurrent Claud
 
 > **Status: v1.** Director ships the hook-first coordination core plus adoption Tier 0+1 (see [Status & scope](#status--scope)). Single-machine.
 
+> **New here?** [`docs/getting-started.md`](docs/getting-started.md) is the task-oriented first-run guide (install → adopt → first session → cockpit), plus how the model uses Director and a troubleshooting section. This README is the reference.
+
 ## Install
 
-Build the binary, then merge Director's hooks into Claude Code's settings:
+Build the binary, put it on your `PATH`, then run the installer:
 
 ```bash
 go build -o bin/director ./cmd/director
+sudo install bin/director /usr/local/bin/director   # or copy it anywhere on PATH
 director install
 ```
 
-`director install` is an idempotent merge into `~/.claude/settings.json`. Every hook entry it writes carries a `"_managedBy":"director"` tag, so Director's hooks run **alongside** GSD's and any hand-rolled hooks without clobbering them; re-running adds nothing, and `director uninstall` removes only Director's tagged entries. Pass `--settings <path>` to target a project or test settings file.
+`director install` does two things, both idempotent and self-contained:
 
-The installed hook commands point at **shell shims**, not the binary directly, so rebuilding or relocating `director` never requires rewriting `settings.json`. The shims (`hooks/*.sh`) must be reachable at the hooks dir — `install` prints where it expects them:
+1. **Writes the hook shims.** The shims are embedded in the binary, so `install` materializes them (executable) into the hooks dir — there is **no manual copy step**.
+2. **Merges the hooks into `~/.claude/settings.json`.** Every entry it writes carries a `"_managedBy":"director"` tag, so Director's hooks run **alongside** GSD's and any hand-rolled hooks without clobbering them. Re-running adds nothing; `director uninstall` removes only Director's tagged entries **and** the shims it wrote. Pass `--settings <path>` to target a project or test settings file.
+
+The installed hook commands point at the **shims**, not the binary directly, so rebuilding or relocating `director` never requires rewriting `settings.json` (re-run `install` to refresh the shims to the current binary). If `~/.claude/settings.json` already has a malformed (non-object) `hooks` value, `install` refuses rather than overwrite it.
 
 | Variable | Default | Selects |
 |---|---|---|
-| `DIRECTOR_HOOKS_DIR` | `~/.claude/director/hooks` | where the installed commands look for the `*.sh` shims (copy them there, or point this at the repo's `hooks/`) |
+| `DIRECTOR_HOOKS_DIR` | `~/.claude/director/hooks` | where `install` writes the shims and the settings entries point; override to relocate them |
 | `DIRECTOR_HUB` | `~/.director` | the central hub that holds all cross-repo coordination state |
-| `DIRECTOR_BIN` | (PATH, else `../bin/director` beside a shim) | which `director` binary the shims invoke |
+| `DIRECTOR_BIN` | (PATH) | which `director` binary the shims invoke (defaults to `director` on `PATH`) |
+
+> **The binary must be on `PATH`.** The shims resolve `director` via `DIRECTOR_BIN` → `PATH`; if it's missing they exit 0 (fail-safe) and coordination silently no-ops.
 
 ## Adopt an existing repo
 
