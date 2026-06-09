@@ -34,6 +34,29 @@ func TestWorkstreamStableAcrossResume(t *testing.T) {
 	}
 }
 
+// TestResolveDerivesToplevelOnce locks the hot-path optimization: resolve() must
+// fork `git rev-parse --show-toplevel` exactly once and reuse it for both the
+// repo-key and workstream-id persistence paths, rather than twice as before.
+func TestResolveDerivesToplevelOnce(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "widget")
+	gitInit(t, dir, map[string]string{"origin": "https://github.com/acme/widget.git"})
+	mustGit(t, dir, "checkout", "-q", "-b", "feature/login")
+
+	var toplevelCalls int
+	counting := func(d string, args ...string) (string, error) {
+		if len(args) >= 2 && args[0] == "rev-parse" && args[1] == "--show-toplevel" {
+			toplevelCalls++
+		}
+		return runGit(d, args...)
+	}
+	if _, err := resolve(dir, counting); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if toplevelCalls != 1 {
+		t.Errorf("git rev-parse --show-toplevel called %d times, want 1 (derive once, reuse)", toplevelCalls)
+	}
+}
+
 // TestWorkstreamBranchRenameKeepsID locks that the persisted id survives a
 // branch rename (§13 t3) while Branch tracks the new name.
 func TestWorkstreamBranchRenameKeepsID(t *testing.T) {

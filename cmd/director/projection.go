@@ -12,8 +12,8 @@ import (
 
 // runRender folds one project's LOG into the deterministic digest, prints it to
 // stdout (this is what SessionStart injects), and writes the §9 manifest. With
-// --verify it re-reads, re-folds and re-renders, asserting the digest is
-// byte-identical — the §13 t4 gate, surfaced as a non-zero exit on drift.
+// --verify it re-folds the same events in a different order and asserts the digest
+// is byte-identical — the §13 t4 gate, surfaced as a non-zero exit on drift.
 func runRender(args []string) int {
 	fs := flag.NewFlagSet("render", flag.ContinueOnError)
 	var project string
@@ -46,13 +46,18 @@ func runRender(args []string) int {
 	digest := render.Digest(proj, repoKey)
 
 	if verify {
-		events2, err := store.ReadAll()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "render: verify re-read: %v\n", err)
-			return 1
+		// Determinism is a property of the fold over the event SET, not of a second
+		// disk read. Re-reading the log would also pick up any concurrent emit and
+		// mislabel ordinary log growth as a "non-deterministic render". Instead
+		// re-fold a REORDERED copy of the same events: Fold is order-independent
+		// (§13 t4), so a reversed input must yield the identical digest — the real
+		// property --verify asserts, and one that can't be tripped by a concurrent write.
+		reordered := make([]event.Event, len(events))
+		for i, ev := range events {
+			reordered[len(events)-1-i] = ev
 		}
-		if got := render.Digest(render.Fold(events2), repoKey); got != digest {
-			fmt.Fprintln(os.Stderr, "render: --verify FAILED — re-fold produced a different digest (non-deterministic render)")
+		if got := render.Digest(render.Fold(reordered), repoKey); got != digest {
+			fmt.Fprintln(os.Stderr, "render: --verify FAILED — re-folding the same events in a different order produced a different digest (non-deterministic render)")
 			return 1
 		}
 	}

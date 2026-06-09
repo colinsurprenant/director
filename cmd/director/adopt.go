@@ -116,7 +116,9 @@ func readLine() string {
 
 // selectCandidates resolves a selection string against the candidate list:
 // "all" → every candidate, "" / "none" → empty, otherwise a comma-separated list
-// of 1-based indices (out-of-range entries are ignored).
+// of 1-based indices (out-of-range entries are ignored). Repeated indices collapse
+// to one: a fat-fingered "1,1,2" must not import the same loop twice (each Import
+// mints a fresh open-item, so duplicates are not idempotent). First-seen order wins.
 func selectCandidates(cands []adopt.Candidate, sel string) []adopt.Candidate {
 	switch strings.ToLower(strings.TrimSpace(sel)) {
 	case "all":
@@ -125,11 +127,13 @@ func selectCandidates(cands []adopt.Candidate, sel string) []adopt.Candidate {
 		return nil
 	}
 	var chosen []adopt.Candidate
+	seen := make(map[int]bool)
 	for _, tok := range strings.Split(sel, ",") {
 		n, err := strconv.Atoi(strings.TrimSpace(tok))
-		if err != nil || n < 1 || n > len(cands) {
+		if err != nil || n < 1 || n > len(cands) || seen[n] {
 			continue
 		}
+		seen[n] = true
 		chosen = append(chosen, cands[n-1])
 	}
 	return chosen

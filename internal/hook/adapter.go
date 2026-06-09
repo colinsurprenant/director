@@ -200,6 +200,16 @@ func Dispatch(event string, in io.Reader, out io.Writer, hub string) (code int) 
 		}
 	}()
 
+	if hub == "" {
+		// An unresolved hub has nowhere to coordinate — and every handler path
+		// (health log, projection read/write) would otherwise resolve against
+		// CWD-relative paths, creating Director state inside whatever repo the hook
+		// fired in. We can't even log this (the health log itself needs the hub), so
+		// surface it on stderr and no-op. Exit 0: a hook must never block a session.
+		fmt.Fprintln(os.Stderr, "director hook: no hub resolved, skipping")
+		return 0
+	}
+
 	parsed, err := parseInput(in)
 	if err != nil {
 		// Malformed/empty stdin: log loudly, inject/return nothing, exit 0. A

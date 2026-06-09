@@ -21,6 +21,14 @@ func repoKey(dir string, git gitRunner) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return repoKeyAt(top, dir, git)
+}
+
+// repoKeyAt is repoKey with the repo toplevel already resolved by the caller. It
+// exists so resolve() — which needs the toplevel for its own persistence path —
+// can derive `git rev-parse --show-toplevel` once and reuse it for both, sparing
+// an extra git fork on the hot hook path (identity.Resolve runs per PostToolUse).
+func repoKeyAt(top, dir string, git gitRunner) (string, error) {
 	keyPath := filepath.Join(top, repoKeyFile)
 	if b, err := os.ReadFile(keyPath); err == nil {
 		if k := strings.TrimSpace(string(b)); k != "" {

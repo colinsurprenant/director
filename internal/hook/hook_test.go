@@ -129,6 +129,32 @@ func TestDispatchFailSafeMalformedInput(t *testing.T) {
 	}
 }
 
+// TestDispatchEmptyHubIsNoOp guards against an unresolved hub scattering Director
+// state into the CWD: with hub="" every handler path would resolve health/ and
+// projects/ against CWD-relative paths. Dispatch must no-op (exit 0, no output)
+// and create nothing in the working directory.
+func TestDispatchEmptyHubIsNoOp(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd) // any stray relative write would land here
+
+	for _, event := range []string{EventSessionStart, EventPostToolUse, EventStop} {
+		var out bytes.Buffer
+		code := Dispatch(event, strings.NewReader(`{"session_id":"s1"}`), &out, "")
+		if code != 0 {
+			t.Fatalf("%s: exit code = %d, want 0", event, code)
+		}
+		if out.Len() != 0 {
+			t.Fatalf("%s: expected no blocking output, got %q", event, out.String())
+		}
+	}
+
+	for _, dir := range []string{"health", "projects"} {
+		if _, err := os.Stat(filepath.Join(cwd, dir)); !os.IsNotExist(err) {
+			t.Fatalf("empty hub created %q in CWD (err=%v); state must never escape the hub", dir, err)
+		}
+	}
+}
+
 // TestDispatchUnknownEventAllows ensures an unknown event name (a wiring bug)
 // allows the session and logs loudly rather than blocking.
 func TestDispatchUnknownEventAllows(t *testing.T) {

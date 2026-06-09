@@ -18,8 +18,12 @@ func runHook(args []string) int {
 	}
 	hub, err := hubRoot()
 	if err != nil {
-		// Can't resolve the hub — degrade to a no-op rather than risk a session.
-		hub = ""
+		// Without a resolvable hub there is nowhere to coordinate, and dispatching
+		// with hub="" would scatter health/projection state onto CWD-relative paths
+		// (filepath.Join("", "health", …) == "health/…"). Degrade to a genuine
+		// no-op — still exit 0 so a broken hook never blocks a session (§13 t5).
+		fmt.Fprintf(os.Stderr, "director _hook: cannot resolve hub, skipping: %v\n", err)
+		return 0
 	}
 	return hook.DispatchStdin(args[0], hub)
 }

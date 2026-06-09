@@ -30,11 +30,14 @@ func Resolve(dir string) (Workstream, error) {
 }
 
 func resolve(dir string, git gitRunner) (Workstream, error) {
-	key, err := repoKey(dir, git)
+	// Derive the repo toplevel once and reuse it for both the repo-key lookup and
+	// the workstream-id persistence path below — resolve() previously forked
+	// `git rev-parse --show-toplevel` twice (here and inside repoKey).
+	top, err := git(dir, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return Workstream{}, err
 	}
-	top, err := git(dir, "rev-parse", "--show-toplevel")
+	key, err := repoKeyAt(top, dir, git)
 	if err != nil {
 		return Workstream{}, err
 	}
