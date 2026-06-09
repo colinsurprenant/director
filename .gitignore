@@ -1,0 +1,11 @@
+# Build artifact
+/bin/
+
+# Runtime / volatile coordination state — derivable or per-session, never
+# committed. Only the durable LOG and the hand-edited CHARTER are committable
+# (§15.6): the projects/ rules ignore everything except those two per project.
+/fleet/
+/health/
+/projects/*/*
+!/projects/*/log.ndjson
+!/projects/*/CHARTER.md
