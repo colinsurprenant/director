@@ -157,8 +157,8 @@ $DIRECTOR_HUB/
 │   ├── CHARTER.md          # living source of record: goal, non-goals, risk-line
 │   └── log.ndjson          # append-only typed events (decision · open-item · handoff · note)
 ├── fleet/
-│   ├── <workstream>--<uuid>.json  # one liveness row per session (heartbeat + handle)
-│   └── archive/<date>/            # terminal 'done' rows — archived, never deleted
+│   ├── <workstream>--<uuid>-<hash>.json  # liveness row per session; -<hash> avoids slug collisions
+│   └── archive/<date>/                   # terminal 'done' rows — archived, never deleted
 └── health/                 # hook health log + render manifests
 ```
 

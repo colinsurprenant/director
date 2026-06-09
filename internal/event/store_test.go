@@ -32,18 +32,29 @@ func TestAppendConcurrencySmoke(t *testing.T) {
 	)
 	store := NewStore(t.TempDir(), "concurrency-repo")
 
+	// Pre-mint every event on the test goroutine: newEvent → mustID calls t.Fatalf,
+	// and t's Fatal* family is only valid from the goroutine running the test. Workers
+	// then race purely on Append — the thing under test — over pre-built events.
+	batches := make([][]Event, goroutines)
+	for g := range batches {
+		batches[g] = make([]Event, perG)
+		for i := range batches[g] {
+			batches[g][i] = newEvent(t, "concurrent")
+		}
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
 	errs := make(chan error, goroutines*perG)
 	for g := 0; g < goroutines; g++ {
-		go func() {
+		go func(evs []Event) {
 			defer wg.Done()
-			for i := 0; i < perG; i++ {
-				if err := store.Append(newEvent(t, "concurrent")); err != nil {
+			for _, ev := range evs {
+				if err := store.Append(ev); err != nil {
 					errs <- err
 				}
 			}
-		}()
+		}(batches[g])
 	}
 	wg.Wait()
 	close(errs)

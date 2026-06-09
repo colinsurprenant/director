@@ -66,9 +66,10 @@ type Input struct {
 	// never block when true, or we create an infinite stop→block→stop loop.
 	StopHookActive bool `json:"stop_hook_active"`
 
-	// PostToolUse: the tool that just ran and its payloads. tool_input /
-	// tool_response are kept as raw JSON because Director doesn't inspect their
-	// internals in v1 — only tool_name gates the nudge.
+	// PostToolUse: the name of the tool that just ran. v1 captures only tool_name —
+	// it's all the nudge gate needs. CC also sends tool_input/tool_response, but we
+	// leave them unmodeled (json.Unmarshal ignores unmapped fields) rather than carry
+	// unused fields.
 	ToolName string `json:"tool_name"`
 
 	// PreCompact: manual | auto. Unused in v1 beyond presence.

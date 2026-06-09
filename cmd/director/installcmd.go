@@ -21,8 +21,14 @@ func runInstall(args []string) int {
 		fmt.Fprintf(os.Stderr, "install: %v\n", err)
 		return 1
 	}
-	hooksDir, _ := install.DefaultHooksDir()
 	fmt.Printf("installed Director hooks into %s\n", path)
+	hooksDir, err := install.DefaultHooksDir()
+	if err != nil {
+		// Install already resolved and wrote to this same dir, so this is unreachable
+		// in practice — but degrade rather than print a misleading empty path.
+		fmt.Fprintf(os.Stderr, "install: resolve hooks dir for confirmation: %v\n", err)
+		return 0
+	}
 	fmt.Printf("  shims written to %s (set DIRECTOR_HOOKS_DIR to override)\n", hooksDir)
 	return 0
 }
