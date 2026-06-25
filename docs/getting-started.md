@@ -57,6 +57,19 @@ director adopt
 ```text
 adopted some-project-main-1a2b3c4d
   CHARTER scaffolded at ~/.director/projects/<repo-key>/CHARTER.md — fill in goal / non-goals / risk-line
+```
+
+A bare `adopt` does **Tier 0 only** — the fast, quiet floor:
+
+- **Tier 0** — derives a **stable workstream identity** (handles worktrees, remotes, forks), creates
+  `projects/<repo-key>/` in the hub, scaffolds a ~3-line **CHARTER stub**, and registers the workstream.
+- **Tier 1 (opt-in, `--scan`)** — scans the repo's *tracked* files for open loops
+  (`TODO`/`FIXME`/`DEFERRED`/`HACK`/`XXX` and unchecked `- [ ]` items) and lets you import the ones you pick
+  as `open-item` events. It's opt-in because the keyword scan is noisy on real repos (it can surface dozens of
+  false hits from docs/comments); the richer, accurate brownfield import is the coming Tier-2 fan-out. With
+  `--scan` you'd see:
+
+```text
   found 3 open-loop candidate(s):
     [1] internal/api/handler.go:42  // TODO: rate-limit this endpoint
     [2] README.md:88  - [ ] document the deploy flow
@@ -64,19 +77,12 @@ adopted some-project-main-1a2b3c4d
   import which as open-items? [all / none / e.g. 1,3,5]:
 ```
 
-`adopt` does two tiers:
-
-- **Tier 0** — derives a **stable workstream identity** (handles worktrees, remotes, forks), creates
-  `projects/<repo-key>/` in the hub, scaffolds a ~3-line **CHARTER stub**, and registers the workstream.
-- **Tier 1** — scans the repo's *tracked* files for open loops (`TODO`/`FIXME`/`DEFERRED`/`HACK`/`XXX` and
-  unchecked `- [ ]` checklist items) and imports the ones you pick as `open-item` events.
-
 Variants:
 
 ```bash
-director adopt --import-all   # import every discovered loop, no prompt
-director adopt --no-import    # Tier 0 only (identity + CHARTER + register)
-director adopt path/to/repo --no-import   # flags may go before or after <dir>
+director adopt --scan         # also run the Tier-1 scan; pick which open-loops to import
+director adopt --import-all   # scan and import every discovered loop, no prompt
+director adopt path/to/repo --scan   # flags may go before or after <dir>
 ```
 
 ### Fill the CHARTER — the one manual step
@@ -173,7 +179,7 @@ answer the escalations, edit CHARTERs to steer — not to relay.
 | **`director _hook ...`** | Internal — invoked by the shims, never run by hand. |
 | **A fleet row looks stale though the session is active** | Liveness is derived from heartbeat age. `PostToolUse` refreshes it on every tool call, so an idle (no tool calls) session can age to `stale` (15m) then `abandoned` (2h). v1 has no live git-branch check — that's a fast-follow. |
 | **`status` shows "N unreadable fleet row(s) skipped"** | One or more row files under `$DIRECTOR_HUB/fleet/` are corrupt; the cockpit skips them rather than failing. Inspect/remove the bad files there. |
-| **`adopt` imported nothing** | It scans only *tracked* files (via `git ls-files`) from the repo root. Untracked files are ignored by design; `git add` them first if they should be scanned. |
+| **`adopt` imported nothing** | A bare `adopt` is **Tier-0 only by design** — it doesn't scan. Use `--scan` (pick) or `--import-all`. The scan covers only *tracked* files (via `git ls-files`) from the repo root; `git add` untracked files first if they should be scanned. |
 | **`install` refused** | Your `~/.claude/settings.json` has a malformed (non-object) `hooks` value. Director won't overwrite data it doesn't understand — fix the file, then re-run. |
 
 ---
@@ -186,7 +192,7 @@ committable, ignoring the volatile `fleet/` and `health/`):
 
 ```bash
 export DIRECTOR_HUB=$(git rev-parse --show-toplevel)
-director adopt --import-all
+director adopt          # Tier-0 only; avoid --import-all here — the keyword scan floods a doc-heavy repo
 director brief
 ```
 

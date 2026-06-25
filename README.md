@@ -41,15 +41,15 @@ director adopt [<dir>]        # defaults to the current directory
 
 `adopt` (Tier 0) derives the repo's **stable workstream identity** (handling worktrees, remotes, and forks — see [Identity](#identity)), creates `projects/<repo-key>/` in the hub, scaffolds a ~3-line **CHARTER stub** there, and registers the workstream in the fleet. **Filling in the CHARTER is the only manual step** — goal, non-goals, and the standing "needs a human" risk line. Re-adopting never clobbers an edited CHARTER.
 
-It then (Tier 1) scans the repo's *tracked* files for existing open loops — `TODO` / `FIXME` / `DEFERRED` / `HACK` / `XXX` and unchecked markdown checklist items (`- [ ]`) — and offers to import the ones you pick as `open-item` events, consolidating loops that would otherwise scatter between memory and per-project docs into their one home in the LOG.
+A bare `adopt` stops there (Tier 0). With `--scan` it also runs **Tier 1**: scans the repo's *tracked* files for open loops — `TODO` / `FIXME` / `DEFERRED` / `HACK` / `XXX` and unchecked markdown checklist items (`- [ ]`) — and offers to import the ones you pick as `open-item` events. Tier 1 is opt-in because this keyword scan is noisy on real repos (it surfaces docs/comments/test fixtures, not just real loops); the accurate brownfield import is the **Tier-2 fan-out** (fast-follow). The point of importing is to consolidate loops that would otherwise scatter between memory and per-project docs into their one home in the LOG.
 
 ```bash
-director adopt                # interactive: pick which open-loops to import
-director adopt --import-all   # import every discovered open-loop, no prompt
-director adopt --no-import    # Tier 0 only — identity + CHARTER + register
+director adopt                # Tier 0 only — identity + CHARTER + register
+director adopt --scan         # also scan tracked files; pick which open-loops to import
+director adopt --import-all   # scan and import every discovered open-loop, no prompt
 ```
 
-Flags may go before or after the optional `<dir>` (`director adopt path/to/repo --no-import`).
+Flags may go before or after the optional `<dir>` (`director adopt path/to/repo --scan`).
 
 ## Commands
 
@@ -134,7 +134,7 @@ A workstream's id is `<repo>-<branch>-<shortid>`, derived deterministically from
 
 ## Status & scope
 
-**In v1:** the hook-first coordination core (CLI write path, identity, event store, fleet/liveness, `render`/`brief`/`status`, hooks + the `_managedBy` installer, the protocol skill) and **adoption Tier 0+1** (`adopt`: identity + CHARTER + register + assisted open-loop import). Single-machine.
+**In v1:** the hook-first coordination core (CLI write path, identity, event store, fleet/liveness, `render`/`brief`/`status`, hooks + the `_managedBy` installer, the protocol skill) and **adoption Tier 0+1** (`adopt`: identity + CHARTER + register, plus an opt-in `--scan` open-loop import). Single-machine.
 
 **Deferred:** **Tier-2 brownfield fan-out** (parallel code-mapping, doc living/record/rot reconciliation, arc42 synthesis, back-dated ADRs) is the immediate fast-follow. `brief --synthesize` (model-narrated prose) is deferred — v1 ships the deterministic brief. The Phase-3 monitor/reaper, notifications, freshness sweep, and multi-machine sync come later.
 
