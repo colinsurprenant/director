@@ -12,15 +12,18 @@ import (
 	"github.com/colinsurprenant/director/internal/adopt"
 )
 
-// runAdopt brings an existing repo into the fleet (§6, Tier 0+1). Tier 0 always
-// runs (identity + CHARTER stub + register); Tier 1 then surfaces the repo's
-// existing open-loops and imports the chosen ones as open-items. dir defaults to
-// the current directory.
+// runAdopt brings an existing repo into the fleet (§6). Tier 0 always runs
+// (identity + CHARTER stub + register) and is all a bare `adopt` does. Tier 1 —
+// scanning tracked files for open-loops and importing the chosen ones as
+// open-items — is OPT-IN via --scan (interactive pick) or --import-all (take
+// everything), because the keyword scan is noisy on real repos (it surfaced ~75
+// candidates at ~1% precision when dogfooded; see the adopt decision in the LOG).
+// The durable replacement is the Tier-2 fan-out. dir defaults to the current dir.
 func runAdopt(args []string) int {
 	fs := flag.NewFlagSet("adopt", flag.ContinueOnError)
-	var importAll, noImport bool
-	fs.BoolVar(&importAll, "import-all", false, "import every discovered open-loop without prompting")
-	fs.BoolVar(&noImport, "no-import", false, "Tier 0 only — skip the open-loop import")
+	var importAll, scan bool
+	fs.BoolVar(&scan, "scan", false, "scan tracked files for open-loop candidates and pick which to import (blunt keyword matcher — the real brownfield import is the coming Tier-2 fan-out)")
+	fs.BoolVar(&importAll, "import-all", false, "scan and import every discovered open-loop without prompting (implies --scan)")
 
 	// Pull the optional <dir> positional out before flag parsing so flags work in
 	// any position — Go's flag package otherwise stops at the first positional and
@@ -63,7 +66,10 @@ func runAdopt(args []string) int {
 	} else {
 		fmt.Printf("  CHARTER already present at %s — left untouched\n", res.CharterPath)
 	}
-	if noImport {
+	// Tier 1 is opt-in: a bare `adopt` stops at the Tier-0 floor. The keyword scan
+	// only runs with --scan/--import-all, because surfacing every TODO/FIXME/"deferred"
+	// hit floods real repos with noise (see the adopt decision in the LOG).
+	if !scan && !importAll {
 		return 0
 	}
 

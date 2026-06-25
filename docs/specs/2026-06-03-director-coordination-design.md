@@ -177,6 +177,8 @@ Existing hooks observed: SessionStart (`gsd-check-update.js`), PostToolUse (`gsd
 
 **v1 line (decided 2026-06-08).** Adoption of *existing* repos is on the critical path (a director's projects already exist — greenfield-only is unusable). It is tiered: **Tier 0** (default adoption — identity + CHARTER stub + register, via `director adopt`) **and Tier 1** (assisted import of a repo's *existing* open loops into the LOG — consolidating the §17 MEMORY-vs-docs scatter into its one home) **ship in v1**. **Tier 2** — the heavy fan-out below (steps 2–4: parallel code-mapping, doc living/record/rot reconciliation, arc42 synthesis, back-dated ADRs) — is the immediate **fast-follow**, built for the repos that pay off once adoption is felt. Tier 2's value concentrates on cold/unfamiliar/inherited repos; it does **not** gate the coordination value, which accrues forward from adoption.
 
+> **Post-v1 refinement (dogfood, 2026-06-24).** Tier 1's keyword scan is now **opt-in** (`adopt --scan` / `--import-all`); a bare `adopt` is Tier-0 only. Dogfooding adopt on the director repo surfaced ~75 candidates at ~1% precision (it matched its own marker-list definition, doc examples, and completed `[x]` tasks while missing every real prose-bullet loop). "Surface-all, human-picks" doesn't survive a real repo — the accurate brownfield import is the Tier-2 fan-out, not a keyword grep. See the `adopt` decision in the LOG.
+
 Default adoption = hub dir + CHARTER stub + fleet register (~5 min). The **heavy** adoption (Tier 2) is a separate, explicitly-invoked tool (a fan-out workflow) for the repos that pay off (e.g. the elasticsearch fork overlay):
 
 1. **Inventory** existing docs (path, `git log` last-touched, apparent type).
