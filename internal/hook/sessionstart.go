@@ -29,6 +29,19 @@ import (
 // only useful if the model trusts them instead of re-deriving.
 const groundTruthPreamble = "This is your authoritative current state; build on it, do not re-derive or re-read it."
 
+// emitProtocol is the write-side habit, injected alongside the read-side Ground
+// Truth so it is always in context from turn one. It is PUSHED here rather than
+// delivered as a Claude Code skill on purpose: a skill is model-invoked/lazy, so it
+// never enters context during normal work and the always-on emit habit never fires
+// (dogfood: 0 emits in ~2.5h of real work with the skill installed). It is injected
+// only for Director-managed repos (see buildGroundTruth) so it can't nag elsewhere.
+const emitProtocol = "## Director protocol — keep this current as you work\n" +
+	"You coordinate with other sessions only through the LOG above, written ONLY via the `director` CLI (never Edit/Write a log file). Emit as you work, not batched at the end — state you don't write during a turn is lost on compaction or a fresh start:\n" +
+	"- a decision the moment you make one — `director emit --type decision --area <area> \"<what + why>\"`\n" +
+	"- an open-item the moment you defer a loop — `director emit --type open-item --area <area> --risk <low|escalate> \"<loop>\"`\n" +
+	"- a handoff at each natural boundary (sub-task done, switching focus, wrapping up) — `director emit --type handoff --area <area> \"current task · next · hypotheses\"`\n" +
+	"This is load-bearing — treat it as a standing instruction, not a suggestion.\n"
+
 // handleSessionStart derives identity, refreshes the fleet row, and writes the
 // Ground-Truth injection. It degrades gracefully at every step: a fleet write
 // failure still injects context; an identity failure means there is nothing to
@@ -124,7 +137,23 @@ func buildGroundTruth(hub, repoKey string) (string, error) {
 	// frame — keeping the injected state byte-for-byte the render output.
 	b.WriteString(digest)
 
+	// Push the write-side protocol next to the read-side state, but only for a
+	// Director-managed repo — a CHARTER exists or the LOG already has events — so it
+	// never nags in an unrelated repo when the hooks are installed user-level.
+	if charterExists(hub, repoKey) || len(events) > 0 {
+		b.WriteString("\n")
+		b.WriteString(emitProtocol)
+	}
+
 	return b.String(), nil
+}
+
+// charterExists reports whether the repo has been adopted — a non-empty CHARTER.md
+// under its project dir. One of the two signals (with a non-empty LOG) that gate
+// the emit-protocol injection to Director-managed repos.
+func charterExists(hub, repoKey string) bool {
+	info, err := os.Stat(filepath.Join(hub, "projects", repoKey, "CHARTER.md"))
+	return err == nil && info.Size() > 0
 }
 
 // charterText returns the project's CHARTER.md verbatim (trimmed), or a stable
