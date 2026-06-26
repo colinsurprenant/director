@@ -238,6 +238,9 @@ func TestSessionStartInjectsGroundTruth(t *testing.T) {
 	if !strings.Contains(got, "director render") {
 		t.Errorf("injection missing render digest:\n%s", got)
 	}
+	if !strings.Contains(got, "## Director protocol") {
+		t.Errorf("adopted-repo injection missing the write-side emit protocol:\n%s", got)
+	}
 	if !strings.Contains(got, `"hookEventName":"SessionStart"`) {
 		t.Errorf("injection missing SessionStart control envelope:\n%s", got)
 	}
@@ -245,6 +248,28 @@ func TestSessionStartInjectsGroundTruth(t *testing.T) {
 	// A real session registers a fleet row.
 	if !fleetRowExists(t, hub, ws.ID) {
 		t.Errorf("expected a fleet row for %s after SessionStart", ws.ID)
+	}
+}
+
+// TestSessionStartProtocolScopedToAdopted locks that the write-side emit protocol
+// is injected ONLY for a Director-managed repo: absent in a bare git repo with no
+// CHARTER and no LOG, so user-level hooks can't nag in unrelated repos. The
+// read-side Ground-Truth state is still injected either way.
+func TestSessionStartProtocolScopedToAdopted(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main") // no CHARTER, no events → un-adopted
+
+	in := `{"session_id":"s-real","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	var out bytes.Buffer
+	if code := Dispatch(EventSessionStart, strings.NewReader(in), &out, hub); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	got := out.String()
+	if !strings.Contains(got, groundTruthPreamble) {
+		t.Errorf("un-adopted repo should still get the Ground-Truth state:\n%s", got)
+	}
+	if strings.Contains(got, "## Director protocol") {
+		t.Errorf("un-adopted repo must NOT get the emit protocol (would nag unrelated repos):\n%s", got)
 	}
 }
 
