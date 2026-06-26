@@ -241,6 +241,9 @@ func TestSessionStartInjectsGroundTruth(t *testing.T) {
 	if !strings.Contains(got, "## Director protocol") {
 		t.Errorf("adopted-repo injection missing the write-side emit protocol:\n%s", got)
 	}
+	if !strings.Contains(got, "▸ Director:") {
+		t.Errorf("adopted-repo injection missing the startup acknowledgment banner:\n%s", got)
+	}
 	if !strings.Contains(got, `"hookEventName":"SessionStart"`) {
 		t.Errorf("injection missing SessionStart control envelope:\n%s", got)
 	}
