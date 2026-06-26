@@ -244,6 +244,9 @@ func TestSessionStartInjectsGroundTruth(t *testing.T) {
 	if !strings.Contains(got, "▸ Director:") {
 		t.Errorf("adopted-repo injection missing the startup acknowledgment banner:\n%s", got)
 	}
+	if !strings.Contains(got, "director resolve") {
+		t.Errorf("injected protocol should tell the model to resolve finished open-items:\n%s", got)
+	}
 	if !strings.Contains(got, `"hookEventName":"SessionStart"`) {
 		t.Errorf("injection missing SessionStart control envelope:\n%s", got)
 	}
