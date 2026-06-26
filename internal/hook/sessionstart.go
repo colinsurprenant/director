@@ -73,7 +73,7 @@ func handleSessionStart(in Input, out io.Writer, hub string) error {
 		}
 	}
 
-	ctx, err := buildGroundTruth(hub, ws.RepoKey)
+	ctx, err := buildGroundTruth(hub, ws.RepoKey, ws.ID)
 	if err != nil {
 		logFailure(hub, EventSessionStart, in.SessionID, fmt.Sprintf("build ground truth: %v", err))
 		return nil
@@ -116,13 +116,14 @@ func refreshFleet(hub string, ws identity.Workstream, uuid string) error {
 // from the LOG. The digest is the same one `director render` and
 // `--verify` anchor on, so what the session is handed is exactly what the
 // cockpit shows — no drift between injected and authoritative state.
-func buildGroundTruth(hub, repoKey string) (string, error) {
+func buildGroundTruth(hub, repoKey, workstreamID string) (string, error) {
 	store := event.NewStore(hub, repoKey)
 	events, err := store.ReadAll()
 	if err != nil {
 		return "", fmt.Errorf("read log: %w", err)
 	}
-	digest := render.Digest(render.Fold(events), repoKey)
+	proj := render.Fold(events)
+	digest := render.Digest(proj, repoKey)
 
 	var b strings.Builder
 	b.WriteString(groundTruthPreamble)
@@ -143,9 +144,26 @@ func buildGroundTruth(hub, repoKey string) (string, error) {
 	if charterExists(hub, repoKey) || len(events) > 0 {
 		b.WriteString("\n")
 		b.WriteString(emitProtocol)
+		b.WriteString("\n")
+		b.WriteString(startupBanner(workstreamID, proj))
 	}
 
 	return b.String(), nil
+}
+
+// startupBanner tells the model to surface a one-line Director acknowledgment as
+// the first line of its first reply — a visible signal that the session rehydrated,
+// since the injection is otherwise silent. The line is pre-computed here (workstream
+// + open-item counts) so the model relays it rather than re-deriving the counts.
+func startupBanner(workstreamID string, proj render.Projection) string {
+	needYou := 0
+	for _, o := range proj.OpenItems {
+		if o.Risk == event.RiskEscalate {
+			needYou++
+		}
+	}
+	banner := fmt.Sprintf("▸ Director: %s · %d open-item(s), %d need-you", workstreamID, len(proj.OpenItems), needYou)
+	return "## Acknowledge on entry\nBegin your VERY FIRST reply to the human with this line verbatim (then answer normally), so they can see Director rehydrated:\n" + banner + "\n"
 }
 
 // charterExists reports whether the repo has been adopted — a non-empty CHARTER.md
