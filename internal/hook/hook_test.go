@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/colinsurprenant/director/internal/event"
 	"github.com/colinsurprenant/director/internal/identity"
 )
 
@@ -221,6 +222,12 @@ func TestSessionStartInjectsGroundTruth(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Seed a handoff for THIS workstream so the resume-point anchor appears.
+	store := event.NewStore(hub, ws.RepoKey)
+	if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindHandoff, Area: "x", Body: "doing X, next Y"}); err != nil {
+		t.Fatalf("seed handoff: %v", err)
+	}
+
 	in := `{"session_id":"s-real","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
 	var out bytes.Buffer
 	code := Dispatch(EventSessionStart, strings.NewReader(in), &out, hub)
@@ -243,6 +250,12 @@ func TestSessionStartInjectsGroundTruth(t *testing.T) {
 	}
 	if !strings.Contains(got, "▸ Director:") {
 		t.Errorf("adopted-repo injection missing the startup acknowledgment banner:\n%s", got)
+	}
+	if !strings.Contains(got, "Resume point") {
+		t.Errorf("injection missing the resume-point anchor for the current workstream:\n%s", got)
+	}
+	if !strings.Contains(got, "commitment to act") {
+		t.Errorf("injected protocol should clarify that emit RECORDS (not a commitment to act):\n%s", got)
 	}
 	if !strings.Contains(got, "director resolve") {
 		t.Errorf("injected protocol should tell the model to resolve finished open-items:\n%s", got)

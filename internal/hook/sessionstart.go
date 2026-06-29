@@ -36,7 +36,7 @@ const groundTruthPreamble = "This is your authoritative current state; build on 
 // (dogfood: 0 emits in ~2.5h of real work with the skill installed). It is injected
 // only for Director-managed repos (see buildGroundTruth) so it can't nag elsewhere.
 const emitProtocol = "## Director protocol — keep this current as you work\n" +
-	"You coordinate with other sessions only through the LOG above, written ONLY via the `director` CLI (never Edit/Write a log file). Emit as you work, not batched at the end — state you don't write during a turn is lost on compaction or a fresh start:\n" +
+	"You coordinate with other sessions only through the LOG above, written ONLY via the `director` CLI (never Edit/Write a log file). Emit as you work, not batched at the end — state you don't write during a turn is lost on compaction or a fresh start. Emitting RECORDS a fact; it is NOT a commitment to act and does NOT need the human's approval first — record the decision/loop the moment it exists, then ask or act if needed:\n" +
 	"- a decision the moment you make one — `director emit --type decision --area <area> \"<what + why>\"`\n" +
 	"- an open-item the moment you defer a loop — `director emit --type open-item --area <area> --risk <low|escalate> \"<loop>\"`\n" +
 	"- a handoff at each natural boundary (sub-task done, switching focus, wrapping up) — `director emit --type handoff --area <area> \"current task · next · hypotheses\"`\n" +
@@ -164,7 +164,14 @@ func startupBanner(workstreamID string, proj render.Projection) string {
 		}
 	}
 	banner := fmt.Sprintf("▸ Director: %s · %d open-item(s), %d need-you", workstreamID, len(proj.OpenItems), needYou)
-	return "## Acknowledge on entry\nBegin your VERY FIRST reply to the human with this line verbatim (then answer normally), so they can see Director rehydrated:\n" + banner + "\n"
+	out := "## Acknowledge on entry\nBegin your VERY FIRST reply to the human with this line verbatim (then answer normally), so they can see Director rehydrated:\n" + banner + "\n"
+	// Name THIS workstream's own latest handoff as the resume anchor. Several
+	// workstreams can share one repo log, so the digest's handoffs section lists one
+	// per workstream — without this, the model must guess which is its continuation.
+	if _, ok := proj.LatestHandoff[workstreamID]; ok {
+		out += "Resume point: the handoff labeled [" + workstreamID + "] above is YOUR last position — resume from it; the other handoffs are sibling workstreams' positions, for awareness only.\n"
+	}
+	return out
 }
 
 // charterExists reports whether the repo has been adopted — a non-empty CHARTER.md
