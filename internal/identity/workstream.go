@@ -56,7 +56,7 @@ func resolve(dir string, git gitRunner) (Workstream, error) {
 		}
 	}
 
-	ws.ID = handle(filepath.Base(top), branch, key)
+	ws.ID = handle(repoBasename(dir, git), branch, key)
 	if err := persist(idPath, ws.ID); err != nil {
 		return Workstream{}, err
 	}
@@ -66,6 +66,27 @@ func resolve(dir string, git gitRunner) (Workstream, error) {
 // handle builds the stable, collision-free workstream handle
 // <repo>-<branch>-<shortid>. shortid is derived from the full repo-key + branch,
 // so two repos that share a basename and branch still get distinct handles.
+// repoBasename is the readable repo prefix for the handle: the basename of the dir
+// holding the shared .git (git-common-dir's parent), so every worktree of a repo
+// yields the SAME name. filepath.Base(toplevel) would instead use a linked
+// worktree's OWN dir (often "<repo>-<branch>"), which doubled the branch in the
+// handle. Degrades to the cwd basename if git can't report the common dir.
+func repoBasename(dir string, git gitRunner) string {
+	commonDir, err := git(dir, "rev-parse", "--git-common-dir")
+	if err != nil {
+		return filepath.Base(dir)
+	}
+	if !filepath.IsAbs(commonDir) {
+		if abs, err := filepath.Abs(dir); err == nil {
+			commonDir = filepath.Join(abs, commonDir)
+		}
+	}
+	if resolved, err := filepath.EvalSymlinks(commonDir); err == nil {
+		commonDir = resolved
+	}
+	return filepath.Base(filepath.Dir(commonDir))
+}
+
 func handle(repoName, branch, key string) string {
 	sum := sha256.Sum256([]byte(key + "\x00" + branch))
 	short := hex.EncodeToString(sum[:])[:8]

@@ -57,6 +57,28 @@ func TestResolveDerivesToplevelOnce(t *testing.T) {
 	}
 }
 
+// TestWorktreeHandleNotDoubled locks the worktree-handle fix: a worktree whose dir
+// name embeds the branch must NOT double the branch in the workstream id — the repo
+// prefix comes from the canonical repo, not the worktree dir basename.
+func TestWorktreeHandleNotDoubled(t *testing.T) {
+	root := t.TempDir()
+	main := filepath.Join(root, "widget")
+	gitInit(t, main, map[string]string{"origin": "https://github.com/acme/widget.git"})
+	wt := filepath.Join(root, "widget-feature-x") // dir name embeds the branch
+	mustGit(t, main, "worktree", "add", "-q", "-b", "feature-x", wt)
+
+	ws, err := Resolve(wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(ws.ID, "feature-x") != 1 {
+		t.Errorf("worktree handle doubled the branch: %q", ws.ID)
+	}
+	if !strings.HasPrefix(ws.ID, "widget-feature-x-") {
+		t.Errorf("worktree handle = %q, want widget-feature-x-<shortid>", ws.ID)
+	}
+}
+
 // TestWorkstreamBranchRenameKeepsID locks that the persisted id survives a
 // branch rename (§13 t3) while Branch tracks the new name.
 func TestWorkstreamBranchRenameKeepsID(t *testing.T) {
