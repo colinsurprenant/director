@@ -42,6 +42,13 @@ func runAdopt(args []string) int {
 	if err := fs.Parse(flags); err != nil {
 		return 2
 	}
+	// --import-all is a superset of --scan (scan, then take everything) — the
+	// implication the help text documents. Normalize it into the flag state so
+	// `scan` is the single canonical "Tier 1 requested" signal downstream rather
+	// than every check having to repeat the `|| importAll`.
+	if importAll {
+		scan = true
+	}
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "adopt: %v\n", err)
@@ -68,8 +75,9 @@ func runAdopt(args []string) int {
 	}
 	// Tier 1 is opt-in: a bare `adopt` stops at the Tier-0 floor. The keyword scan
 	// only runs with --scan/--import-all, because surfacing every TODO/FIXME/"deferred"
-	// hit floods real repos with noise (see the adopt decision in the LOG).
-	if !scan && !importAll {
+	// hit floods real repos with noise (see the adopt decision in the LOG). --import-all
+	// normalizes to scan above, so scan alone gates Tier 1 here.
+	if !scan {
 		return 0
 	}
 
