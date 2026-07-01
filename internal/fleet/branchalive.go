@@ -35,16 +35,17 @@ func BranchAlive(r Row) bool {
 	return branchAliveWith(runGit, r)
 }
 
-// branchAliveWith is BranchAlive with the git seam injected. It FAILS OPEN: a row
-// that can't be checked is never abandoned on that basis (it still ages out by
-// heartbeat TTL). Only a definitive "branch is gone" signal returns false.
+// branchAliveWith is BranchAlive with the git seam injected. It fails open only
+// where the check cannot be RUN, and is deliberately fail-CLOSED once it can:
 //
 //   - missing branch or dir → indeterminate (a row materialized by a bare heartbeat
 //     before register) → alive; git is not run.
 //   - detached HEAD → no branch ref exists to check → alive; git is not run.
 //   - otherwise → `git show-ref --verify --quiet refs/heads/<branch>` in dir:
-//     exit 0 (ref present) → alive; any non-zero exit (ref absent, or the worktree
-//     dir was deleted so git can't run) → the branch is gone → not alive.
+//     exit 0 (ref present) → alive; ANY error → not alive. A removed worktree dir
+//     surfaces as a git error (chdir fails) rather than a clean "ref absent" exit,
+//     and that is exactly a case we must abandon — so any show-ref failure, not just
+//     a definitive ref-absent, is treated as gone.
 func branchAliveWith(run gitRunner, r Row) bool {
 	if r.Branch == "" || r.Dir == "" {
 		return true

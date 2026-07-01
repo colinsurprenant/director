@@ -97,7 +97,9 @@ func handleSessionStart(in Input, out io.Writer, hub string) error {
 // is stamped alongside the branch so liveness can check the branch still exists
 // and self-clean a merged-away worktree (§5.5).
 func refreshFleet(hub string, ws identity.Workstream, uuid, cwd string) error {
-	now := time.Now()
+	// UTC to match every other fleet writer (register/heartbeat/adopt) so fleet/
+	// rows never carry mixed-offset timestamps.
+	now := time.Now().UTC()
 	row := fleet.Row{
 		Workstream: ws.ID,
 		UUID:       uuid,
