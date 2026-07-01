@@ -106,9 +106,12 @@ func DefaultHooksDir() (string, error) {
 
 // DefaultCommandsDir resolves the standard slash-command directory,
 // ~/.claude/commands/director. The `director/` subdir both namespaces the commands
-// (CC exposes them as /director:complete, /director:handoff) and guarantees Director
-// only ever writes into a directory it owns — it never touches a user's own
-// commands/complete.md. DIRECTOR_COMMANDS_DIR overrides the location.
+// (CC exposes them as /director:complete, /director:handoff) and keeps Director's
+// writes inside a directory it owns, so on the default path it never clobbers a
+// user's own ~/.claude/commands/complete.md. That no-clobber property is a property
+// of the DEFAULT path only: DIRECTOR_COMMANDS_DIR overrides the location to any
+// directory (writeCommands overwrites complete.md/handoff.md there and removeCommands
+// deletes them), so avoiding a collision under an override is the caller's responsibility.
 func DefaultCommandsDir() (string, error) {
 	if d := os.Getenv(commandsDirEnv); d != "" {
 		return d, nil

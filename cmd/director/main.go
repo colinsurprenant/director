@@ -73,7 +73,7 @@ projections:
   render      deterministic machine digest (+ --verify, manifest)
   brief       human re-orientation view (the bigger picture)
   status      one-line-per-workstream fleet cockpit
-  open-items  this workstream's open open-items (ULID + body), for /complete
+  open-items  this workstream's unresolved open-items (ULID + body), for /complete
 
 fleet lifecycle (hook-emitted):
   register    create/refresh this workstream's fleet row
