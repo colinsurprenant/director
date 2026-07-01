@@ -17,12 +17,21 @@ func runRegister(args []string) int {
 		fmt.Fprintf(os.Stderr, "register: %v\n", err)
 		return 1
 	}
+	// cwd stamps the row's Dir so liveness can branch-check this workstream (§5.5).
+	// resolveContext already resolved identity from cwd, so Getwd is known-good here.
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "register: %v\n", err)
+		return 1
+	}
 	now := time.Now().UTC()
 	row := fleet.Row{
 		Workstream: ws.ID,
 		UUID:       sessionUUID(),
 		RepoKey:    ws.RepoKey,
 		Handle:     ws.ID,
+		Branch:     ws.Branch,
+		Dir:        cwd,
 		Heartbeat:  now.Format(time.RFC3339Nano),
 	}
 	if err := fleet.Register(hub, row); err != nil {

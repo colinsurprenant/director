@@ -40,8 +40,9 @@ type Liveness struct {
 // collapses rows by workstream — newest heartbeat wins — and derives each
 // workstream's State from heartbeat age (staleAfter, abandonedAfter) and the
 // branchAlive predicate. branchAlive is the injectable seam over the git
-// branch/worktree check (mirroring identity's gitRunner) so liveness derivation
-// is testable without git: a workstream whose branch is gone is abandoned
+// branch/worktree check (fleet.BranchAlive in production) so liveness derivation
+// is testable without git; it is passed the newest row so it can read that
+// workstream's branch + dir, and a workstream whose branch is gone is abandoned
 // regardless of heartbeat age. Entries are returned sorted by workstream for a
 // deterministic cockpit ordering. A missing fleet dir is not an error — it
 // yields an empty fleet.
@@ -53,7 +54,7 @@ type Liveness struct {
 // more lenient than the event log's scan, which stays fail-loud: a liveness row is
 // ephemeral/derived, while a torn LOG line is durable-record corruption the human
 // must see.
-func List(hub string, now time.Time, staleAfter, abandonedAfter time.Duration, branchAlive func(workstream string) bool) (entries []Liveness, skipped int, err error) {
+func List(hub string, now time.Time, staleAfter, abandonedAfter time.Duration, branchAlive func(Row) bool) (entries []Liveness, skipped int, err error) {
 	dir := filepath.Join(hub, fleetDir)
 	files, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
@@ -109,7 +110,7 @@ func List(hub string, now time.Time, staleAfter, abandonedAfter time.Duration, b
 	for ws, a := range byWorkstream {
 		out = append(out, Liveness{
 			Workstream: ws,
-			State:      derive(a.newestHB, now, staleAfter, abandonedAfter, branchAlive(ws)),
+			State:      derive(a.newestHB, now, staleAfter, abandonedAfter, branchAlive(a.newest)),
 			UUID:       a.newest.UUID,
 			RepoKey:    a.newest.RepoKey,
 			Handle:     a.newest.Handle,
