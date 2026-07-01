@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/colinsurprenant/director/internal/event"
+	"github.com/colinsurprenant/director/internal/fleet"
 	"github.com/colinsurprenant/director/internal/identity"
 )
 
@@ -45,6 +47,17 @@ func gitRepo(t *testing.T, name, branch string) string {
 	// matches the repo's init.defaultBranch (which may itself be "main").
 	git("checkout", "-q", "-B", branch)
 	return dir
+}
+
+// gitIn runs git in dir, failing the test on error — for mutating a repo the test
+// already created (e.g. deleting a branch to simulate a merged-away worktree).
+func gitIn(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
 }
 
 // readHealth returns the hook health log contents (or "" if absent).
@@ -322,6 +335,49 @@ func TestSessionStartThrowawayDoesNotRegister(t *testing.T) {
 	}
 	if fleetRowExists(t, hub, ws.ID) {
 		t.Errorf("throwaway session should not register a fleet row")
+	}
+}
+
+// TestSessionStartRegistersBranchForAbandonment locks the branch-liveness cleanup:
+// a real SessionStart stamps the row's branch + dir, so once that branch is gone
+// (its worktree merged away and was deleted) the cockpit derives the workstream
+// abandoned even though its heartbeat is still fresh.
+func TestSessionStartRegistersBranchForAbandonment(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "feature")
+	ws := mustResolve(t, repo)
+
+	in := `{"session_id":"s-real","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	if code := Dispatch(EventSessionStart, strings.NewReader(in), &bytes.Buffer{}, hub); code != 0 {
+		t.Fatalf("session start exit = %d", code)
+	}
+
+	stateOf := func() fleet.State {
+		t.Helper()
+		live, _, err := fleet.List(hub, time.Now(), 15*time.Minute, 2*time.Hour, fleet.BranchAlive)
+		if err != nil {
+			t.Fatalf("fleet.List: %v", err)
+		}
+		for _, l := range live {
+			if l.Workstream == ws.ID {
+				return l.State
+			}
+		}
+		t.Fatalf("no fleet entry for %s in %+v", ws.ID, live)
+		return ""
+	}
+
+	if got := stateOf(); got != fleet.StateActive {
+		t.Fatalf("fresh session on an existing branch → %q, want active", got)
+	}
+
+	// The branch merges away and is deleted (check out elsewhere first — git won't
+	// delete the checked-out branch).
+	gitIn(t, repo, "checkout", "-q", "-B", "scratch")
+	gitIn(t, repo, "branch", "-D", "feature")
+
+	if got := stateOf(); got != fleet.StateAbandoned {
+		t.Errorf("branch deleted → %q, want abandoned (the row's branch/dir must drive the check)", got)
 	}
 }
 

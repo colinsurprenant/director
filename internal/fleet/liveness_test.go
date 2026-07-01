@@ -14,8 +14,8 @@ const (
 
 // alive / dead are the two branch-existence predicates the liveness tests inject
 // in place of a real git check.
-func alive(string) bool { return true }
-func dead(string) bool  { return false }
+func alive(Row) bool { return true }
+func dead(Row) bool  { return false }
 
 // registerAt is a test helper: register a row with an explicit heartbeat time.
 func registerAt(t *testing.T, hub, ws, uuid, handle string, hb time.Time) {
@@ -30,7 +30,7 @@ func registerAt(t *testing.T, hub, ws, uuid, handle string, hb time.Time) {
 	}
 }
 
-func onlyEntry(t *testing.T, hub string, now time.Time, branchAlive func(string) bool) Liveness {
+func onlyEntry(t *testing.T, hub string, now time.Time, branchAlive func(Row) bool) Liveness {
 	t.Helper()
 	got, _, err := List(hub, now, staleTTL, abandonedTTL, branchAlive)
 	if err != nil {

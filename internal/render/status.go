@@ -26,16 +26,17 @@ const (
 // liveness via fleet.List and, for each live workstream, folds that workstream's
 // LOG to surface the Needs-you band.
 //
-// branchAlive is the injectable git-branch-existence seam fleet.List takes; for
-// v1 status passes a predicate that always returns true, so liveness is driven by
-// heartbeat TTL alone. A real branch/worktree check is a documented fast-follow
-// (§5.5) — wiring it is a one-line change to the predicate here, not a fold change.
+// Liveness is derived from heartbeat age plus fleet.BranchAlive: a workstream
+// whose branch is gone (its worktree merged away and was deleted) reads abandoned
+// even with a fresh heartbeat, so the cockpit self-cleans. Rows registered without
+// branch/dir (older rows, or a bare-heartbeat row) fail open — BranchAlive returns
+// true — so they still age out by TTL rather than being falsely abandoned.
 //
 // now is injected (never time.Now() inside) so the cockpit is testable against a
 // fixed clock; recency is the only time-derived field and it is intentionally
 // excluded from the determinism gate (§13 t4 covers render/brief, not status).
 func Status(hub string, now time.Time) (string, error) {
-	live, skipped, err := fleet.List(hub, now, StaleAfter, AbandonedAfter, func(string) bool { return true })
+	live, skipped, err := fleet.List(hub, now, StaleAfter, AbandonedAfter, fleet.BranchAlive)
 	if err != nil {
 		return "", fmt.Errorf("status: list fleet: %w", err)
 	}

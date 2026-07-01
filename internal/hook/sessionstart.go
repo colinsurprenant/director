@@ -66,7 +66,7 @@ func handleSessionStart(in Input, out io.Writer, hub string) error {
 	}
 
 	if !throwaway {
-		if err := refreshFleet(hub, ws, sessionUUID(in)); err != nil {
+		if err := refreshFleet(hub, ws, sessionUUID(in), in.CWD); err != nil {
 			// A fleet write failure must not stop the injection — visibility of
 			// current state is more valuable than the heartbeat. Log loudly and
 			// continue to build the Ground-Truth block.
@@ -93,14 +93,18 @@ func handleSessionStart(in Input, out io.Writer, hub string) error {
 // (or resumed/compacted) session shows up live in the cockpit. Register is
 // create-or-refresh, so calling it on every start — first run or resume — keeps
 // one row current rather than spawning duplicates. The caller resolves uuid via
-// sessionUUID so every surface keys the same row.
-func refreshFleet(hub string, ws identity.Workstream, uuid string) error {
+// sessionUUID so every surface keys the same row. cwd (the session's working dir)
+// is stamped alongside the branch so liveness can check the branch still exists
+// and self-clean a merged-away worktree (§5.5).
+func refreshFleet(hub string, ws identity.Workstream, uuid, cwd string) error {
 	now := time.Now()
 	row := fleet.Row{
 		Workstream: ws.ID,
 		UUID:       uuid,
 		RepoKey:    ws.RepoKey,
 		Handle:     ws.ID,
+		Branch:     ws.Branch,
+		Dir:        cwd,
 		Heartbeat:  now.Format(time.RFC3339Nano),
 	}
 	if err := fleet.Register(hub, row); err != nil {

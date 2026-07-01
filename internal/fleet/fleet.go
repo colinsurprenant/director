@@ -46,6 +46,8 @@ type Row struct {
 	UUID       string `json:"uuid"`
 	RepoKey    string `json:"repo_key,omitempty"` // canonical repo-key; locates this workstream's LOG for status' blocked-on (§5.3)
 	Handle     string `json:"handle,omitempty"`
+	Branch     string `json:"branch,omitempty"` // the workstream's branch; with Dir, lets liveness check the branch still exists (§5.5)
+	Dir        string `json:"dir,omitempty"`    // a working dir in the repo to run the branch check from — a deleted worktree makes git fail → abandoned
 	Heartbeat  string `json:"heartbeat"`        // RFC3339Nano, set from the injected now
 	Status     string `json:"status,omitempty"` // terminal marker only; "" while live
 }
