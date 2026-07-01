@@ -274,6 +274,52 @@ func TestInstallWritesAndUninstallRemovesShims(t *testing.T) {
 	}
 }
 
+// TestInstallWritesAndUninstallRemovesCommands verifies Install materializes the
+// embedded slash-command markdown into the commands dir — byte-identical to the
+// embedded source and mode 0644 (read by CC, not executed) — and Uninstall removes
+// them. This is the turnkey delivery of /director:complete and /director:handoff:
+// no manual command placement, and entirely separate from the settings.json merge.
+func TestInstallWritesAndUninstallRemovesCommands(t *testing.T) {
+	path, _ := writeFixture(t, "")
+	commandsDir := filepath.Join(t.TempDir(), "commands")
+	t.Setenv(commandsDirEnv, commandsDir)
+	cmds := []string{"complete.md", "handoff.md"}
+
+	if err := Install(path); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range cmds {
+		dest := filepath.Join(commandsDir, name)
+		info, err := os.Stat(dest)
+		if err != nil {
+			t.Fatalf("command %s not written by Install: %v", name, err)
+		}
+		if info.Mode().Perm() != 0o644 {
+			t.Errorf("command %s mode = %v, want 0644", name, info.Mode().Perm())
+		}
+		got, err := os.ReadFile(dest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, err := commandsFS.ReadFile("commands/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != string(want) {
+			t.Errorf("written command %s does not match the embedded source", name)
+		}
+	}
+
+	if err := Uninstall(path); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range cmds {
+		if _, err := os.Stat(filepath.Join(commandsDir, name)); !os.IsNotExist(err) {
+			t.Errorf("Uninstall left command %s in place", name)
+		}
+	}
+}
+
 // TestInstallRefusesWrongTypedHooks is H1: a present-but-wrong-typed "hooks" value
 // must make Install REFUSE (error) and leave the file byte-for-byte unchanged,
 // never silently overwriting foreign data.

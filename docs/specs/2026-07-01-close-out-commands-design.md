@@ -1,6 +1,7 @@
 # Close-out commands: `/complete` and `/handoff`
 
-Status: design → implementing (step 1). Supersedes the informal notes in the LOG
+Status: step 1 shipped (`director open-items` verb + the two commands + install
+wiring, gate-green); steps 2–3 pending. Supersedes the informal notes in the LOG
 (decisions `01KWCH30WRTMKVMYETR34KS8PQ`, `01KWFEZZT3V6GSD8PX9R3XZJBJ`; open-items
 `01KW0BKQXQS12AQ9BZVZ6FBP3W`, `01KW0BKQXAFBXYK7M1R4M01NAV`).
 
@@ -68,22 +69,25 @@ prompted this session); this is permanent calibration, and always a nudge.
 ## Delivery
 
 Slash commands are **model-orchestrated markdown** (they drive existing `director`
-CLI verbs: `render`/`brief`, `resolve`, `emit`, `done`) — not new Go subcommands. They
-live in the repo under `commands/director/{complete,handoff}.md` and `director install`
+CLI verbs: `render`/`brief`, `resolve`, `emit`, `done`, `open-items`) — not new Go
+subcommands. The embed source lives at `internal/install/commands/{complete,handoff}.md`
+— co-located with the install package because `//go:embed` cannot reach a parent dir,
+exactly as the hook shims live at `internal/install/shims/`. `director install`
 materializes them to `~/.claude/commands/director/` via the same `//go:embed` +
-write/remove pattern already used for hook shims — entirely separate from the
-settings.json merge. The `director/` subdir namespaces them (`/director:complete`,
+write/remove pattern (`writeCommands`/`removeCommands`) used for the shims — entirely
+separate from the settings.json merge (a plain file drop, no settings reference). The
+destination `director/` subdir namespaces them (`/director:complete`,
 `/director:handoff`) and avoids clobbering a user's own `complete.md`/`handoff.md`.
 
-Open implementation question for step 1: `/complete` needs *this workstream's*
-open-items with their ULIDs. If `render`/`brief` don't already surface the workstream
-per open-item clearly enough for the model to filter, add a small read affordance;
-otherwise the command orchestrates existing verbs unchanged.
+Resolved implementation question (step 1): `/complete` needs *this workstream's*
+open-items with their ULIDs, which `render`/`brief` don't surface per-workstream. Shipped
+as the small read-only verb **`director open-items`** (`<ULID> <body>` per line, scoped
+to the current workstream) — no fold/schema change. `/complete` consumes it directly.
 
 ## Build sequence
 
-1. **The commands** — `commands/director/{complete,handoff}.md` + `install` places
-   them (this step).
+1. **The commands** — `internal/install/commands/{complete,handoff}.md` + the
+   `director open-items` read affordance + `install` places them (SHIPPED).
 2. **Injected-protocol update** — distinguish complete-vs-handoff; suggest at the
    judgment triggers.
 3. **Deterministic nudges** — branch-gone → `/complete` (Stop/`status`); PreCompact →

@@ -30,6 +30,14 @@ func runInstall(args []string) int {
 		return 0
 	}
 	fmt.Printf("  shims written to %s (set DIRECTOR_HOOKS_DIR to override)\n", hooksDir)
+	commandsDir, err := install.DefaultCommandsDir()
+	if err != nil {
+		// Install already resolved and wrote to this same dir, so this is unreachable
+		// in practice — degrade rather than print a misleading empty path.
+		fmt.Fprintf(os.Stderr, "install: resolve commands dir for confirmation: %v\n", err)
+		return 0
+	}
+	fmt.Printf("  commands written to %s (/director:complete, /director:handoff)\n", commandsDir)
 	return 0
 }
 

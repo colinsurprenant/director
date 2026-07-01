@@ -30,6 +30,17 @@ import (
 //go:embed shims/*.sh
 var shimFS embed.FS
 
+// commandsFS embeds the slash-command markdown (/director:complete,
+// /director:handoff) into the binary so `director install` places them itself, the
+// same self-contained pattern as shimFS. internal/install/commands/ is the single
+// source of truth; the on-disk copies install writes therefore never drift from the
+// binary. These are model-orchestrated commands that drive existing `director` CLI
+// verbs — writing them is pure file materialization, wholly separate from the
+// settings.json merge, so it stays clear of the merge's clobber risk.
+//
+//go:embed commands/*.md
+var commandsFS embed.FS
+
 // managedByKey / managedByValue tag every command object Director owns. CC
 // ignores unknown fields, so the tag is invisible to the platform but lets
 // install/uninstall find exactly Director's entries and nothing else.
@@ -43,6 +54,10 @@ const (
 // installed command is the shim path, NOT the binary, so settings.json stays
 // stable across rebuilds (§5.4).
 const hooksDirEnv = "DIRECTOR_HOOKS_DIR"
+
+// commandsDirEnv lets a caller (and the tests) redirect where the slash-command
+// markdown is materialized. When unset, DefaultCommandsDir is used.
+const commandsDirEnv = "DIRECTOR_COMMANDS_DIR"
 
 // managedEntry describes one hook Director installs: which CC event it attaches
 // to, the matcher (empty = all), and the shim filename under the hooks dir.
@@ -89,6 +104,22 @@ func DefaultHooksDir() (string, error) {
 	return filepath.Join(home, ".claude", "director", "hooks"), nil
 }
 
+// DefaultCommandsDir resolves the standard slash-command directory,
+// ~/.claude/commands/director. The `director/` subdir both namespaces the commands
+// (CC exposes them as /director:complete, /director:handoff) and guarantees Director
+// only ever writes into a directory it owns — it never touches a user's own
+// commands/complete.md. DIRECTOR_COMMANDS_DIR overrides the location.
+func DefaultCommandsDir() (string, error) {
+	if d := os.Getenv(commandsDirEnv); d != "" {
+		return d, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("install: resolve home dir: %w", err)
+	}
+	return filepath.Join(home, ".claude", "commands", "director"), nil
+}
+
 // Install merges Director's tagged hook entries into the settings file at
 // settingsPath. It is idempotent: an identical tagged entry already present is
 // left as-is, so re-running adds nothing (entry-count-stable). Untagged and
@@ -102,6 +133,16 @@ func Install(settingsPath string) error {
 	// Materialize the embedded shims FIRST: if this fails we return before touching
 	// settings.json, so the file never ends up pointing at shims that aren't there.
 	if err := writeShims(hooksDir); err != nil {
+		return err
+	}
+	// Materialize the slash commands too, before the settings merge. This is an
+	// independent file-drop (no settings.json reference), so a failure here also
+	// leaves the merge untouched.
+	commandsDir, err := DefaultCommandsDir()
+	if err != nil {
+		return err
+	}
+	if err := writeCommands(commandsDir); err != nil {
 		return err
 	}
 	root, err := loadSettings(settingsPath)
@@ -219,6 +260,11 @@ func Uninstall(settingsPath string) error {
 	if hooksDir, err := DefaultHooksDir(); err == nil {
 		removeShims(hooksDir)
 	}
+	// And the Director-owned slash commands — the inverse of writeCommands, same
+	// best-effort, exact-filenames-only discipline.
+	if commandsDir, err := DefaultCommandsDir(); err == nil {
+		removeCommands(commandsDir)
+	}
 	return nil
 }
 
@@ -250,30 +296,82 @@ func writeShims(hooksDir string) error {
 	return nil
 }
 
+// writeCommands materializes the embedded slash-command markdown into commandsDir,
+// creating the dir and overwriting any existing copies so they always match THIS
+// binary — the exact shape of writeShims, but the files are read by CC (not run), so
+// they are written 0o644, not executable. Idempotent (re-install reproduces the same
+// files) and atomic per file (temp + rename).
+func writeCommands(commandsDir string) error {
+	if err := os.MkdirAll(commandsDir, 0o755); err != nil {
+		return fmt.Errorf("install: create commands dir %s: %w", commandsDir, err)
+	}
+	entries, err := fs.ReadDir(commandsFS, "commands")
+	if err != nil {
+		return fmt.Errorf("install: read embedded commands: %w", err)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		data, err := commandsFS.ReadFile("commands/" + e.Name())
+		if err != nil {
+			return fmt.Errorf("install: read embedded command %s: %w", e.Name(), err)
+		}
+		if err := writeFileAtomic(filepath.Join(commandsDir, e.Name()), data, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// removeCommands deletes the Director-owned command files from commandsDir — the
+// inverse of writeCommands — touching ONLY the exact embedded filenames so a foreign
+// file in the dir is never removed, then drops the dir if it is left empty.
+// Best-effort: errors are swallowed so uninstall succeeds even if a file was already
+// gone or the dir holds other files.
+func removeCommands(commandsDir string) {
+	entries, err := fs.ReadDir(commandsFS, "commands")
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		_ = os.Remove(filepath.Join(commandsDir, e.Name()))
+	}
+	_ = os.Remove(commandsDir) // succeeds only if now empty; a dir with foreign files is left intact
+}
+
 // writeExecutable writes data to path with mode 0o755 via temp + chmod + rename so
 // the file appears atomically and already executable.
 func writeExecutable(path string, data []byte) error {
+	return writeFileAtomic(path, data, 0o755)
+}
+
+// writeFileAtomic writes data to path with the given mode via temp + chmod + rename,
+// so a concurrent reader never sees a half-written file or the wrong permission bits.
+// It is the shared mechanism behind both the executable shims (0o755) and the
+// read-only command markdown (0o644).
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
-		return fmt.Errorf("install: create temp shim: %w", err)
+		return fmt.Errorf("install: create temp file: %w", err)
 	}
 	tmpName := tmp.Name()
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		os.Remove(tmpName)
-		return fmt.Errorf("install: write temp shim: %w", err)
+		return fmt.Errorf("install: write temp file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmpName)
-		return fmt.Errorf("install: close temp shim: %w", err)
+		return fmt.Errorf("install: close temp file: %w", err)
 	}
-	if err := os.Chmod(tmpName, 0o755); err != nil {
+	if err := os.Chmod(tmpName, perm); err != nil {
 		os.Remove(tmpName)
-		return fmt.Errorf("install: chmod shim: %w", err)
+		return fmt.Errorf("install: chmod file: %w", err)
 	}
 	if err := os.Rename(tmpName, path); err != nil {
 		os.Remove(tmpName)
-		return fmt.Errorf("install: rename shim into place: %w", err)
+		return fmt.Errorf("install: rename file into place: %w", err)
 	}
 	return nil
 }
