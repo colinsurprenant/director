@@ -318,6 +318,48 @@ func TestInstallWritesAndUninstallRemovesCommands(t *testing.T) {
 			t.Errorf("Uninstall left command %s in place", name)
 		}
 	}
+	// With only Director's files, the now-empty dir is pruned (mirrors removeShims).
+	if _, err := os.Stat(commandsDir); !os.IsNotExist(err) {
+		t.Errorf("Uninstall did not prune the now-empty commands dir")
+	}
+}
+
+// TestUninstallPreservesForeignCommands is the charter's touch-only-our-files
+// invariant for the commands dir: a user-authored file in ~/.claude/commands/director/
+// must survive Uninstall, and its presence must keep the dir alive. This dir is a
+// plausible home for a user's own commands, so the guard matters — a naive
+// os.RemoveAll(commandsDir) cleanup would pass every other test while silently
+// deleting the user's file.
+func TestUninstallPreservesForeignCommands(t *testing.T) {
+	path, _ := writeFixture(t, "")
+	commandsDir := filepath.Join(t.TempDir(), "commands")
+	t.Setenv(commandsDirEnv, commandsDir)
+
+	if err := Install(path); err != nil {
+		t.Fatal(err)
+	}
+	foreign := filepath.Join(commandsDir, "my-notes.md")
+	if err := os.WriteFile(foreign, []byte("mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Uninstall(path); err != nil {
+		t.Fatal(err)
+	}
+
+	// Director's own commands are gone...
+	for _, name := range []string{"complete.md", "handoff.md"} {
+		if _, err := os.Stat(filepath.Join(commandsDir, name)); !os.IsNotExist(err) {
+			t.Errorf("Uninstall left Director command %s in place", name)
+		}
+	}
+	// ...but the foreign file and the dir it lives in survive untouched.
+	if _, err := os.Stat(foreign); err != nil {
+		t.Errorf("Uninstall deleted a foreign command file: %v", err)
+	}
+	if _, err := os.Stat(commandsDir); err != nil {
+		t.Errorf("Uninstall pruned the commands dir while a foreign file remained: %v", err)
+	}
 }
 
 // TestInstallRefusesWrongTypedHooks is H1: a present-but-wrong-typed "hooks" value

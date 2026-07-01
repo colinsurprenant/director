@@ -353,25 +353,25 @@ func writeExecutable(path string, data []byte) error {
 func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
-		return fmt.Errorf("install: create temp file: %w", err)
+		return fmt.Errorf("install: create temp file for %s: %w", path, err)
 	}
 	tmpName := tmp.Name()
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		os.Remove(tmpName)
-		return fmt.Errorf("install: write temp file: %w", err)
+		return fmt.Errorf("install: write temp file for %s: %w", path, err)
 	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmpName)
-		return fmt.Errorf("install: close temp file: %w", err)
+		return fmt.Errorf("install: close temp file for %s: %w", path, err)
 	}
 	if err := os.Chmod(tmpName, perm); err != nil {
 		os.Remove(tmpName)
-		return fmt.Errorf("install: chmod file: %w", err)
+		return fmt.Errorf("install: chmod %s: %w", path, err)
 	}
 	if err := os.Rename(tmpName, path); err != nil {
 		os.Remove(tmpName)
-		return fmt.Errorf("install: rename file into place: %w", err)
+		return fmt.Errorf("install: rename %s into place: %w", path, err)
 	}
 	return nil
 }

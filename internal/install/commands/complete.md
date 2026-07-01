@@ -8,7 +8,7 @@ You are running the TERMINAL close-out for THIS workstream: its task is finished
 
 2. **List this workstream's open loops.** Run:
    `director open-items`
-   It prints `<ULID> <body>`, one per line, for the open-items this workstream still owns. If it prints nothing, skip to step 5.
+   It prints `<ULID> <body>` one per line (an escalate item as `<ULID> [risk:escalate] <body>`) for the open-items this workstream still owns. If it prints `(none)`, there is nothing to close — skip to step 5.
 
 3. **Triage each open-item against what this work actually shipped.** For every line, decide from the diff / PR context whether the work you just completed RESOLVED it, and present a recommendation to me — do not resolve anything yet:
    - resolved by this work → *"<body> — resolved by this PR (rec: close)"*
