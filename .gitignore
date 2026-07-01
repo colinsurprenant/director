@@ -9,3 +9,10 @@
 /projects/*/*
 !/projects/*/log.ndjson
 !/projects/*/CHARTER.md
+
+# Per-repo local state, never committed: .director/ is this repo's identity cache
+# (repo-key + workstream-id, derive-once), and — when dogfooding with the repo as
+# its own hub — its live LOG/fleet; .claude/settings.local.json is per-machine CC
+# config. Without these, a bare `git add -A` sweeps coordination state into a commit.
+/.director/
+/.claude/settings.local.json
