@@ -3,6 +3,7 @@ package hook
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -62,20 +63,21 @@ func handoffNudgeThreshold() (tokens int, on bool) {
 }
 
 // runHandoffNudge decides whether to fire and returns the nudge text ("" = stay
-// silent) plus the measured usage for the caller's health log line. Best-effort
-// and fail-open throughout: any trouble measuring or gating yields silence,
-// never an error that could interfere with the tool flow.
-func runHandoffNudge(in Input, hub string) (text string, usage int) {
+// silent) plus the measured usage for the caller's health log line. The caller
+// (handlePostToolUse) resolves ws once for the whole hot path and filters
+// throwaway sessions before calling. Best-effort and fail-open throughout: any
+// trouble measuring or gating yields silence, never an error that could
+// interfere with the tool flow.
+func runHandoffNudge(in Input, hub string, ws identity.Workstream) (text string, usage int) {
 	threshold, on := handoffNudgeThreshold()
-	if !on || isThrowawaySession(in) {
+	if !on {
 		return "", 0
 	}
 
 	// Politeness gate, mirroring the emit-protocol injection: the nudge names
 	// /director:handoff, which only means something in an adopted repo. charter
 	// presence is the one-stat cheap check suited to a per-tool-call hook.
-	ws, err := identity.Resolve(in.CWD)
-	if err != nil || !charterExists(hub, ws.RepoKey) {
+	if !charterExists(hub, ws.RepoKey) {
 		return "", 0
 	}
 
@@ -142,17 +144,29 @@ func tailContextTokens(path string) int {
 	if offset < 0 {
 		offset = 0
 	}
+	// A mid-line seek leaves a partial first segment that must be dropped — but
+	// only a mid-line one: when the byte before the window is a newline, the
+	// window starts on a record boundary and the first segment is complete
+	// (dropping it could silence the only assistant record in the window).
+	dropFirst := false
+	if offset > 0 {
+		prev := make([]byte, 1)
+		if _, err := f.ReadAt(prev, offset-1); err != nil {
+			return 0
+		}
+		dropFirst = prev[0] != '\n'
+	}
 	if _, err := f.Seek(offset, 0); err != nil {
 		return 0
 	}
-	data, err := readAllBounded(f, handoffNudgeTailBytes)
+	data, err := io.ReadAll(io.LimitReader(f, handoffNudgeTailBytes))
 	if err != nil {
 		return 0
 	}
 
 	lines := strings.Split(string(data), "\n")
-	if offset > 0 && len(lines) > 0 {
-		lines = lines[1:] // the seek almost surely landed mid-line; drop the partial
+	if dropFirst && len(lines) > 0 {
+		lines = lines[1:]
 	}
 	total := 0
 	for _, line := range lines {
@@ -172,21 +186,6 @@ func tailContextTokens(path string) int {
 		}
 	}
 	return total
-}
-
-// readAllBounded reads at most n bytes from r. Split out so the tail-read can't
-// grow unbounded if the file is appended between Stat and read.
-func readAllBounded(r *os.File, n int64) ([]byte, error) {
-	buf := make([]byte, n)
-	total := 0
-	for int64(total) < n {
-		m, err := r.Read(buf[total:])
-		total += m
-		if err != nil {
-			break // EOF (or a read error) ends the tail — return what we have
-		}
-	}
-	return buf[:total], nil
 }
 
 // usageRecord is the minimal projection of a transcript line the tail-read

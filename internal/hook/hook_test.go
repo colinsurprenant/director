@@ -835,6 +835,26 @@ func TestTailContextTokensTailBounded(t *testing.T) {
 	}
 }
 
+// TestTailContextTokensWindowOnRecordBoundary covers the seek landing EXACTLY on
+// a newline boundary: the first line in the window is then a complete record and
+// must NOT be dropped — here it is the only assistant usage record in the window.
+func TestTailContextTokensWindowOnRecordBoundary(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "boundary.jsonl")
+	head := `{"type":"user","message":{"content":"before the window"}}` + "\n"
+	a := `{"type":"assistant","message":{"usage":{"input_tokens":40000,"cache_creation_input_tokens":2000,"cache_read_input_tokens":1000}}}` + "\n"
+	// One user pad record sized so head ends exactly at (size - tail window):
+	// the window then starts at the first byte of the assistant record.
+	padPrefix := `{"type":"user","message":{"content":"`
+	padSuffix := `"}}` + "\n"
+	pad := padPrefix + strings.Repeat("x", handoffNudgeTailBytes-len(a)-len(padPrefix)-len(padSuffix)) + padSuffix
+	if err := os.WriteFile(path, []byte(head+a+pad), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := tailContextTokens(path); got != 43000 {
+		t.Fatalf("tailContextTokens = %d, want 43000 (boundary-aligned first record must survive)", got)
+	}
+}
+
 // --- shared input builders --------------------------------------------------
 
 // mustResolve resolves the workstream for a repo dir, failing the test on error.
