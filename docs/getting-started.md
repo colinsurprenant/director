@@ -214,7 +214,7 @@ At block boundaries, two slash commands (installed by `director install`) mark w
 - **`/director:complete`** when a workstream is done and merged. It closes out the workstream's open loops
   with your confirmation and archives its fleet row. Nothing auto-resolves; close-out is human-confirmed.
 
-A workstream idle between blocks is not stale data. Dormant is a first-class state: the parked handoff is
+A workstream parked between blocks is not a problem to clean up. Dormant is a first-class state: the parked handoff is
 what `brief` shows and what the next session starts from.
 
 ---

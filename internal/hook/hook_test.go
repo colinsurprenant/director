@@ -15,6 +15,7 @@ import (
 	"github.com/colinsurprenant/director/internal/event"
 	"github.com/colinsurprenant/director/internal/fleet"
 	"github.com/colinsurprenant/director/internal/identity"
+	"github.com/colinsurprenant/director/internal/render"
 )
 
 // hook_test.go drives the adapter through real temp hubs/repos/transcripts — the
@@ -363,7 +364,7 @@ func TestSessionStartRegistersBranchForGone(t *testing.T) {
 
 	stateOf := func() fleet.State {
 		t.Helper()
-		live, _, err := fleet.List(hub, time.Now(), 15*time.Minute, 2*time.Hour, fleet.BranchAlive)
+		live, _, err := fleet.List(hub, time.Now(), render.IdleAfter, render.DormantAfter, fleet.BranchAlive)
 		if err != nil {
 			t.Fatalf("fleet.List: %v", err)
 		}

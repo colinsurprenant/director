@@ -31,7 +31,8 @@ func runGit(dir string, args ...string) (string, error) {
 }
 
 // BranchAlive reports whether the row's workstream branch still exists — the
-// predicate status passes to fleet.List so a merged-away worktree self-cleans.
+// predicate status passes to fleet.List so a merged-away worktree reads gone
+// (an action item for /director:complete, not a row that silently vanishes).
 func BranchAlive(r Row) bool {
 	return branchAliveWith(runGit, r)
 }

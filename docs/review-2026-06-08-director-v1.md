@@ -1,5 +1,8 @@
 # Code Review — Director v1 (`director-v1` branch)
 
+> **Historical record (frozen).** This is the v1 pre-merge review as written on 2026-06-08; details it cites (e.g. the liveness vocabulary and TTLs, since realigned to active/idle/dormant/gone) reflect the code at that date. Trust the code and README for current behavior.
+
+
 **Date:** 2026-06-08 · **Scope:** `git diff main..director-v1` (57 files, +7317; 10 packages).
 **Method:** independent second pass — three perspectives: a manual read of every package against the
 spec's scrutiny points, a dedicated `ce:code-reviewer` agent (empirically verified the highest-risk

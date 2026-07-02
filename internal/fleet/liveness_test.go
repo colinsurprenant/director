@@ -76,6 +76,32 @@ func TestLivenessVeryAgedIsDormant(t *testing.T) {
 	}
 }
 
+// TestLivenessTTLBoundariesAreInclusive locks the documented cutover contract
+// (render/status.go): age >= TTL takes the OLDER state, so a heartbeat exactly
+// at a TTL is already past it.
+func TestLivenessTTLBoundariesAreInclusive(t *testing.T) {
+	hub := t.TempDir()
+	now := fixedTime
+
+	registerAt(t, hub, "ws-at-idle", "u1", "@a", now.Add(-idleTTL))
+	registerAt(t, hub, "ws-at-dormant", "u2", "@b", now.Add(-dormantTTL))
+
+	got, _, err := List(hub, now, idleTTL, dormantTTL, alive)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	states := map[string]State{}
+	for _, l := range got {
+		states[l.Workstream] = l.State
+	}
+	if states["ws-at-idle"] != StateIdle {
+		t.Errorf("age == idleTTL → %q, want %q", states["ws-at-idle"], StateIdle)
+	}
+	if states["ws-at-dormant"] != StateDormant {
+		t.Errorf("age == dormantTTL → %q, want %q", states["ws-at-dormant"], StateDormant)
+	}
+}
+
 // TestLivenessMissingBranchIsGone locks the override: a gone branch reads gone
 // even when the heartbeat is fresh.
 func TestLivenessMissingBranchIsGone(t *testing.T) {

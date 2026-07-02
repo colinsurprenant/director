@@ -31,7 +31,8 @@ const (
 //
 // Liveness is derived from heartbeat age plus fleet.BranchAlive: a workstream
 // whose branch is gone (its worktree merged away and was deleted) reads gone
-// even with a fresh heartbeat, so the cockpit self-cleans. Rows registered without
+// even with a fresh heartbeat — surfaced as an action item until a
+// /director:complete close-out archives its row. Rows registered without
 // branch/dir (older rows, or a bare-heartbeat row) fail open — BranchAlive returns
 // true — so they still age out by TTL rather than being falsely marked gone.
 //
