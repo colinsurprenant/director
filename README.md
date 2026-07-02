@@ -6,6 +6,8 @@ You work with Claude Code across several projects, in blocks: days or weeks deep
 
 Director moves you from **message bus** to **reviewer**. It's a standalone Go CLI that gives your sessions a shared, durable, **append-only event log** per repo plus **deterministic projections** over it: sessions `emit` typed events as they work (`decision` · `open-item` · `handoff` · `note`) and `resolve` loops when they truly close; folds project the log into `render` (the machine digest), `brief` (the human re-orientation view), and `status` (the one-line-per-workstream cockpit); and a SessionStart hook **injects** the CHARTER + digest into every new session as ground truth, so re-entering a project after three weeks starts from your parked handoff instead of from git archaeology. The LOG (plus the deliberately-edited living docs) is the only system of record; sessions and every rendered view are disposable caches reconstructible from it. A single static binary, stdlib-first, one vetted build-time dependency (`github.com/oklog/ulid/v2`), no daemon, no database, no cloud; the log is plain NDJSON you could read with `cat`.
 
+![Director demo: a session emits decisions, open items, and a handoff as it works; three weeks later a cold session rehydrates from the log with brief and status, then closes the loop with resolve](docs/assets/director-demo.gif)
+
 > **Status: v1.** Director ships the hook-first coordination core plus adoption Tier 0+1 (see [Status & scope](#status--scope)). Single-machine.
 
 > **New here?** [`docs/getting-started.md`](docs/getting-started.md) is the task-oriented first-run guide (install → adopt → first session → cockpit), plus how the model uses Director and a troubleshooting section. This README is the reference.
