@@ -1,28 +1,66 @@
 # Getting started with Director
 
-Director lets one person — **the director** — run many concurrent Claude Code sessions across many repos
-without being the message bus. Sessions write durable coordination state to a shared append-only LOG; you
-read deterministic projections (`status`, `brief`) and step in only where a human is actually needed.
+You work with Claude Code across several projects in blocks: days or weeks deep in one repo, an afternoon
+in another, back to the first, sometimes a burst of parallel worktree sessions. Director keeps that
+portfolio coordinated without you being the message bus. Sessions write durable coordination state
+(decisions, open loops, handoffs) to a shared append-only LOG; every new session starts from that record
+instead of from git archaeology, so re-entering a project you haven't touched in weeks picks up exactly
+where the last block parked the baton. You read deterministic projections (`status`, `brief`) and step in
+only where a human is actually needed.
 
-This guide walks the first run end to end. It assumes you have Go installed and use Claude Code. For the
-full command/flag reference see [`../README.md`](../README.md).
+This guide walks the first run end to end. It assumes you use Claude Code; Go is only needed for the
+`go install` and build-from-source paths. For the full command/flag reference see
+[`../README.md`](../README.md).
 
 ---
 
 ## 1. Install (one time)
 
-Build the binary, put it on your `PATH`, and run the installer:
+Get the `director` binary onto your `PATH` by any of the three paths below, then run `director install`.
+
+### From a release (recommended)
+
+Each tagged release publishes prebuilt binaries for macOS and Linux (amd64 and arm64) as
+`director_<tag>_<os>_<arch>.tar.gz`, plus a `checksums.txt`, on the
+[releases page](https://github.com/colinsurprenant/director/releases). Download the tarball for your
+platform, verify it, and put the binary on your `PATH`. For example, on an Apple Silicon Mac:
 
 ```bash
-git clone <this repo> && cd director
+curl -LO https://github.com/colinsurprenant/director/releases/download/v1.1.0/director_v1.1.0_darwin_arm64.tar.gz
+curl -LO https://github.com/colinsurprenant/director/releases/download/v1.1.0/checksums.txt
+shasum -a 256 --check --ignore-missing checksums.txt   # on Linux: sha256sum --check --ignore-missing
+tar -xzf director_v1.1.0_darwin_arm64.tar.gz
+sudo install director /usr/local/bin/director          # or copy anywhere on PATH
+```
+
+### With `go install`
+
+```bash
+go install github.com/colinsurprenant/director/cmd/director@latest
+```
+
+### Build from source
+
+```bash
+git clone https://github.com/colinsurprenant/director && cd director
 go build -o bin/director ./cmd/director
 sudo install bin/director /usr/local/bin/director   # or copy anywhere on PATH
+```
+
+Confirm the binary resolves with `director version`. A release binary prints its tag (e.g.
+`director v1.1.0`); a `go install` or source build prints `director dev`, because the version is stamped
+only at release time.
+
+### Wire the hooks
+
+```bash
 director install
 ```
 
 ```text
 installed Director hooks into /Users/you/.claude/settings.json
   shims written to /Users/you/.claude/director/hooks (set DIRECTOR_HOOKS_DIR to override)
+  commands written to /Users/you/.claude/commands/director (/director:complete, /director:handoff; set DIRECTOR_COMMANDS_DIR to override)
 ```
 
 `director install` is **self-contained and idempotent**:
@@ -31,6 +69,8 @@ installed Director hooks into /Users/you/.claude/settings.json
   There is no manual copy step.
 - It merges three hooks into `~/.claude/settings.json` (`SessionStart`, `PostToolUse`, `Stop`), each tagged
   `"_managedBy":"director"` so they coexist with GSD and any hand-rolled hooks. Re-running changes nothing.
+- It materializes the two boundary slash commands: `/director:handoff` (pause a workstream, park the baton)
+  and `/director:complete` (close out a finished, merged workstream). More on both in section 5.
 
 Verify it took:
 
@@ -166,6 +206,17 @@ There are exactly four event kinds: `decision`, `open-item` (the home for "docum
 no `blocker` kind and `done` is fleet-liveness only. Your job is to **review** — read `status`/`brief`,
 answer the escalations, edit CHARTERs to steer — not to relay.
 
+At block boundaries, two slash commands (installed by `director install`) mark workstream lifecycle:
+
+- **`/director:handoff`** when pausing work you will resume. It flushes pending decisions and open items
+  and emits a self-sufficient handoff: a checkpoint written to your future self, so the next block (even
+  weeks later) rehydrates from the parked baton instead of re-deriving state.
+- **`/director:complete`** when a workstream is done and merged. It closes out the workstream's open loops
+  with your confirmation and archives its fleet row. Nothing auto-resolves; close-out is human-confirmed.
+
+A workstream idle between blocks is not stale data. Dormant is a first-class state: the parked handoff is
+what `brief` shows and what the next session starts from.
+
 ---
 
 ## 6. Troubleshooting
@@ -177,7 +228,8 @@ answer the escalations, edit CHARTERs to steer — not to relay.
 | **State is in the wrong place** | All cross-repo state lives under `DIRECTOR_HUB` (default `~/.director`). If you set it for one command, set it for all — sessions and your CLI must agree. |
 | **A hook seems broken** | Hooks are fail-safe by design — a failure never blocks a session, it logs. Read `$DIRECTOR_HUB/health/hook.log` (one line per outcome, `ok=false` marks failures). |
 | **`director _hook ...`** | Internal — invoked by the shims, never run by hand. |
-| **A fleet row looks stale though the session is active** | Liveness is derived from heartbeat age. `PostToolUse` refreshes it on every tool call, so an idle (no tool calls) session can age to `stale` (15m) then `abandoned` (2h). v1 has no live git-branch check — that's a fast-follow. |
+| **A fleet row looks stale though the session is active** | Liveness is derived from heartbeat age. `PostToolUse` refreshes it on every tool call, so an idle (no tool calls) session can age to `stale` (15m) then `abandoned` (2h). |
+| **A row reads `abandoned` despite a fresh heartbeat** | Liveness also checks that the workstream's branch still exists. A branch that no longer exists reads `abandoned` by design (merged away and deleted, or the whole worktree directory is gone: any failed branch check counts as gone), so the cockpit self-cleans; rows without branch/dir info fail open and age out by TTL only. |
 | **`status` shows "N unreadable fleet row(s) skipped"** | One or more row files under `$DIRECTOR_HUB/fleet/` are corrupt; the cockpit skips them rather than failing. Inspect/remove the bad files there. |
 | **`adopt` imported nothing** | A bare `adopt` is **Tier-0 only by design** — it doesn't scan. Use `--scan` (pick) or `--import-all`. The scan covers only *tracked* files (via `git ls-files`) from the repo root; `git add` untracked files first if they should be scanned. |
 | **`install` refused** | Your `~/.claude/settings.json` has a malformed (non-object) `hooks` value. Director won't overwrite data it doesn't understand — fix the file, then re-run. |
