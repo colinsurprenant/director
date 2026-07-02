@@ -131,7 +131,7 @@ director resolve <ulid>
 
 ### Fleet lifecycle
 
-`register` / `heartbeat` / `done` maintain a workstream's liveness row and are normally fired by the hooks, not run by hand. Liveness is **derived from heartbeat age** (TTL/lease) — never self-declared: a session that stops heartbeating ages to `stale` (15m) then `abandoned` (2h). `done` archives the row to `fleet/archive/<date>/` rather than deleting it.
+`register` / `heartbeat` / `done` maintain a workstream's liveness row and are normally fired by the hooks, not run by hand. Liveness is **derived from heartbeat age** (TTL/lease) — never self-declared: a workstream that stops heartbeating ages to `idle` (after 4h) then `dormant` (after 2d), and dormant is a first-class state (a project parked between blocks), not a fault. A workstream whose branch no longer exists reads `gone` regardless of heartbeat: it looks complete and is the `/director:complete` candidate. `done` archives the row to `fleet/archive/<date>/` rather than deleting it.
 
 ## The four event kinds
 

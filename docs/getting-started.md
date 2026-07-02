@@ -166,10 +166,10 @@ director status
 
 ```text
 some-project-main-1a2b3c4d · active · just now · blocked(1): pick the rate-limit backend
-other-repo-main-9f8e7d6c   · stale · 22m ago  · ok
+other-repo-main-9f8e7d6c   · dormant · 3d ago  · ok
 ```
 
-One line per live workstream: handle · liveness (`active`/`stale`/`abandoned`, derived from heartbeat age)
+One line per live workstream: handle · liveness (`active`/`idle`/`dormant`/`gone`, derived from heartbeat age and branch existence)
 · heartbeat recency · the **Needs-you band** (its open `escalate` items — what's waiting on *you*).
 
 ```bash
@@ -214,7 +214,7 @@ At block boundaries, two slash commands (installed by `director install`) mark w
 - **`/director:complete`** when a workstream is done and merged. It closes out the workstream's open loops
   with your confirmation and archives its fleet row. Nothing auto-resolves; close-out is human-confirmed.
 
-A workstream idle between blocks is not stale data. Dormant is a first-class state: the parked handoff is
+A workstream parked between blocks is not a problem to clean up. Dormant is a first-class state: the parked handoff is
 what `brief` shows and what the next session starts from.
 
 ---
@@ -228,8 +228,8 @@ what `brief` shows and what the next session starts from.
 | **State is in the wrong place** | All cross-repo state lives under `DIRECTOR_HUB` (default `~/.director`). If you set it for one command, set it for all — sessions and your CLI must agree. |
 | **A hook seems broken** | Hooks are fail-safe by design — a failure never blocks a session, it logs. Read `$DIRECTOR_HUB/health/hook.log` (one line per outcome, `ok=false` marks failures). |
 | **`director _hook ...`** | Internal — invoked by the shims, never run by hand. |
-| **A fleet row looks stale though the session is active** | Liveness is derived from heartbeat age. `PostToolUse` refreshes it on every tool call, so an idle (no tool calls) session can age to `stale` (15m) then `abandoned` (2h). |
-| **A row reads `abandoned` despite a fresh heartbeat** | Liveness also checks that the workstream's branch still exists. A branch that no longer exists reads `abandoned` by design (merged away and deleted, or the whole worktree directory is gone: any failed branch check counts as gone), so the cockpit self-cleans; rows without branch/dir info fail open and age out by TTL only. |
+| **A row reads `idle` or `dormant` though the session is active** | Liveness is derived from heartbeat age. `PostToolUse` refreshes it on every tool call, so a session making no tool calls can age to `idle` (after 4h) then `dormant` (after 2d). Dormant is the normal between-blocks state, not an error. |
+| **A row reads `gone` despite a fresh heartbeat** | Liveness also checks that the workstream's branch still exists. A branch that no longer exists reads `gone` by design (merged away and deleted, or the whole worktree directory is gone: any failed branch check counts), meaning the workstream looks complete: close it out with `/director:complete`. Rows without branch/dir info fail open and age out by TTL only. |
 | **`status` shows "N unreadable fleet row(s) skipped"** | One or more row files under `$DIRECTOR_HUB/fleet/` are corrupt; the cockpit skips them rather than failing. Inspect/remove the bad files there. |
 | **`adopt` imported nothing** | A bare `adopt` is **Tier-0 only by design** — it doesn't scan. Use `--scan` (pick) or `--import-all`. The scan covers only *tracked* files (via `git ls-files`) from the repo root; `git add` untracked files first if they should be scanned. |
 | **`install` refused** | Your `~/.claude/settings.json` has a malformed (non-object) `hooks` value. Director won't overwrite data it doesn't understand — fix the file, then re-run. |

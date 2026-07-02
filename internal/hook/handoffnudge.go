@@ -15,7 +15,7 @@ import (
 // handoffnudge.go is the deterministic /director:handoff nudge (close-out spec
 // step 3): when the session's context grows past a user-set token threshold, one
 // PostToolUse additionalContext nudge suggests checkpointing via
-// /director:handoff before state is lost to a compaction or an abandoned session.
+// /director:handoff before state is lost to a compaction or a session that never resumes.
 //
 // The context-fill signal CC doesn't provide on the hook payload IS derivable:
 // every assistant record in the transcript carries message.usage, and

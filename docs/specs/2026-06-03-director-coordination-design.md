@@ -1,6 +1,6 @@
 # Director — Multi-Session Coordination System
 
-- **Status:** Draft design (approved in brainstorm; pending spec review)
+- **Status:** Frozen design record — v1 shipped from this spec in June 2026. Kept as-written for provenance; later refinements live in the Director LOG and current docs. Where they disagree (e.g. §5.5's liveness vocabulary, since realigned to `active`/`idle`/`dormant`/`gone`), trust the code and README.
 - **Date:** 2026-06-03
 - **Owner:** Colin
 - **Hub location:** `~/dev/src/director/` (this repo)

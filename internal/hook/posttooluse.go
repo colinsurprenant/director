@@ -50,8 +50,8 @@ func handlePostToolUse(in Input, out io.Writer, hub string) error {
 		} else {
 			// Heartbeat first, regardless of any nudge setting: liveness is derived
 			// from heartbeat age (§5.5), and PostToolUse — firing on every tool call —
-			// is what keeps a long-running ACTIVE session from aging into stale/
-			// abandoned. fleet.Heartbeat is create-or-update; failures log and continue.
+			// is what keeps a long-running ACTIVE session from aging into idle/
+			// dormant. fleet.Heartbeat is create-or-update; failures log and continue.
 			if err := fleet.Heartbeat(hub, ws.ID, sessionUUID(in), time.Now()); err != nil {
 				logFailure(hub, EventPostToolUse, in.SessionID, fmt.Sprintf("heartbeat: %v", err))
 			}

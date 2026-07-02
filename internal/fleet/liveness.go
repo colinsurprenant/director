@@ -13,14 +13,21 @@ import (
 type State string
 
 const (
-	// StateActive: heartbeat younger than the stale TTL and the branch still exists.
+	// StateActive: heartbeat younger than the idle TTL and the branch still exists
+	// — a session is working this block.
 	StateActive State = "active"
-	// StateStale: heartbeat older than the stale TTL (a crashed session stops
-	// heartbeating → its row ages into stale) but younger than the abandoned TTL.
-	StateStale State = "stale"
-	// StateAbandoned: the worktree/branch is gone, or the heartbeat is older than
-	// the abandoned TTL. A gone branch is abandoned regardless of heartbeat age.
-	StateAbandoned State = "abandoned"
+	// StateIdle: heartbeat older than the idle TTL but younger than the dormant
+	// TTL — the workstream went quiet recently; its session may still be open.
+	StateIdle State = "idle"
+	// StateDormant: heartbeat older than the dormant TTL — the workstream is
+	// parked between blocks. Dormant is a first-class normal state, not a fault;
+	// the parked handoff is what the next block rehydrates from.
+	StateDormant State = "dormant"
+	// StateGone: the workstream's branch/worktree no longer exists, regardless of
+	// heartbeat age — it looks complete (merged away) and is the candidate for
+	// /director:complete close-out. Deliberately distinct from Dormant: a gone
+	// branch calls for an action, an old heartbeat does not.
+	StateGone State = "gone"
 )
 
 // Liveness is one workstream's collapsed liveness entry. Multiple session-uuid
@@ -38,11 +45,11 @@ type Liveness struct {
 
 // List reads every live row under <hub>/fleet/ (the archive dir is ignored),
 // collapses rows by workstream — newest heartbeat wins — and derives each
-// workstream's State from heartbeat age (staleAfter, abandonedAfter) and the
+// workstream's State from heartbeat age (idleAfter, dormantAfter) and the
 // branchAlive predicate. branchAlive is the injectable seam over the git
 // branch/worktree check (fleet.BranchAlive in production) so liveness derivation
 // is testable without git; it is passed the newest row so it can read that
-// workstream's branch + dir, and a workstream whose branch is gone is abandoned
+// workstream's branch + dir, and a workstream whose branch is gone reads gone
 // regardless of heartbeat age. Entries are returned sorted by workstream for a
 // deterministic cockpit ordering. A missing fleet dir is not an error — it
 // yields an empty fleet.
@@ -54,7 +61,7 @@ type Liveness struct {
 // more lenient than the event log's scan, which stays fail-loud: a liveness row is
 // ephemeral/derived, while a torn LOG line is durable-record corruption the human
 // must see.
-func List(hub string, now time.Time, staleAfter, abandonedAfter time.Duration, branchAlive func(Row) bool) (entries []Liveness, skipped int, err error) {
+func List(hub string, now time.Time, idleAfter, dormantAfter time.Duration, branchAlive func(Row) bool) (entries []Liveness, skipped int, err error) {
 	dir := filepath.Join(hub, fleetDir)
 	files, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
@@ -110,7 +117,7 @@ func List(hub string, now time.Time, staleAfter, abandonedAfter time.Duration, b
 	for ws, a := range byWorkstream {
 		out = append(out, Liveness{
 			Workstream: ws,
-			State:      derive(a.newestHB, now, staleAfter, abandonedAfter, branchAlive(a.newest)),
+			State:      derive(a.newestHB, now, idleAfter, dormantAfter, branchAlive(a.newest)),
 			UUID:       a.newest.UUID,
 			RepoKey:    a.newest.RepoKey,
 			Handle:     a.newest.Handle,
@@ -122,12 +129,12 @@ func List(hub string, now time.Time, staleAfter, abandonedAfter time.Duration, b
 	return out, skipped, nil
 }
 
-// derive computes a single workstream's State. A gone branch is abandoned no
-// matter how fresh the heartbeat (the session is working a branch that no longer
-// exists). Otherwise state follows heartbeat age against the two TTLs.
-func derive(heartbeat, now time.Time, staleAfter, abandonedAfter time.Duration, branchAlive bool) State {
+// derive computes a single workstream's State. A gone branch reads gone no
+// matter how fresh the heartbeat (the branch no longer exists — the workstream
+// looks complete). Otherwise state follows heartbeat age against the two TTLs.
+func derive(heartbeat, now time.Time, idleAfter, dormantAfter time.Duration, branchAlive bool) State {
 	if !branchAlive {
-		return StateAbandoned
+		return StateGone
 	}
 	age := now.Sub(heartbeat)
 	if age < 0 {
@@ -138,10 +145,10 @@ func derive(heartbeat, now time.Time, staleAfter, abandonedAfter time.Duration, 
 		age = 0
 	}
 	switch {
-	case age >= abandonedAfter:
-		return StateAbandoned
-	case age >= staleAfter:
-		return StateStale
+	case age >= dormantAfter:
+		return StateDormant
+	case age >= idleAfter:
+		return StateIdle
 	default:
 		return StateActive
 	}
