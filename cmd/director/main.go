@@ -40,6 +40,8 @@ func run(args []string) int {
 		return runBrief(rest)
 	case "status":
 		return runStatus(rest)
+	case "open-items":
+		return runOpenItems(rest)
 	case "adopt": // adoption (Phase 7)
 		return runAdopt(rest)
 	case "install": // installer (Phase 5)
@@ -71,6 +73,7 @@ projections:
   render      deterministic machine digest (+ --verify, manifest)
   brief       human re-orientation view (the bigger picture)
   status      one-line-per-workstream fleet cockpit
+  open-items  this workstream's unresolved open-items (ULID + body), for /complete
 
 fleet lifecycle (hook-emitted):
   register    create/refresh this workstream's fleet row

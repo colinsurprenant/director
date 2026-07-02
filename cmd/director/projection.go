@@ -131,6 +131,30 @@ func runBrief(args []string) int {
 	return 0
 }
 
+// runOpenItems lists THIS workstream's OPEN open-items (`<ULID> <body>` per line),
+// the read affordance `/complete` consumes to present, recommend, and resolve them.
+// It is scoped to the current workstream because the repo log is shared across every
+// branch on the repo (§5.3) — run it from the session being closed out.
+func runOpenItems(args []string) int {
+	fs := flag.NewFlagSet("open-items", flag.ContinueOnError)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	hub, ws, err := resolveContext()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "open-items: %v\n", err)
+		return 1
+	}
+	store := event.NewStore(hub, ws.RepoKey)
+	events, err := store.ReadAll()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "open-items: %v\n", err)
+		return 1
+	}
+	fmt.Print(render.OpenItemsFor(render.Fold(events), ws.ID))
+	return 0
+}
+
 // projectTarget resolves the (hub, repoKey) a render targets. An explicit
 // --project skips identity resolution (so render works from anywhere, e.g. a
 // hook outside a repo); otherwise it falls back to the current workstream's
