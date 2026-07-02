@@ -4,11 +4,17 @@
 
 You work with Claude Code across several projects, in blocks: days or weeks deep in one, an afternoon in another, back to the first, sometimes a few parallel worktree sessions in a burst. Native agent memory remembers *facts*. What nothing carries across those boundaries is the **coordination narrative**: what was decided and why, which loops were deliberately deferred, where the baton was parked when the block ended, and what still needs *you*. So the human becomes the message bus, re-explaining last month's decision to this morning's session.
 
-Director moves you from **message bus** to **reviewer**. It's a standalone Go CLI that gives your sessions a shared, durable, **append-only event log** per repo plus **deterministic projections** over it: sessions `emit` typed events as they work (`decision` · `open-item` · `handoff` · `note`) and `resolve` loops when they truly close; folds project the log into `render` (the machine digest), `brief` (the human re-orientation view), and `status` (the one-line-per-workstream cockpit); and a SessionStart hook **injects** the CHARTER + digest into every new session as ground truth, so re-entering a project after three weeks starts from your parked handoff instead of from git archaeology. The LOG (plus the deliberately-edited living docs) is the only system of record; sessions and every rendered view are disposable caches reconstructible from it. A single static binary, stdlib-first, one vetted build-time dependency (`github.com/oklog/ulid/v2`), no daemon, no database, no cloud; the log is plain NDJSON you could read with `cat`.
+Director moves you from **message bus** to **reviewer**. It is a standalone Go CLI built around a shared, durable, **append-only event log** per repo:
+
+- Sessions **`emit`** typed events as they work (`decision` · `open-item` · `handoff` · `note`) and **`resolve`** open loops when they truly close.
+- Deterministic folds project the log into **`render`** (the machine digest), **`brief`** (the human re-orientation view), and **`status`** (the one-line-per-workstream cockpit).
+- A SessionStart hook **injects** the CHARTER + digest into every new session as ground truth, so re-entering a project after three weeks starts from your parked handoff instead of from git archaeology.
+
+The LOG (plus the deliberately-edited living docs) is the only system of record; sessions and every rendered view are disposable caches reconstructible from it. A single static binary, stdlib-first, one vetted build-time dependency (`github.com/oklog/ulid/v2`). No daemon, no database, no cloud: the log is plain NDJSON you could read with `cat`.
 
 ![Director demo: a session emits decisions, open items, and a handoff as it works; three weeks later a cold session rehydrates from the log with brief and status, then closes the loop with resolve](docs/assets/director-demo.gif)
 
-> **Status: v1.** Director ships the hook-first coordination core plus adoption Tier 0+1 (see [Status & scope](#status--scope)). Single-machine.
+> **Status: v1.** Director ships the hook-first coordination core plus repo adoption with an opt-in open-loop scan (see [Status & scope](#status--scope)). Single-machine.
 
 > **New here?** [`docs/getting-started.md`](docs/getting-started.md) is the task-oriented first-run guide (install → adopt → first session → cockpit), plus how the model uses Director and a troubleshooting section. This README is the reference.
 
@@ -53,7 +59,7 @@ The installed hook commands point at the **shims**, not the binary directly, so 
 
 ## Adopt an existing repo
 
-A director's projects already exist, so adoption of existing repos is on the critical path. From inside (or pointing at) a repo:
+A director's projects already exist, so adoption of existing repos is on the critical path. Adoption is **tiered by depth**: Tier 0 registers the repo (identity + CHARTER + fleet row), Tier 1 optionally scans it for open loops to import, and Tier 2 (planned) is an LLM-assisted import of the repo's real backlog. From inside (or pointing at) a repo:
 
 ```bash
 director adopt [<dir>]        # defaults to the current directory
@@ -61,7 +67,7 @@ director adopt [<dir>]        # defaults to the current directory
 
 `adopt` (Tier 0) derives the repo's **stable workstream identity** (handling worktrees, remotes, and forks — see [Identity](#identity)), creates `projects/<repo-key>/` in the hub, scaffolds a ~3-line **CHARTER stub** there, and registers the workstream in the fleet. Filling in the CHARTER (goal, non-goals, and the standing "needs a human" risk line) is the one manual step today; a planned adopt-time pass will instead draft a **CHARTER proposal** from the repo's main docs (README, architecture notes, planning files) for you to confirm, so adoption starts from an informed draft rather than a blank stub. Re-adopting never clobbers an edited CHARTER.
 
-A bare `adopt` stops there (Tier 0). With `--scan` it also runs **Tier 1**: scans the repo's *tracked* files for open loops — `TODO` / `FIXME` / `DEFERRED` / `HACK` / `XXX` and unchecked markdown checklist items (`- [ ]`) — and offers to import the ones you pick as `open-item` events. Tier 1 is opt-in because this keyword scan is noisy on real repos (it surfaces docs/comments/test fixtures, not just real loops); the accurate brownfield import is the **Tier-2 fan-out** (fast-follow). The point of importing is to consolidate loops that would otherwise scatter between memory and per-project docs into their one home in the LOG.
+A bare `adopt` stops there (Tier 0). With `--scan` it also runs **Tier 1**: scans the repo's *tracked* files for open loops — `TODO` / `FIXME` / `DEFERRED` / `HACK` / `XXX` and unchecked markdown checklist items (`- [ ]`) — and offers to import the ones you pick as `open-item` events. Tier 1 is opt-in because this keyword scan is noisy on real repos (it surfaces docs/comments/test fixtures, not just real loops); the accurate brownfield import is the planned **Tier-2 LLM-assisted import**. The point of importing is to consolidate loops that would otherwise scatter between memory and per-project docs into their one home in the LOG.
 
 ```bash
 director adopt                # Tier 0 only — identity + CHARTER + register
@@ -154,9 +160,9 @@ A workstream's id is `<repo>-<branch>-<shortid>`, derived deterministically from
 
 ## Status & scope
 
-**In v1:** the hook-first coordination core (CLI write path, identity, event store, fleet/liveness, `render`/`brief`/`status`, hooks + the `_managedBy` installer, the protocol skill) and **adoption Tier 0+1** (`adopt`: identity + CHARTER + register, plus an opt-in `--scan` open-loop import). Single-machine.
+**In v1:** the hook-first coordination core (CLI write path, identity, event store, fleet/liveness, `render`/`brief`/`status`, hooks + the `_managedBy` installer, the protocol skill) and **adoption Tiers 0–1** (`adopt`: identity + CHARTER + register, plus an opt-in `--scan` open-loop import — see [Adopt an existing repo](#adopt-an-existing-repo)). Single-machine.
 
-**Deferred:** **Tier-2 brownfield fan-out** (parallel code-mapping, doc living/record/rot reconciliation, arc42 synthesis, back-dated ADRs) is the immediate fast-follow. `brief --synthesize` (model-narrated prose) is deferred — v1 ships the deterministic brief. The Phase-3 monitor/reaper, notifications, freshness sweep, and multi-machine sync come later.
+**Deferred:** the **Tier-2 brownfield import** (LLM-assisted: parallel code-mapping, doc reconciliation, a drafted CHARTER proposal, back-dated decision records) is the immediate fast-follow. `brief --synthesize` (model-narrated prose) is deferred — v1 ships the deterministic brief. A background monitor/reaper, notifications, a freshness sweep, and multi-machine sync come later.
 
 **Quality gate** (the bar for "done"):
 
