@@ -347,11 +347,11 @@ func TestSessionStartThrowawayDoesNotRegister(t *testing.T) {
 	}
 }
 
-// TestSessionStartRegistersBranchForAbandonment locks the branch-liveness cleanup:
+// TestSessionStartRegistersBranchForGone locks the branch-liveness cleanup:
 // a real SessionStart stamps the row's branch + dir, so once that branch is gone
 // (its worktree merged away and was deleted) the cockpit derives the workstream
 // gone even though its heartbeat is still fresh.
-func TestSessionStartRegistersBranchForAbandonment(t *testing.T) {
+func TestSessionStartRegistersBranchForGone(t *testing.T) {
 	hub := t.TempDir()
 	repo := gitRepo(t, "widget", "feature")
 	ws := mustResolve(t, repo)

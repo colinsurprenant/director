@@ -12,8 +12,9 @@ import (
 const (
 	// IdleAfter / DormantAfter are the liveness TTLs the cockpit derives state
 	// against (§5.5), tuned to the portfolio workflow: a workstream that stops
-	// heartbeating ages idle at 4h (went quiet; session may still be open) and
-	// dormant at 2d (parked between blocks — a first-class state, not a fault).
+	// heartbeating ages idle past 4h (went quiet; session may still be open) and
+	// dormant past 2d (parked between blocks — a first-class state, not a fault).
+	// Cutovers are age >= TTL: a heartbeat exactly at a TTL takes the older state.
 	// Named here so status and any future caller share one policy.
 	IdleAfter    = 4 * time.Hour
 	DormantAfter = 48 * time.Hour

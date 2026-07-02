@@ -3,8 +3,8 @@
 // each other (§15.4). Each row is its own JSON file under <hub>/fleet/ with a
 // single writer (its own session), so a whole-file rewrite per refresh is safe.
 //
-// A row carries only a heartbeat plus terminal markers — there is no self-set
-// `idle`/`active` (§5.5). Liveness (active/idle/dormant/gone) is DERIVED at read
+// A row carries only a heartbeat plus terminal markers — no liveness state is
+// ever self-declared (§5.5). Liveness (active/idle/dormant/gone) is DERIVED at read
 // time from heartbeat age plus branch existence, never stored (see liveness.go).
 // Terminal `done` archives the row to <hub>/fleet/archive/<date>/ and never
 // deletes it.
