@@ -8,8 +8,9 @@ import (
 )
 
 // branchalive.go is the production branch-existence predicate liveness derives
-// abandonment from (§5.5): a workstream whose branch no longer exists — the merge
-// deleted it, or the worktree is gone — is abandoned regardless of heartbeat age.
+// the gone state from (§5.5): a workstream whose branch no longer exists — the
+// merge deleted it, or the worktree is gone — reads gone regardless of heartbeat
+// age (it looks complete: the /director:complete candidate).
 // List takes this as an injectable seam so derivation stays testable without git.
 
 // gitRunner runs git in dir and returns trimmed stdout, or a typed error on a

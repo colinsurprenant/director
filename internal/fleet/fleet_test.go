@@ -47,7 +47,7 @@ func TestRowFileDistinctForSluggingCollision(t *testing.T) {
 			t.Fatalf("Register(%s): %v", ws, err)
 		}
 	}
-	got, _, err := List(hub, fixedTime, staleTTL, abandonedTTL, alive)
+	got, _, err := List(hub, fixedTime, idleTTL, dormantTTL, alive)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}

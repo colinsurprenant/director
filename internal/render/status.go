@@ -10,11 +10,13 @@ import (
 )
 
 const (
-	// StaleAfter / AbandonedAfter are the liveness TTLs the cockpit derives state
-	// against (§5.5). A session that stops heartbeating ages stale at 15m and
-	// abandoned at 2h. Named here so status and any future caller share one policy.
-	StaleAfter     = 15 * time.Minute
-	AbandonedAfter = 2 * time.Hour
+	// IdleAfter / DormantAfter are the liveness TTLs the cockpit derives state
+	// against (§5.5), tuned to the portfolio workflow: a workstream that stops
+	// heartbeating ages idle at 4h (went quiet; session may still be open) and
+	// dormant at 2d (parked between blocks — a first-class state, not a fault).
+	// Named here so status and any future caller share one policy.
+	IdleAfter    = 4 * time.Hour
+	DormantAfter = 48 * time.Hour
 
 	// needsYouCap bounds the per-workstream Needs-you band so one noisy workstream
 	// can't flood the cockpit; the overflow collapses into a "+N more" summary (§15.6).
@@ -27,16 +29,16 @@ const (
 // LOG to surface the Needs-you band.
 //
 // Liveness is derived from heartbeat age plus fleet.BranchAlive: a workstream
-// whose branch is gone (its worktree merged away and was deleted) reads abandoned
+// whose branch is gone (its worktree merged away and was deleted) reads gone
 // even with a fresh heartbeat, so the cockpit self-cleans. Rows registered without
 // branch/dir (older rows, or a bare-heartbeat row) fail open — BranchAlive returns
-// true — so they still age out by TTL rather than being falsely abandoned.
+// true — so they still age out by TTL rather than being falsely marked gone.
 //
 // now is injected (never time.Now() inside) so the cockpit is testable against a
 // fixed clock; recency is the only time-derived field and it is intentionally
 // excluded from the determinism gate (§13 t4 covers render/brief, not status).
 func Status(hub string, now time.Time) (string, error) {
-	live, skipped, err := fleet.List(hub, now, StaleAfter, AbandonedAfter, fleet.BranchAlive)
+	live, skipped, err := fleet.List(hub, now, IdleAfter, DormantAfter, fleet.BranchAlive)
 	if err != nil {
 		return "", fmt.Errorf("status: list fleet: %w", err)
 	}

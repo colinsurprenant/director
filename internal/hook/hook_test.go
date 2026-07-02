@@ -350,7 +350,7 @@ func TestSessionStartThrowawayDoesNotRegister(t *testing.T) {
 // TestSessionStartRegistersBranchForAbandonment locks the branch-liveness cleanup:
 // a real SessionStart stamps the row's branch + dir, so once that branch is gone
 // (its worktree merged away and was deleted) the cockpit derives the workstream
-// abandoned even though its heartbeat is still fresh.
+// gone even though its heartbeat is still fresh.
 func TestSessionStartRegistersBranchForAbandonment(t *testing.T) {
 	hub := t.TempDir()
 	repo := gitRepo(t, "widget", "feature")
@@ -385,8 +385,8 @@ func TestSessionStartRegistersBranchForAbandonment(t *testing.T) {
 	gitIn(t, repo, "checkout", "-q", "-B", "scratch")
 	gitIn(t, repo, "branch", "-D", "feature")
 
-	if got := stateOf(); got != fleet.StateAbandoned {
-		t.Errorf("branch deleted → %q, want abandoned (the row's branch/dir must drive the check)", got)
+	if got := stateOf(); got != fleet.StateGone {
+		t.Errorf("branch deleted → %q, want gone (the row's branch/dir must drive the check)", got)
 	}
 }
 
@@ -642,7 +642,7 @@ func TestPostToolUseDisabledByDefault(t *testing.T) {
 		t.Fatalf("nudge should be disabled by default, got %q", out.String())
 	}
 	// H3: liveness is heartbeat-derived, so PostToolUse must refresh the row even
-	// with the nudge off — otherwise a long active session ages to stale/abandoned.
+	// with the nudge off — otherwise a long active session ages to idle/dormant.
 	if !fleetRowExists(t, hub, ws.ID) {
 		t.Errorf("expected a heartbeat fleet row for %s even with the nudge disabled", ws.ID)
 	}

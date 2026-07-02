@@ -8,8 +8,8 @@ import (
 )
 
 const (
-	staleTTL     = 5 * time.Minute
-	abandonedTTL = 30 * time.Minute
+	idleTTL    = 5 * time.Minute
+	dormantTTL = 30 * time.Minute
 )
 
 // alive / dead are the two branch-existence predicates the liveness tests inject
@@ -32,7 +32,7 @@ func registerAt(t *testing.T, hub, ws, uuid, handle string, hb time.Time) {
 
 func onlyEntry(t *testing.T, hub string, now time.Time, branchAlive func(Row) bool) Liveness {
 	t.Helper()
-	got, _, err := List(hub, now, staleTTL, abandonedTTL, branchAlive)
+	got, _, err := List(hub, now, idleTTL, dormantTTL, branchAlive)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -53,44 +53,44 @@ func TestLivenessFreshIsActive(t *testing.T) {
 	}
 }
 
-func TestLivenessAgedIsStale(t *testing.T) {
+func TestLivenessAgedIsIdle(t *testing.T) {
 	hub := t.TempDir()
 	now := fixedTime
-	// Older than staleTTL (5m) but younger than abandonedTTL (30m).
+	// Older than idleTTL (5m) but younger than dormantTTL (30m).
 	registerAt(t, hub, "ws-aged", "u1", "@a", now.Add(-10*time.Minute))
 
 	got := onlyEntry(t, hub, now, alive)
-	if got.State != StateStale {
-		t.Errorf("aged heartbeat → %q, want %q", got.State, StateStale)
+	if got.State != StateIdle {
+		t.Errorf("aged heartbeat → %q, want %q", got.State, StateIdle)
 	}
 }
 
-func TestLivenessVeryAgedIsAbandoned(t *testing.T) {
+func TestLivenessVeryAgedIsDormant(t *testing.T) {
 	hub := t.TempDir()
 	now := fixedTime
 	registerAt(t, hub, "ws-old", "u1", "@a", now.Add(-2*time.Hour))
 
 	got := onlyEntry(t, hub, now, alive)
-	if got.State != StateAbandoned {
-		t.Errorf("heartbeat past abandoned TTL → %q, want %q", got.State, StateAbandoned)
+	if got.State != StateDormant {
+		t.Errorf("heartbeat past dormant TTL → %q, want %q", got.State, StateDormant)
 	}
 }
 
-// TestLivenessMissingBranchIsAbandoned locks the override: a gone branch is
-// abandoned even when the heartbeat is fresh.
-func TestLivenessMissingBranchIsAbandoned(t *testing.T) {
+// TestLivenessMissingBranchIsGone locks the override: a gone branch reads gone
+// even when the heartbeat is fresh.
+func TestLivenessMissingBranchIsGone(t *testing.T) {
 	hub := t.TempDir()
 	now := fixedTime
 	registerAt(t, hub, "ws-gone", "u1", "@a", now) // freshest possible heartbeat
 
 	got := onlyEntry(t, hub, now, dead)
-	if got.State != StateAbandoned {
-		t.Errorf("missing branch (fresh heartbeat) → %q, want %q", got.State, StateAbandoned)
+	if got.State != StateGone {
+		t.Errorf("missing branch (fresh heartbeat) → %q, want %q", got.State, StateGone)
 	}
 }
 
 // TestLivenessFutureHeartbeatIsActive locks the clock-skew contract: a heartbeat
-// dated in the future (skew or a mis-set clock) must read active, never abandoned.
+// dated in the future (skew or a mis-set clock) must read active, never dormant.
 // derive() clamps the resulting negative age to 0, matching render.recency().
 func TestLivenessFutureHeartbeatIsActive(t *testing.T) {
 	hub := t.TempDir()
@@ -110,7 +110,7 @@ func TestLivenessCollapsesByWorkstream(t *testing.T) {
 	hub := t.TempDir()
 	now := fixedTime
 	ws := "ws-shared"
-	older := now.Add(-20 * time.Minute) // would be stale on its own
+	older := now.Add(-20 * time.Minute) // would be idle on its own
 	newer := now.Add(-1 * time.Minute)  // active
 	registerAt(t, hub, ws, "u-old", "@old", older)
 	registerAt(t, hub, ws, "u-new", "@new", newer)
@@ -126,7 +126,7 @@ func TestLivenessCollapsesByWorkstream(t *testing.T) {
 		t.Errorf("collapsed identity = %q/%q, want newest u-new/@new", got.UUID, got.Handle)
 	}
 	// Newest heartbeat is fresh → the whole workstream reads active despite the
-	// older stale row.
+	// older idle row.
 	if got.State != StateActive {
 		t.Errorf("collapsed state = %q, want %q (newest wins)", got.State, StateActive)
 	}
@@ -139,7 +139,7 @@ func TestLivenessSortedByWorkstream(t *testing.T) {
 	registerAt(t, hub, "alpha", "u2", "@a", now)
 	registerAt(t, hub, "mike", "u3", "@m", now)
 
-	got, _, err := List(hub, now, staleTTL, abandonedTTL, alive)
+	got, _, err := List(hub, now, idleTTL, dormantTTL, alive)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestLivenessIgnoresArchive(t *testing.T) {
 		t.Fatalf("Done: %v", err)
 	}
 
-	got, _, err := List(hub, now, staleTTL, abandonedTTL, alive)
+	got, _, err := List(hub, now, idleTTL, dormantTTL, alive)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestLivenessIgnoresArchive(t *testing.T) {
 
 func TestLivenessEmptyFleet(t *testing.T) {
 	hub := t.TempDir()
-	got, _, err := List(hub, fixedTime, staleTTL, abandonedTTL, alive)
+	got, _, err := List(hub, fixedTime, idleTTL, dormantTTL, alive)
 	if err != nil {
 		t.Fatalf("List on empty hub: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestLivenessSkipsCorruptRow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, skipped, err := List(hub, now, staleTTL, abandonedTTL, alive)
+	got, skipped, err := List(hub, now, idleTTL, dormantTTL, alive)
 	if err != nil {
 		t.Fatalf("List should not error on corrupt rows: %v", err)
 	}
