@@ -10,6 +10,10 @@ import (
 	"os"
 )
 
+// version is stamped at release time via -ldflags "-X main.version=vX.Y.Z";
+// a source build reports "dev".
+var version = "dev"
+
 func main() {
 	os.Exit(run(os.Args[1:]))
 }
@@ -50,6 +54,9 @@ func run(args []string) int {
 		return runUninstall(rest)
 	case "_hook":
 		return runHook(rest)
+	case "version", "--version":
+		fmt.Println("director " + version)
+		return 0
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 		return 0
@@ -84,5 +91,8 @@ adoption & install:
   adopt       bring an existing repo into the fleet (CHARTER + open-loop import)
   install     idempotent merge of Director hooks into settings.json
   uninstall   remove only Director-managed hook entries
+
+misc:
+  version     print the director version
 `)
 }

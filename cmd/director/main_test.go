@@ -13,6 +13,8 @@ func TestDispatchExitCodes(t *testing.T) {
 	}{
 		{"no args shows usage, non-zero", nil, 2},
 		{"help is zero", []string{"help"}, 0},
+		{"version is zero", []string{"version"}, 0},
+		{"--version is zero", []string{"--version"}, 0},
 		{"unknown verb is non-zero", []string{"bogus"}, 2},
 		{"hook without event is fail-safe", []string{"_hook"}, 0},
 		{"hook with event is fail-safe", []string{"_hook", "sessionstart"}, 0},

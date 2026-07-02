@@ -1,0 +1,50 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: "§13 gate"
+        run: |
+          go build ./...
+          go vet ./...
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then echo "gofmt needed on: $out" >&2; exit 1; fi
+          go test ./... -race
+
+      - name: Build binaries
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p dist
+          for platform in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64; do
+            GOOS="${platform%/*}" GOARCH="${platform#*/}" \
+              go build -trimpath \
+                -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
+                -o "dist/director" ./cmd/director
+            tar -C dist -czf "dist/director_${GITHUB_REF_NAME}_${platform%/*}_${platform#*/}.tar.gz" director
+            rm dist/director
+          done
+          (cd dist && sha256sum *.tar.gz > checksums.txt)
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/checksums.txt \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes
