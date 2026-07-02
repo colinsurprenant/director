@@ -692,6 +692,46 @@ func TestPostToolUseFiresOnInterval(t *testing.T) {
 	}
 }
 
+// TestBumpToolCounterAtomicUnderConcurrency locks the flush-nudge debounce
+// against concurrent PostToolUse hook processes (parallel tool calls): N racing
+// bumps must yield N distinct counts covering exactly 1..N, with no
+// read-parse-write pair to lose increments and no count observed twice, so no
+// cadence point can double-fire the nudge.
+func TestBumpToolCounterAtomicUnderConcurrency(t *testing.T) {
+	hub := t.TempDir()
+
+	const racers = 16
+	counts := make(chan int, racers)
+	var wg sync.WaitGroup
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			n, err := bumpToolCounter(hub, "s1")
+			if err != nil {
+				t.Errorf("bumpToolCounter: %v", err)
+				return
+			}
+			counts <- n
+		}()
+	}
+	wg.Wait()
+	close(counts)
+
+	seen := make(map[int]bool, racers)
+	for n := range counts {
+		if seen[n] {
+			t.Errorf("count %d observed twice: a cadence point there would double-fire", n)
+		}
+		seen[n] = true
+	}
+	for n := 1; n <= racers; n++ {
+		if !seen[n] {
+			t.Errorf("count %d never observed: a lost increment", n)
+		}
+	}
+}
+
 // --- PostToolUse handoff-threshold nudge -------------------------------------
 
 // adoptRepo writes a CHARTER.md for the repo's project so the hub reads as
