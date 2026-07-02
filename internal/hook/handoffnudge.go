@@ -88,15 +88,18 @@ func runHandoffNudge(in Input, hub string, ws identity.Workstream) (text string,
 
 	mark := handoffNudgeMarkerPath(hub, in.SessionID)
 	if usage >= threshold {
-		if _, err := os.Stat(mark); err == nil {
-			return "", usage // already nudged this crossing
-		}
 		if err := os.MkdirAll(filepath.Dir(mark), 0o755); err != nil {
 			return "", usage // can't record the one-shot → stay silent, never nag
 		}
-		if err := os.WriteFile(mark, []byte("1\n"), 0o644); err != nil {
+		// O_EXCL create is the atomic once-marker: parallel tool calls fire
+		// concurrent PostToolUse hook processes that can race the crossing, and
+		// exactly one may win — a stat-then-write pair would let several nudge.
+		// Any error (marker already exists, or it can't be recorded) → silent.
+		f, err := os.OpenFile(mark, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+		if err != nil {
 			return "", usage
 		}
+		f.Close()
 		return fmt.Sprintf(
 			"Director: context is at ~%dk tokens, past the %dk handoff threshold. "+
 				"Suggest /director:handoff to the human now, and emit any unrecorded decisions/open-items via `director emit` before this context is lost.",

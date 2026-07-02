@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -832,6 +834,38 @@ func TestTailContextTokensTailBounded(t *testing.T) {
 	}
 	if got := tailContextTokens(path); got != 43000 {
 		t.Fatalf("tailContextTokens = %d, want 43000 (last assistant usage in the tail)", got)
+	}
+}
+
+// TestHandoffNudgeMarkerAtomicUnderConcurrency locks the once-per-crossing
+// guarantee against concurrent PostToolUse hook processes (parallel tool calls):
+// N racing crossings must produce exactly ONE nudge — the O_EXCL marker create,
+// not a stat-then-write pair, decides the winner.
+func TestHandoffNudgeMarkerAtomicUnderConcurrency(t *testing.T) {
+	t.Setenv(handoffNudgeEnv, "100000")
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+	adoptRepo(t, hub, ws.RepoKey)
+	transcript := filepath.Join(t.TempDir(), "session.jsonl")
+	writeUsageTranscript(t, transcript, 120_000)
+	in := Input{SessionID: "s1", CWD: repo, TranscriptPath: transcript}
+
+	const racers = 16
+	var fired atomic.Int32
+	var wg sync.WaitGroup
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if text, _ := runHandoffNudge(in, hub, ws); text != "" {
+				fired.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := fired.Load(); got != 1 {
+		t.Fatalf("nudge fired %d times across %d concurrent crossings, want exactly 1", got, racers)
 	}
 }
 
