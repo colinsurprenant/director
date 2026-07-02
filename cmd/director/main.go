@@ -10,6 +10,23 @@ import (
 	"os"
 )
 
+// version is stamped at release time via -ldflags "-X main.version=vX.Y.Z";
+// a source build reports "dev".
+var version = "dev"
+
+// runVersion prints the stamped version. Extra arguments are a usage error,
+// consistent with the rest of the dispatch.
+func runVersion(rest []string) int {
+	if len(rest) != 0 {
+		fmt.Fprintln(os.Stderr, "director: version takes no arguments")
+		return 2
+	}
+	fmt.Println(versionLine())
+	return 0
+}
+
+func versionLine() string { return "director " + version }
+
 func main() {
 	os.Exit(run(os.Args[1:]))
 }
@@ -50,6 +67,8 @@ func run(args []string) int {
 		return runUninstall(rest)
 	case "_hook":
 		return runHook(rest)
+	case "version", "--version":
+		return runVersion(rest)
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 		return 0
@@ -84,5 +103,8 @@ adoption & install:
   adopt       bring an existing repo into the fleet (CHARTER + open-loop import)
   install     idempotent merge of Director hooks into settings.json
   uninstall   remove only Director-managed hook entries
+
+misc:
+  version     print the director version
 `)
 }

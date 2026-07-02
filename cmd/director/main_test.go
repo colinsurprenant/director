@@ -13,6 +13,9 @@ func TestDispatchExitCodes(t *testing.T) {
 	}{
 		{"no args shows usage, non-zero", nil, 2},
 		{"help is zero", []string{"help"}, 0},
+		{"version is zero", []string{"version"}, 0},
+		{"--version is zero", []string{"--version"}, 0},
+		{"version rejects extra args", []string{"version", "foo"}, 2},
 		{"unknown verb is non-zero", []string{"bogus"}, 2},
 		{"hook without event is fail-safe", []string{"_hook"}, 0},
 		{"hook with event is fail-safe", []string{"_hook", "sessionstart"}, 0},
@@ -28,5 +31,19 @@ func TestDispatchExitCodes(t *testing.T) {
 				t.Fatalf("run(%v) = %d, want %d", tt.args, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestVersionLine locks the version output contract the release workflow's
+// -X main.version stamping relies on.
+func TestVersionLine(t *testing.T) {
+	if got, want := versionLine(), "director dev"; got != want {
+		t.Fatalf("versionLine() = %q, want %q (source build)", got, want)
+	}
+	orig := version
+	defer func() { version = orig }()
+	version = "v1.2.3"
+	if got, want := versionLine(), "director v1.2.3"; got != want {
+		t.Fatalf("versionLine() = %q, want %q (stamped build)", got, want)
 	}
 }
