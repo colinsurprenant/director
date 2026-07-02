@@ -702,11 +702,13 @@ func TestBumpToolCounterAtomicUnderConcurrency(t *testing.T) {
 
 	const racers = 16
 	counts := make(chan int, racers)
+	start := make(chan struct{}) // start gate so the bumps actually overlap
 	var wg sync.WaitGroup
 	for i := 0; i < racers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			<-start
 			n, err := bumpToolCounter(hub, "s1")
 			if err != nil {
 				t.Errorf("bumpToolCounter: %v", err)
@@ -715,6 +717,7 @@ func TestBumpToolCounterAtomicUnderConcurrency(t *testing.T) {
 			counts <- n
 		}()
 	}
+	close(start)
 	wg.Wait()
 	close(counts)
 
