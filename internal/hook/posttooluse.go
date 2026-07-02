@@ -17,14 +17,14 @@ import (
 // The intent is to remind the model to emit accumulated decisions/open-items/
 // handoffs BEFORE the context fills enough to force a lossy compaction.
 //
-// v1 limitation (documented, per §4.4 / §5.4): a PostToolUse hook receives no
-// true context-fill signal from CC — there is no token-budget field on the
-// payload. So this nudge CANNOT actually measure "healthy fill". It is therefore
-// gated two ways and ships OFF by default:
+// The hook PAYLOAD carries no context-fill signal, and this nudge predates the
+// discovery that one is derivable from the transcript's usage fields — that
+// signal now powers the handoff-threshold nudge (handoffnudge.go), which runs
+// first and preempts this one. This blind cadence nudge remains as the simpler
+// opt-in, gated two ways and OFF by default:
 //
 //  1. Opt-in: it is a no-op unless DIRECTOR_FLUSH_NUDGE_EVERY is set to a
-//     positive integer N. The durable signal (deriving fill/health from
-//     git/PostToolUse activity) is a TODO; this is the conservative placeholder.
+//     positive integer N.
 //  2. Debounced: even when enabled it fires at most once per N tool calls per
 //     session (a tool-call counter persisted under health/), so it can't nag on
 //     every single tool use and accelerate the compaction it's trying to prevent.
@@ -40,13 +40,34 @@ const flushNudgeText = "Director: context is accumulating. If you've made a deci
 // debounced flush nudge. It is best-effort throughout: any bookkeeping failure
 // logs and degrades, never an error to CC.
 func handlePostToolUse(in Input, out io.Writer, hub string) error {
-	// Heartbeat FIRST, regardless of the nudge setting: liveness is derived from
-	// heartbeat age (§5.5), and PostToolUse — firing on every tool call — is the
-	// signal that keeps a long-running ACTIVE session from aging into stale/
-	// abandoned while it is plainly still working. Without this, SessionStart is
-	// the only heartbeat source and any session older than the stale TTL misreads
-	// in the cockpit. Best-effort: failures log and continue.
-	refreshHeartbeat(in, hub)
+	// Identity is resolved ONCE for the whole hot path — it shells out to git,
+	// and both the heartbeat and the handoff nudge need the same workstream.
+	// Throwaway/subagent sessions (no session_id) skip both: they must not
+	// materialize a liveness row (H3) and their transcripts aren't this session's.
+	if !isThrowawaySession(in) {
+		if ws, err := identity.Resolve(in.CWD); err != nil {
+			logFailure(hub, EventPostToolUse, in.SessionID, fmt.Sprintf("resolve workstream from %q: %v", in.CWD, err))
+		} else {
+			// Heartbeat first, regardless of any nudge setting: liveness is derived
+			// from heartbeat age (§5.5), and PostToolUse — firing on every tool call —
+			// is what keeps a long-running ACTIVE session from aging into stale/
+			// abandoned. fleet.Heartbeat is create-or-update; failures log and continue.
+			if err := fleet.Heartbeat(hub, ws.ID, sessionUUID(in), time.Now()); err != nil {
+				logFailure(hub, EventPostToolUse, in.SessionID, fmt.Sprintf("heartbeat: %v", err))
+			}
+
+			// Handoff-threshold nudge (handoffnudge.go): it has the real context-fill
+			// signal, so when it fires this call carries ITS nudge alone — never
+			// stacked with the blind flush nudge below on the same tool call.
+			if text, usage := runHandoffNudge(in, hub, ws); text != "" {
+				if err := writePostToolUseContext(out, text); err != nil {
+					return fmt.Errorf("write handoff nudge: %w", err)
+				}
+				logSuccess(hub, EventPostToolUse, in.SessionID, fmt.Sprintf("handoff nudge fired at ~%d context tokens", usage))
+				return nil
+			}
+		}
+	}
 
 	every, on := nudgeInterval()
 	if !on {
@@ -73,27 +94,6 @@ func handlePostToolUse(in Input, out io.Writer, hub string) error {
 	}
 	logSuccess(hub, EventPostToolUse, in.SessionID, fmt.Sprintf("flush nudge fired at tool #%d", count))
 	return nil
-}
-
-// refreshHeartbeat touches the workstream's fleet row so an active session keeps
-// reading live in the cockpit. It is gated by the same throwaway filter
-// SessionStart uses — a subagent/throwaway session (no session_id) must not
-// materialize a liveness row — and is best-effort: an identity or fleet failure
-// logs and returns rather than interfering with the tool flow. fleet.Heartbeat is
-// create-or-update, so it preserves an existing row's RepoKey/Handle and only
-// advances the heartbeat.
-func refreshHeartbeat(in Input, hub string) {
-	if isThrowawaySession(in) {
-		return
-	}
-	ws, err := identity.Resolve(in.CWD)
-	if err != nil {
-		logFailure(hub, EventPostToolUse, in.SessionID, fmt.Sprintf("resolve workstream from %q: %v", in.CWD, err))
-		return
-	}
-	if err := fleet.Heartbeat(hub, ws.ID, sessionUUID(in), time.Now()); err != nil {
-		logFailure(hub, EventPostToolUse, in.SessionID, fmt.Sprintf("heartbeat: %v", err))
-	}
 }
 
 // nudgeInterval reads the opt-in cadence from DIRECTOR_FLUSH_NUDGE_EVERY. A

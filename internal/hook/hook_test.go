@@ -5,7 +5,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -272,6 +275,12 @@ func TestSessionStartInjectsGroundTruth(t *testing.T) {
 	}
 	if !strings.Contains(got, "director resolve") {
 		t.Errorf("injected protocol should tell the model to resolve finished open-items:\n%s", got)
+	}
+	if !strings.Contains(got, "/director:complete") || !strings.Contains(got, "/director:handoff") {
+		t.Errorf("injected protocol should name BOTH close-out commands at the workstream-boundary triggers:\n%s", got)
+	}
+	if !strings.Contains(got, "Never hand off a finished workstream") {
+		t.Errorf("injected protocol should warn that done+merged takes /director:complete, not a handoff:\n%s", got)
 	}
 	if !strings.Contains(got, `"hookEventName":"SessionStart"`) {
 		t.Errorf("injection missing SessionStart control envelope:\n%s", got)
@@ -680,6 +689,203 @@ func TestPostToolUseFiresOnInterval(t *testing.T) {
 	}
 	if fired != 2 { // tool calls 3 and 6
 		t.Fatalf("nudge fired %d times over 6 calls at every=3, want 2", fired)
+	}
+}
+
+// --- PostToolUse handoff-threshold nudge -------------------------------------
+
+// adoptRepo writes a CHARTER.md for the repo's project so the hub reads as
+// adopted — the politeness gate both the emit protocol and the handoff nudge key on.
+func adoptRepo(t *testing.T, hub, repoKey string) {
+	t.Helper()
+	dir := filepath.Join(hub, "projects", repoKey)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "CHARTER.md"), []byte("Goal: ship\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writeUsageTranscript writes a minimal CC transcript whose LAST assistant
+// record carries the given usage sum (split across the three input fields to
+// prove they are summed), preceded by a user line and a stale assistant line
+// that must NOT win.
+func writeUsageTranscript(t *testing.T, path string, lastSum int) {
+	t.Helper()
+	lines := `{"type":"user","message":{"content":"hi"}}
+{"type":"assistant","message":{"usage":{"input_tokens":1,"cache_creation_input_tokens":1,"cache_read_input_tokens":1}}}
+{"type":"assistant","message":{"usage":{"input_tokens":2,"cache_creation_input_tokens":3,"cache_read_input_tokens":` + strconv.Itoa(lastSum-5) + `}}}
+`
+	if err := os.WriteFile(path, []byte(lines), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestHandoffNudgeLifecycle drives the full anti-nag state machine through
+// Dispatch: fires once on crossing, stays silent while the marker holds, re-arms
+// only when usage falls below half the threshold, then fires once again.
+func TestHandoffNudgeLifecycle(t *testing.T) {
+	t.Setenv(handoffNudgeEnv, "100000")
+	t.Setenv("DIRECTOR_FLUSH_NUDGE_EVERY", "")
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	adoptRepo(t, hub, mustResolve(t, repo).RepoKey)
+	transcript := filepath.Join(t.TempDir(), "session.jsonl")
+	in := `{"session_id":"s1","cwd":` + jsonString(repo) + `,"transcript_path":` + jsonString(transcript) + `,"hook_event_name":"PostToolUse","tool_name":"Bash"}`
+
+	call := func() string {
+		t.Helper()
+		var out bytes.Buffer
+		if code := Dispatch(EventPostToolUse, strings.NewReader(in), &out, hub); code != 0 {
+			t.Fatalf("exit code = %d, want 0", code)
+		}
+		return out.String()
+	}
+
+	writeUsageTranscript(t, transcript, 120_000)
+	if got := call(); !strings.Contains(got, "/director:handoff") {
+		t.Fatalf("crossing the threshold should fire the handoff nudge, got %q", got)
+	}
+	if got := call(); got != "" {
+		t.Fatalf("second call over threshold must stay silent (marker), got %q", got)
+	}
+
+	// Still above HALF the threshold: emitting a handoff doesn't shrink context,
+	// so this must NOT re-arm — the reviewer's nag-loop edge.
+	writeUsageTranscript(t, transcript, 60_000)
+	if got := call(); got != "" {
+		t.Fatalf("usage above threshold/2 must not re-arm, got %q", got)
+	}
+	writeUsageTranscript(t, transcript, 120_000)
+	if got := call(); got != "" {
+		t.Fatalf("re-crossing without a re-arm must stay silent, got %q", got)
+	}
+
+	// Collapse below half (a compaction/clear): re-arms, next crossing fires once.
+	writeUsageTranscript(t, transcript, 30_000)
+	if got := call(); got != "" {
+		t.Fatalf("below threshold/2 re-arms silently, got %q", got)
+	}
+	writeUsageTranscript(t, transcript, 110_000)
+	if got := call(); !strings.Contains(got, "/director:handoff") {
+		t.Fatalf("post-re-arm crossing should fire one more nudge, got %q", got)
+	}
+	if got := call(); got != "" {
+		t.Fatalf("and only once, got %q", got)
+	}
+}
+
+// TestHandoffNudgeOffByDefault verifies the nudge is a no-op when the threshold
+// env var is unset, even with usage plainly over any sane ceiling.
+func TestHandoffNudgeOffByDefault(t *testing.T) {
+	t.Setenv(handoffNudgeEnv, "")
+	t.Setenv("DIRECTOR_FLUSH_NUDGE_EVERY", "")
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	adoptRepo(t, hub, mustResolve(t, repo).RepoKey)
+	transcript := filepath.Join(t.TempDir(), "session.jsonl")
+	writeUsageTranscript(t, transcript, 900_000)
+	in := `{"session_id":"s1","cwd":` + jsonString(repo) + `,"transcript_path":` + jsonString(transcript) + `,"hook_event_name":"PostToolUse","tool_name":"Bash"}`
+	var out bytes.Buffer
+	if code := Dispatch(EventPostToolUse, strings.NewReader(in), &out, hub); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("handoff nudge must be off by default, got %q", out.String())
+	}
+}
+
+// TestHandoffNudgeUnadoptedRepoSilent verifies the politeness gate: no CHARTER →
+// no nudge, so user-level hooks can't push /director:handoff in unrelated repos.
+func TestHandoffNudgeUnadoptedRepoSilent(t *testing.T) {
+	t.Setenv(handoffNudgeEnv, "100000")
+	t.Setenv("DIRECTOR_FLUSH_NUDGE_EVERY", "")
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main") // no CHARTER → un-adopted
+	transcript := filepath.Join(t.TempDir(), "session.jsonl")
+	writeUsageTranscript(t, transcript, 120_000)
+	in := `{"session_id":"s1","cwd":` + jsonString(repo) + `,"transcript_path":` + jsonString(transcript) + `,"hook_event_name":"PostToolUse","tool_name":"Bash"}`
+	var out bytes.Buffer
+	if code := Dispatch(EventPostToolUse, strings.NewReader(in), &out, hub); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("un-adopted repo must not get the handoff nudge, got %q", out.String())
+	}
+}
+
+// TestTailContextTokensTailBounded verifies the measurement survives a tail-read
+// that starts mid-file: the partial first line is dropped and the LAST assistant
+// usage in the window wins.
+func TestTailContextTokensTailBounded(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "big.jsonl")
+	var b strings.Builder
+	b.WriteString(`{"type":"assistant","message":{"usage":{"input_tokens":999999,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}` + "\n")
+	// Pad past the tail window so the seek lands mid-file and the stale record above
+	// falls outside it.
+	pad := `{"type":"user","message":{"content":"` + strings.Repeat("x", 4096) + `"}}` + "\n"
+	for b.Len() < handoffNudgeTailBytes+len(pad) {
+		b.WriteString(pad)
+	}
+	b.WriteString(`{"type":"assistant","message":{"usage":{"input_tokens":40000,"cache_creation_input_tokens":2000,"cache_read_input_tokens":1000}}}` + "\n")
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := tailContextTokens(path); got != 43000 {
+		t.Fatalf("tailContextTokens = %d, want 43000 (last assistant usage in the tail)", got)
+	}
+}
+
+// TestHandoffNudgeMarkerAtomicUnderConcurrency locks the once-per-crossing
+// guarantee against concurrent PostToolUse hook processes (parallel tool calls):
+// N racing crossings must produce exactly ONE nudge — the O_EXCL marker create,
+// not a stat-then-write pair, decides the winner.
+func TestHandoffNudgeMarkerAtomicUnderConcurrency(t *testing.T) {
+	t.Setenv(handoffNudgeEnv, "100000")
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+	adoptRepo(t, hub, ws.RepoKey)
+	transcript := filepath.Join(t.TempDir(), "session.jsonl")
+	writeUsageTranscript(t, transcript, 120_000)
+	in := Input{SessionID: "s1", CWD: repo, TranscriptPath: transcript}
+
+	const racers = 16
+	var fired atomic.Int32
+	var wg sync.WaitGroup
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if text, _ := runHandoffNudge(in, hub, ws); text != "" {
+				fired.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := fired.Load(); got != 1 {
+		t.Fatalf("nudge fired %d times across %d concurrent crossings, want exactly 1", got, racers)
+	}
+}
+
+// TestTailContextTokensWindowOnRecordBoundary covers the seek landing EXACTLY on
+// a newline boundary: the first line in the window is then a complete record and
+// must NOT be dropped — here it is the only assistant usage record in the window.
+func TestTailContextTokensWindowOnRecordBoundary(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "boundary.jsonl")
+	head := `{"type":"user","message":{"content":"before the window"}}` + "\n"
+	a := `{"type":"assistant","message":{"usage":{"input_tokens":40000,"cache_creation_input_tokens":2000,"cache_read_input_tokens":1000}}}` + "\n"
+	// One user pad record sized so head ends exactly at (size - tail window):
+	// the window then starts at the first byte of the assistant record.
+	padPrefix := `{"type":"user","message":{"content":"`
+	padSuffix := `"}}` + "\n"
+	pad := padPrefix + strings.Repeat("x", handoffNudgeTailBytes-len(a)-len(padPrefix)-len(padSuffix)) + padSuffix
+	if err := os.WriteFile(path, []byte(head+a+pad), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := tailContextTokens(path); got != 43000 {
+		t.Fatalf("tailContextTokens = %d, want 43000 (boundary-aligned first record must survive)", got)
 	}
 }
 

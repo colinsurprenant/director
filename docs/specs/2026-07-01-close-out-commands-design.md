@@ -53,10 +53,30 @@ the worktree session, and `is-ancestor` derivation is defeated by squash *and* r
 
 Two surfaces, each for the triggers it detects reliably:
 
-- **Hook-side (deterministic):** branch-gone → nudge `/complete` (Stop/`status`);
-  the **PreCompact** boundary → nudge/checkpoint `/handoff`. PreCompact is the honest
-  version of "% context usage" — the model can't see its own %, and no hook exposes an
-  arbitrary threshold, but PreCompact fires exactly when unsaved state would be lost.
+- **Hook-side (deterministic):** context-fill → nudge `/handoff`. A real fill signal
+  exists (verified 2026-07-02, superseding this spec's earlier PreCompact rationale):
+  every assistant record in the transcript carries `message.usage`, and the sum of
+  `input_tokens + cache_creation_input_tokens + cache_read_input_tokens` on the last
+  assistant record is the current context size. PostToolUse tail-reads the transcript
+  (bounded 1 MiB seek, fail-open) and, once per crossing of
+  `DIRECTOR_HANDOFF_NUDGE_TOKENS` (absolute tokens; unset = off), injects one
+  `additionalContext` nudge. The once-marker re-arms only when usage falls below half
+  the threshold, which only a compaction or clear can cause (emitting a handoff does
+  not shrink context, so no nag loop); a post-compaction re-approach deliberately gets
+  one more nudge. The threshold is absolute by design: CC exposes the window size only
+  to the statusline, never to hooks or transcripts, so percent-of-window is not
+  derivable hook-side. **PreCompact was verified and REJECTED:** it has no
+  model-visible output channel (block-only; the reason goes to the user), so it cannot
+  nudge, and blocking an auto-compaction gates the session at the worst moment.
+  Autocompact-ON users get the same protection by setting the threshold below their
+  compaction point; post-compaction re-grounding is already shipped (SessionStart
+  `source=compact`).
+  Branch-gone → `/complete` remains the second nudge, with an open design question: a
+  session's OWN local branch ref survives while its worktree lives (git refuses to
+  delete a checked-out branch), so branch-gone identifies dead SIBLING workstreams,
+  not the current one. The nudge must therefore surface in a LATER session
+  (SessionStart/status), and `/complete` needs cross-workstream targeting
+  (e.g. `open-items --workstream <id>`) before the nudge has something to point at.
 - **Model-side (judgment, the SessionStart-injected protocol):** suggest `/complete`
   when the task is logically done/merged (before any branch deletion); `/handoff` at
   natural boundaries (already in the protocol — extend it to distinguish the two).
@@ -89,6 +109,9 @@ to the current workstream) — no fold/schema change. `/complete` consumes it di
 1. **The commands** — `internal/install/commands/{complete,handoff}.md` + the
    `director open-items` read affordance + `install` places them (SHIPPED).
 2. **Injected-protocol update** — distinguish complete-vs-handoff; suggest at the
-   judgment triggers.
-3. **Deterministic nudges** — branch-gone → `/complete` (Stop/`status`); PreCompact →
-   `/handoff` checkpoint (confirm CC exposes PreCompact).
+   judgment triggers (SHIPPED).
+3. **Deterministic nudges** — context-fill threshold → `/handoff` via PostToolUse
+   (SHIPPED; see the hook-side bullet above — PreCompact rejected after verification).
+   Branch-gone → `/complete` is pending its targeting design: surface it at
+   SessionStart/status in a later session and give `/complete` cross-workstream
+   targeting first.
