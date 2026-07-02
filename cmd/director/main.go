@@ -14,6 +14,19 @@ import (
 // a source build reports "dev".
 var version = "dev"
 
+// runVersion prints the stamped version. Extra arguments are a usage error,
+// consistent with the rest of the dispatch.
+func runVersion(rest []string) int {
+	if len(rest) != 0 {
+		fmt.Fprintln(os.Stderr, "director: version takes no arguments")
+		return 2
+	}
+	fmt.Println(versionLine())
+	return 0
+}
+
+func versionLine() string { return "director " + version }
+
 func main() {
 	os.Exit(run(os.Args[1:]))
 }
@@ -55,8 +68,7 @@ func run(args []string) int {
 	case "_hook":
 		return runHook(rest)
 	case "version", "--version":
-		fmt.Println("director " + version)
-		return 0
+		return runVersion(rest)
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 		return 0
