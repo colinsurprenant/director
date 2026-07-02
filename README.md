@@ -23,7 +23,9 @@ The design in four ideas — the full argument, including honest comparisons, is
 
 ## Install
 
-Build the binary, put it on your `PATH`, then run the installer:
+Prebuilt binaries for macOS and Linux (amd64/arm64) are published on the [releases page](https://github.com/colinsurprenant/director/releases); [`docs/getting-started.md`](docs/getting-started.md) covers install-from-release.
+
+Or build the binary, put it on your `PATH`, then run the installer:
 
 ```bash
 go build -o bin/director ./cmd/director
@@ -43,6 +45,7 @@ The installed hook commands point at the **shims**, not the binary directly, so 
 | `DIRECTOR_HOOKS_DIR` | `~/.claude/director/hooks` | where `install` writes the shims and the settings entries point; override to relocate them |
 | `DIRECTOR_HUB` | `~/.director` | the central hub that holds all cross-repo coordination state |
 | `DIRECTOR_BIN` | (PATH) | which `director` binary the shims invoke (defaults to `director` on `PATH`) |
+| `DIRECTOR_HANDOFF_NUDGE_TOKENS` | (unset) | the context-fill handoff nudge: an absolute token threshold at which sessions are nudged toward `/director:handoff`; unset or `0` disables it. Fires once per crossing and re-arms only after context falls below half the threshold (a compaction) |
 
 > **The binary must be on `PATH`.** The shims resolve `director` via `DIRECTOR_BIN` → `PATH`; if it's missing they exit 0 (fail-safe) and coordination silently no-ops.
 
