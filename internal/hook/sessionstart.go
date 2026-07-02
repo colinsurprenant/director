@@ -41,6 +41,10 @@ const emitProtocol = "## Director protocol — keep this current as you work\n" 
 	"- an open-item the moment you defer a loop — `director emit --type open-item --area <area> --risk <low|escalate> \"<loop>\"`\n" +
 	"- a handoff at each natural boundary (sub-task done, switching focus, wrapping up) — `director emit --type handoff --area <area> \"current task · next · hypotheses\"`\n" +
 	"- when you FINISH an open-item, close it — `director resolve <ulid>` (use a ULID from the open-items above; resolve only when it is truly done — there is no reopen)\n" +
+	"At a WORKSTREAM boundary, suggest the matching close-out command to the human — the two are not interchangeable:\n" +
+	"- work DONE and merged → suggest `/director:complete`, BEFORE the branch/worktree is deleted — it reviews this workstream's open-items with the human, resolves the finished ones, and archives the workstream\n" +
+	"- PAUSING work that will resume (session ending mid-task, switching focus, context filling up) → suggest `/director:handoff` — it flushes unrecorded state and writes a self-sufficient resume baton\n" +
+	"Never hand off a finished workstream: a handoff there plants a phantom baton that keeps a dead workstream surfacing as resumable — done+merged always takes `/director:complete`.\n" +
 	"This is load-bearing — treat it as a standing instruction, not a suggestion.\n"
 
 // handleSessionStart derives identity, refreshes the fleet row, and writes the

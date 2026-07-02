@@ -273,6 +273,12 @@ func TestSessionStartInjectsGroundTruth(t *testing.T) {
 	if !strings.Contains(got, "director resolve") {
 		t.Errorf("injected protocol should tell the model to resolve finished open-items:\n%s", got)
 	}
+	if !strings.Contains(got, "/director:complete") || !strings.Contains(got, "/director:handoff") {
+		t.Errorf("injected protocol should name BOTH close-out commands at the workstream-boundary triggers:\n%s", got)
+	}
+	if !strings.Contains(got, "Never hand off a finished workstream") {
+		t.Errorf("injected protocol should warn that done+merged takes /director:complete, not a handoff:\n%s", got)
+	}
 	if !strings.Contains(got, `"hookEventName":"SessionStart"`) {
 		t.Errorf("injection missing SessionStart control envelope:\n%s", got)
 	}
