@@ -16,3 +16,8 @@
 # config. Without these, a bare `git add -A` sweeps coordination state into a commit.
 /.director/
 /.claude/settings.local.json
+
+# Local working notes, never committed: session handoff snapshots (superseded by
+# the Director LOG) and raw research data (contains author telemetry).
+/docs/handoff-*.md
+/docs/research/

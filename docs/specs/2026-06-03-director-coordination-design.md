@@ -69,7 +69,7 @@ Claude's `Edit`/`Write` is whole-file read-modify-rewrite — there is no true a
 
 ### 4.3 Canonical-repo-key algorithm (with fallback chain + test matrix)
 
-Every easy heuristic fails on the real machine: basename collides (`ollama` → `jmorganca/ollama`; `springloader` has 6+ worktrees); `pager`/`springloader` have no remote.
+Every easy heuristic fails on the real machine: basename collides (a fork of `ollama` is still `ollama`); one project can have 6+ worktrees of the same repo; local-only projects have no remote at all.
 
 **Resolution — deterministic fallback chain:**
 1. `git rev-parse --git-common-dir` → collapse all worktrees to one `.git`; slug its absolute path.
