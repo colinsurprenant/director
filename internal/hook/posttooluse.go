@@ -114,7 +114,12 @@ func nudgeInterval() (every int, on bool) {
 // bumpToolCounter increments and returns this session's PostToolUse counter,
 // persisted at <hub>/health/posttooluse.<session>.count so the debounce survives
 // across the short-lived hook processes (each tool call is its own `director
-// _hook` invocation). A missing/garbled counter resets to 1 rather than erroring.
+// _hook` invocation). The count is the FILE SIZE: each bump appends exactly one
+// byte with O_APPEND (the same single-write property as the event store and
+// health log), so concurrent hook processes never lose increments, and the
+// post-write offset (my byte's unique end position) is this call's count.
+// Stat-ing the size instead would let two racers both observe the same cadence
+// point and double-fire.
 func bumpToolCounter(hub, session string) (int, error) {
 	if session == "" {
 		session = "manual"
@@ -125,17 +130,19 @@ func bumpToolCounter(hub, session string) (int, error) {
 	}
 	path := filepath.Join(dir, "posttooluse."+sanitizeSession(session)+".count")
 
-	prev := 0
-	if b, err := os.ReadFile(path); err == nil {
-		if n, perr := strconv.Atoi(strings.TrimSpace(string(b))); perr == nil {
-			prev = n
-		}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return 0, fmt.Errorf("open counter: %w", err)
 	}
-	next := prev + 1
-	if err := os.WriteFile(path, []byte(strconv.Itoa(next)+"\n"), 0o644); err != nil {
-		return 0, fmt.Errorf("write counter: %w", err)
+	defer f.Close()
+	if _, err := f.Write([]byte{'.'}); err != nil {
+		return 0, fmt.Errorf("append counter: %w", err)
 	}
-	return next, nil
+	pos, err := f.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return 0, fmt.Errorf("read counter offset: %w", err)
+	}
+	return int(pos), nil
 }
 
 // sanitizeSession keeps a session id safe to embed in a filename: only
