@@ -84,6 +84,35 @@ director status
 > found, the shims exit 0 (fail-safe) and coordination silently no-ops — nothing breaks, but nothing
 > coordinates. After rebuilding the binary, re-run `director install` to refresh the shims.
 
+### Also using OpenAI Codex?
+
+```bash
+director install --codex
+```
+
+Codex's hook contract mirrors Claude Code's, so the same shims serve both agents. The `--codex` form
+merges the three hooks into `~/.codex/hooks.json` (never your `config.toml`) and installs the boundary
+commands as **agent skills** under `~/.agents/skills`: invoke them as `$director-adopt`,
+`$director-complete`, `$director-handoff` (or find them in the `/skills` browser). Skills are the
+surface Codex recommends — its older `~/.codex/prompts` custom prompts are deprecated upstream. Two
+Codex-specific notes:
+
+- **Trust the hooks once.** Codex asks you to review and trust the three hook definitions at your next
+  session start; until you do, they are silently skipped. If you dismiss or interrupt that prompt (an
+  Esc is enough), run `/hooks` inside the session to review and trust them.
+- Ground truth injection, liveness, and close-out work identically on both agents. The Stop emit-guard
+  and the context-fill handoff nudge are Claude Code-only for now (they read CC's transcript format and
+  stay safely inert on Codex).
+- Codex exposes no session id to shell commands, so a hand-run `director done` (including
+  `$director-complete`'s final step) may report "row not found" there — not a failure: the Stop hook
+  archives the session's row at turn end, and everything durable was already written. Targeted
+  `done --workstream <id>` is unaffected.
+
+`director uninstall --codex` removes only the tagged entries and the three skill directories. The hook
+shims are shared between the two agents: a `--codex` uninstall leaves them for a Claude Code install,
+and the plain `director uninstall` leaves them while a Codex install still references them — so
+uninstalling one agent never silently breaks the other.
+
 ---
 
 ## 2. Adopt a repo

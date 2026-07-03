@@ -13,8 +13,7 @@ v1 = visibility-first CLI (see `docs/specs/2026-06-03-director-coordination-desi
   - *Why:* the hub aggregates semantic notes across repos; safe while local-only, a leak trap once shared. (Spec §8.)
 
 ## On the roadmap
-- **Codex adapter** — deliver Director to OpenAI Codex sessions: the coordination core is already agent-agnostic (CLI write path + plain NDJSON log; any shell-capable agent can `emit`/`resolve` today), so this is the thin delivery layer only — emit protocol via the always-loaded AGENTS.md, plus digest-injection, heartbeat, and close-out equivalents over Codex's config surface.
-  - *Why:* first external ask post-launch (day 1); widens the audience beyond Claude Code and proves the adapter seam (`internal/hook/adapter.go`) is real. The locked event schema and boundary commands are untouched: an adapter is a new delivery target, not new core surface.
+- **Codex adapter** — ✅ core shipped as `director install --codex` (hooks.json merge + `$director-*` agent skills; see `docs/specs/2026-07-03-codex-adapter-design.md`). Codex's stable hooks contract turned out to be a near-clone of Claude Code's, so the UNCHANGED shims serve both agents and the planned AGENTS.md delivery was never needed. Remaining sub-items: a rollout-format transcript reader to light up the emit-guard (payload-first via Codex's `last_assistant_message`) and the context-fill handoff nudge on Codex — both currently inert-by-design there; check whether Codex exposes a session-id env var to shell tools and adopt it in `sessionUUID()` (hand-run CLI verbs in a Codex session currently key the shared `manual` fleet row).
 
 ## When it grows / when sync is needed
 - **Multi-machine sync** — shard one NDJSON per repo×machine (git-merge-clean), push/pull the hub repo; SessionStart warns on foreign-host hub.

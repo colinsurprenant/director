@@ -37,6 +37,14 @@ func writeFixture(t *testing.T, contents string) (path, hooksDir string) {
 	t.Helper()
 	hooksDir = filepath.Join(t.TempDir(), "hooks")
 	t.Setenv(hooksDirEnv, hooksDir)
+	// Isolate EVERY default the install/uninstall paths resolve, not just the
+	// hooks dir: without these, Uninstall's removeCommands would delete the
+	// developer's real ~/.claude/commands/director (it did, before this was
+	// added), and codexInstallPresent would read the developer's real
+	// ~/.codex/hooks.json and flip the shim-removal behavior under test.
+	t.Setenv(commandsDirEnv, filepath.Join(t.TempDir(), "commands"))
+	t.Setenv(codexHooksPathEnv, filepath.Join(t.TempDir(), "codex-hooks.json"))
+	t.Setenv(codexSkillsDirEnv, filepath.Join(t.TempDir(), "skills"))
 	dir := t.TempDir()
 	path = filepath.Join(dir, "settings.json")
 	if contents != "" {
@@ -401,13 +409,66 @@ func TestUninstallRefusesWrongTypedHooks(t *testing.T) {
 }
 
 // TestUninstallMissingFileNoop verifies Uninstall on an absent settings file is a
-// clean no-op (doesn't create the file, doesn't error).
+// TOTAL no-op: no error, no file created, and — load-bearing for Codex
+// coexistence — the shared shims and the commands dir are untouched. A
+// Codex-only user running the CC uninstall form by mistake must lose nothing.
 func TestUninstallMissingFileNoop(t *testing.T) {
-	path, _ := writeFixture(t, "")
+	path, hooksDir := writeFixture(t, "")
+	// Materialize shims + commands as a Codex-only install would leave them.
+	if err := writeShims(hooksDir); err != nil {
+		t.Fatal(err)
+	}
+	commandsDir := os.Getenv(commandsDirEnv)
+	if err := writeCommands(commandsDir); err != nil {
+		t.Fatal(err)
+	}
+
 	if err := Uninstall(path); err != nil {
 		t.Fatalf("Uninstall on missing file errored: %v", err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("Uninstall created a settings file where none should exist")
+	}
+	if _, err := os.Stat(filepath.Join(hooksDir, "sessionstart.sh")); err != nil {
+		t.Errorf("Uninstall on missing settings file must not remove shims: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(commandsDir, "complete.md")); err != nil {
+		t.Errorf("Uninstall on missing settings file must not remove commands: %v", err)
+	}
+}
+
+// TestUninstallSparesShimsWhenCodexPresent: the shims are shared between the
+// two delivery targets, so the CC uninstall leaves them in place while a Codex
+// hooks.json still carries Director-managed entries — removing them would
+// silently kill coordination on Codex (fail-safe shims exit 0 forever).
+func TestUninstallSparesShimsWhenCodexPresent(t *testing.T) {
+	path, hooksDir := writeFixture(t, "")
+	if err := Install(path); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	codexHooksPath := os.Getenv(codexHooksPathEnv)
+	if err := InstallCodex(codexHooksPath); err != nil {
+		t.Fatalf("InstallCodex: %v", err)
+	}
+
+	if err := Uninstall(path); err != nil {
+		t.Fatalf("Uninstall: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(hooksDir, "sessionstart.sh")); err != nil {
+		t.Errorf("CC uninstall removed shims a Codex install still references: %v", err)
+	}
+
+	// Once the Codex install is gone too, the CC uninstall reclaims the shims.
+	if err := UninstallCodex(codexHooksPath); err != nil {
+		t.Fatalf("UninstallCodex: %v", err)
+	}
+	if err := Install(path); err != nil {
+		t.Fatalf("re-Install: %v", err)
+	}
+	if err := Uninstall(path); err != nil {
+		t.Fatalf("final Uninstall: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(hooksDir, "sessionstart.sh")); !os.IsNotExist(err) {
+		t.Errorf("with no Codex install left, CC uninstall should remove the shims (err=%v)", err)
 	}
 }
