@@ -68,6 +68,8 @@ director install --codex
 
 Codex's hook contract mirrors Claude Code's, so the **same shims serve both agents** — and neither install needs the other: `--codex` works standalone on a machine that has never run Claude Code. It merges the three hooks into `~/.codex/hooks.json` (never your `config.toml`) and installs the boundary commands as agent skills under `~/.agents/skills`, invoked as `$director-adopt`, `$director-complete`, `$director-handoff`. Codex asks you to **trust** the three hooks at your next session start (if you dismiss that prompt, run `/hooks` in the session). Details, including what degrades on Codex, in [`docs/getting-started.md`](docs/getting-started.md).
 
+Everything below uses the Claude Code command names (`/director:adopt` etc.); on Codex, read each as its `$director-*` skill twin — same command, same behavior.
+
 ### Environment variables
 
 Install paths and runtime knobs, common to both agents unless a default says otherwise:
@@ -80,7 +82,7 @@ Install paths and runtime knobs, common to both agents unless a default says oth
 | `DIRECTOR_CODEX_SKILLS_DIR` | `~/.agents/skills` | where `install --codex` writes the `$director-*` agent skills |
 | `DIRECTOR_HUB` | `~/.director` | the central hub that holds all cross-repo coordination state |
 | `DIRECTOR_BIN` | (PATH) | which `director` binary the shims invoke (defaults to `director` on `PATH`) |
-| `DIRECTOR_HANDOFF_NUDGE_TOKENS` | (unset) | the context-fill handoff nudge: an absolute token threshold at which sessions are nudged toward `/director:handoff`; unset or `0` disables it. Fires once per crossing and re-arms only after context falls below half the threshold (a compaction or a context clear) |
+| `DIRECTOR_HANDOFF_NUDGE_TOKENS` | (unset) | the context-fill handoff nudge (Claude Code-only for now): an absolute token threshold at which sessions are nudged toward `/director:handoff`; unset or `0` disables it. Fires once per crossing and re-arms only after context falls below half the threshold (a compaction or a context clear) |
 
 > **The binary must be on `PATH`.** The shims resolve `director` via `DIRECTOR_BIN` → `PATH`; if it's missing they exit 0 (fail-safe) and coordination silently no-ops.
 
@@ -165,7 +167,7 @@ director resolve <ulid>
 
 ### Fleet lifecycle
 
-`register` / `heartbeat` / `done` maintain a workstream's liveness row and are normally fired by the hooks, not run by hand. Liveness is **derived from heartbeat age** (TTL/lease) — never self-declared: a workstream that stops heartbeating ages to `idle` (after 4h) then `dormant` (after 2d), and dormant is a first-class state (a project parked between blocks), not a fault. A workstream whose branch no longer exists reads `gone` regardless of heartbeat: it looks complete and is the `/director:complete` candidate. Because git refuses to delete a checked-out branch, a gone workstream is always a *sibling* (a worktree that merged and was removed), never the session's own — so the surfacing happens one session later: `status` shows the gone row's open-item count with the remedy, and — if the gone workstream still owns open items — the next Claude Code session on that repo gets a session-start nudge naming it (a zero-loop corpse has nothing at risk, so it gets the `status` remedy only). `/director:complete <workstream-id>` then closes out the dead sibling from wherever you are in the repo (`done --workstream <id>` archives every row it left behind). `done` archives rows to `fleet/archive/<date>/` rather than deleting them.
+`register` / `heartbeat` / `done` maintain a workstream's liveness row and are normally fired by the hooks, not run by hand. Liveness is **derived from heartbeat age** (TTL/lease) — never self-declared: a workstream that stops heartbeating ages to `idle` (after 4h) then `dormant` (after 2d), and dormant is a first-class state (a project parked between blocks), not a fault. A workstream whose branch no longer exists reads `gone` regardless of heartbeat: it looks complete and is the `/director:complete` candidate. Because git refuses to delete a checked-out branch, a gone workstream is always a *sibling* (a worktree that merged and was removed), never the session's own — so the surfacing happens one session later: `status` shows the gone row's open-item count with the remedy, and — if the gone workstream still owns open items — the next agent session on that repo gets a session-start nudge naming it (a zero-loop corpse has nothing at risk, so it gets the `status` remedy only). `/director:complete <workstream-id>` then closes out the dead sibling from wherever you are in the repo (`done --workstream <id>` archives every row it left behind). `done` archives rows to `fleet/archive/<date>/` rather than deleting them.
 
 ## The four event kinds
 
@@ -227,19 +229,21 @@ In each adopted worktree: `.director/workstream-id` (and `.director/repo-key`), 
 ## Fresh walkthrough
 
 ```bash
-# 1. Build the binary, put it on PATH, install the hooks
+# 1. Build the binary, put it on PATH, wire in your agent(s)
 go build -o bin/director ./cmd/director
 sudo install bin/director /usr/local/bin/director
-director install
+director install              # Claude Code
+director install --codex      # OpenAI Codex — either, or both
 
 # 2. Register an existing repo in the fleet
 cd ~/dev/src/some-project
 director adopt
 
-# 3. Open a Claude Code session in that repo and run /director:adopt — it drafts
-#    the CHARTER from the repo's docs and triages its real open loops for import,
-#    everything confirmed by you (or skip it and fill in the CHARTER stub by hand).
-#    From here on, every session start injects CHARTER + digest as Ground Truth.
+# 3. Open an agent session in that repo and run /director:adopt (Codex:
+#    $director-adopt) — it drafts the CHARTER from the repo's docs and triages
+#    its real open loops for import, everything confirmed by you (or skip it
+#    and fill in the CHARTER stub by hand). From here on, every session start
+#    injects CHARTER + digest as Ground Truth.
 
 # 4. See the cockpit
 director status

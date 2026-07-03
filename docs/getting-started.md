@@ -1,6 +1,6 @@
 # Getting started with Director
 
-You work with Claude Code across several projects in blocks: days or weeks deep in one repo, an afternoon
+You work with a coding agent (Claude Code, OpenAI Codex, or both) across several projects in blocks: days or weeks deep in one repo, an afternoon
 in another, back to the first, sometimes a burst of parallel worktree sessions. Director keeps that
 portfolio coordinated without you being the message bus. Sessions write durable coordination state
 (decisions, open loops, handoffs) to a shared append-only LOG; every new session starts from that record
@@ -8,7 +8,8 @@ instead of from git archaeology, so re-entering a project you haven't touched in
 where the last block parked the baton. You read deterministic projections (`status`, `brief`) and step in
 only where a human is actually needed.
 
-This guide walks the first run end to end. It assumes you use Claude Code; Go is only needed for the
+This guide walks the first run end to end, written in Claude Code terms with the Codex differences
+called out where they exist (see "Using OpenAI Codex?" in section 1). Go is only needed for the
 `go install` and build-from-source paths. For the full command/flag reference see
 [`../README.md`](../README.md).
 
@@ -108,6 +109,9 @@ Codex-specific notes:
   archives the session's row at turn end, and everything durable was already written. Targeted
   `done --workstream <id>` is unaffected.
 
+The rest of this guide uses the Claude Code command names (`/director:adopt` etc.); on Codex, read each
+as its `$director-*` skill twin — same command, same behavior.
+
 `director uninstall --codex` removes only the tagged entries and the three skill directories. The hook
 shims are shared between the two agents: a `--codex` uninstall leaves them for a Claude Code install,
 and the plain `director uninstall` leaves them while a Codex install still references them — so
@@ -133,8 +137,8 @@ A bare `adopt` **registers** — the fast, deterministic floor: it derives a **s
 (handles worktrees, remotes, forks), creates `projects/<repo-key>/` in the hub, scaffolds a ~3-line
 **CHARTER stub**, and registers the workstream. Re-adopting never clobbers an edited CHARTER.
 
-The understand layer is the **`/director:adopt`** slash command (installed in section 1), run inside a
-Claude Code session. It starts with the same `director adopt`, then fans out read-only agents over the repo
+The understand layer is the **`/director:adopt`** command (installed in section 1), run inside an agent
+session. It starts with the same `director adopt`, then fans out read-only agents over the repo
 (docs and planning files, code TODOs read *in context*, git state, the repo's self-descriptions) and brings
 back two things for your confirmation:
 
@@ -168,9 +172,9 @@ this is where you steer the fleet.
 
 ---
 
-## 3. Open a Claude Code session
+## 3. Open an agent session
 
-Just start Claude Code in the adopted repo as usual. Director's `SessionStart` hook fires automatically and:
+Just start Claude Code (or Codex) in the adopted repo as usual. Director's `SessionStart` hook fires automatically and:
 
 - registers/refreshes the workstream's liveness row, and
 - injects the **CHARTER + a deterministic digest** of the LOG as the session's *authoritative current
@@ -260,7 +264,7 @@ what `brief` shows and what the next session starts from.
 | **A row reads `idle` or `dormant` though the session is active** | Liveness is derived from heartbeat age. `PostToolUse` refreshes it on every tool call, so a session making no tool calls can age to `idle` (after 4h) then `dormant` (after 2d). Dormant is the normal between-blocks state, not an error. |
 | **A row reads `gone` despite a fresh heartbeat** | Liveness also checks that the workstream's branch still exists. A branch that no longer exists reads `gone` by design (merged away and deleted, or the whole worktree directory is gone: any failed branch check counts), meaning the workstream looks complete: close it out with `/director:complete <workstream-id>` from any session on the repo. `status` shows its open-item count, and new sessions on the repo are nudged about it at start while it still owns open items. Rows without branch/dir info fail open and age out by TTL only. |
 | **`status` shows "N unreadable fleet row(s) skipped"** | One or more row files under `$DIRECTOR_HUB/fleet/` are corrupt; the cockpit skips them rather than failing. Inspect/remove the bad files there. |
-| **`adopt` imported nothing** | By design — the CLI registers only (identity + CHARTER stub + fleet row). The import path is `/director:adopt` in a Claude Code session: it triages the repo's real open loops and imports only what you confirm. |
+| **`adopt` imported nothing** | By design — the CLI registers only (identity + CHARTER stub + fleet row). The import path is `/director:adopt` in an agent session: it triages the repo's real open loops and imports only what you confirm. |
 | **`install` refused** | Your `~/.claude/settings.json` has a malformed (non-object) `hooks` value. Director won't overwrite data it doesn't understand — fix the file, then re-run. |
 
 ---
