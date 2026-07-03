@@ -1,5 +1,8 @@
 # Director
 
+[![ci](https://github.com/colinsurprenant/director/actions/workflows/ci.yml/badge.svg)](https://github.com/colinsurprenant/director/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/colinsurprenant/director)](https://github.com/colinsurprenant/director/releases/latest)
+
 **An engineering daybook your agents actually keep.**
 
 You work with Claude Code across several projects, in blocks: days or weeks deep in one, an afternoon in another, back to the first, sometimes a few parallel worktree sessions in a burst. Native agent memory remembers *facts*. What nothing carries across those boundaries is the **coordination narrative**: what was decided and why, which loops were deliberately deferred, where the baton was parked when the block ended, and what still needs *you*. So the human becomes the message bus, re-explaining last month's decision to this morning's session.
