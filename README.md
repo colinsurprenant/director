@@ -1,7 +1,7 @@
 # Director
 
 [![ci](https://github.com/colinsurprenant/director/actions/workflows/ci.yml/badge.svg)](https://github.com/colinsurprenant/director/actions/workflows/ci.yml)
-[![release](https://img.shields.io/github/v/release/colinsurprenant/director)](https://github.com/colinsurprenant/director/releases/latest)
+[![release](https://img.shields.io/github/v/release/colinsurprenant/director?display_name=tag)](https://github.com/colinsurprenant/director/releases/latest)
 
 **An engineering daybook your agents actually keep.**
 
