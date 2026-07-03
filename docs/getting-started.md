@@ -102,7 +102,10 @@ namespace by filename, hence the dash). Two Codex-specific notes:
   and the context-fill handoff nudge are Claude Code-only for now (they read CC's transcript format and
   stay safely inert on Codex).
 
-`director uninstall --codex` removes only the tagged entries and the three prompt files.
+`director uninstall --codex` removes only the tagged entries and the three prompt files. The hook
+shims are shared between the two agents: a `--codex` uninstall leaves them for a Claude Code install,
+and the plain `director uninstall` leaves them while a Codex install still references them — so
+uninstalling one agent never silently breaks the other.
 
 ---
 

@@ -157,6 +157,30 @@ func TestUninstallCodexRemovesOnlyItsOwn(t *testing.T) {
 	}
 }
 
+// TestUninstallCodexMissingFileNoop: an absent hooks.json means no Codex
+// install to undo — total no-op, prompts included, mirroring the CC uninstall's
+// missing-file stance.
+func TestUninstallCodexMissingFileNoop(t *testing.T) {
+	hooksPath, _, promptsDir := setupCodex(t, "")
+	if err := os.MkdirAll(promptsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prompt := filepath.Join(promptsDir, "director-complete.md")
+	if err := os.WriteFile(prompt, []byte("stale copy"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := UninstallCodex(hooksPath); err != nil {
+		t.Fatalf("UninstallCodex on missing file errored: %v", err)
+	}
+	if _, err := os.Stat(hooksPath); !os.IsNotExist(err) {
+		t.Errorf("UninstallCodex created a hooks file where none should exist")
+	}
+	if _, err := os.Stat(prompt); err != nil {
+		t.Errorf("UninstallCodex on missing hooks file must not remove prompts: %v", err)
+	}
+}
+
 // TestInstallCodexRefusesMalformed: present-but-wrong-typed hooks content is
 // foreign data — refuse rather than clobber, same stance as the CC merge.
 func TestInstallCodexRefusesMalformed(t *testing.T) {

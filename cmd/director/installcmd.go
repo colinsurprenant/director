@@ -24,7 +24,10 @@ func runInstall(args []string) int {
 			fmt.Fprintf(os.Stderr, "install: %v\n", err)
 			return 1
 		}
-		fmt.Printf("installed Director hooks into %s\n", path)
+		fmt.Printf("installed Director hooks into %s (set DIRECTOR_CODEX_HOOKS_PATH to override)\n", path)
+		if hooksDir, err := install.DefaultHooksDir(); err == nil {
+			fmt.Printf("  shims written to %s (shared with a Claude Code install; set DIRECTOR_HOOKS_DIR to override)\n", hooksDir)
+		}
 		if promptsDir, err := install.DefaultCodexPromptsDir(); err == nil {
 			fmt.Printf("  prompts written to %s (/director-adopt, /director-complete, /director-handoff; set DIRECTOR_CODEX_PROMPTS_DIR to override)\n", promptsDir)
 		}

@@ -92,10 +92,15 @@ func InstallCodex(hooksPath string) error {
 }
 
 // UninstallCodex removes Director's tagged entries from hooksPath and the
-// Director-owned prompt files. The shared shims are deliberately LEFT in place:
-// a Claude Code install may still reference them, and Director cannot know from
-// here. `director uninstall` (the CC form) removes them.
+// Director-owned prompt files. A missing hooks file means no Codex install to
+// undo — touch nothing, mirroring the CC Uninstall. The shared shims are
+// deliberately LEFT in place either way: a Claude Code install may still
+// reference them, and `director uninstall` (the CC form) removes them when no
+// Codex install remains.
 func UninstallCodex(hooksPath string) error {
+	if _, err := os.Stat(hooksPath); os.IsNotExist(err) {
+		return nil
+	}
 	if err := removeManagedEntries(hooksPath); err != nil {
 		return err
 	}
@@ -103,6 +108,50 @@ func UninstallCodex(hooksPath string) error {
 		removeCodexPrompts(promptsDir)
 	}
 	return nil
+}
+
+// codexInstallPresent reports whether the default Codex hooks file still
+// carries Director-managed entries — the signal the CC Uninstall uses to spare
+// the shared shims. Best-effort and fail-safe in the conservative direction is
+// NOT wanted here: an unreadable/missing hooks.json reads as "no Codex
+// install", because refusing to remove shims on every read hiccup would make
+// the CC uninstall permanently leaky. Only a positive managed-entry sighting
+// spares the shims.
+func codexInstallPresent() bool {
+	hooksPath, err := DefaultCodexHooksPath()
+	if err != nil {
+		return false
+	}
+	root, err := loadSettings(hooksPath)
+	if err != nil {
+		return false
+	}
+	hooks, ok := typedMap(root, "hooks")
+	if !ok {
+		return false
+	}
+	for event := range hooks {
+		groups, ok := typedArray(hooks, event)
+		if !ok {
+			continue
+		}
+		for _, g := range groups {
+			group := asMap(g)
+			if group == nil {
+				continue
+			}
+			cmds, ok := typedArray(group, "hooks")
+			if !ok {
+				continue
+			}
+			for _, c := range cmds {
+				if isManaged(c) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // codexPromptName maps an embedded command filename to its Codex prompt

@@ -209,13 +209,26 @@ func mergeManagedEntries(path string, entries []managedEntry, hooksDir string) e
 // result. Untagged commands, foreign groups, and non-hook settings are preserved
 // exactly. A missing settings file is a no-op.
 func Uninstall(settingsPath string) error {
+	// A missing settings file means no CC install to undo: touch NOTHING — not
+	// the shims (a Codex install may be the only one referencing them), not the
+	// commands. This early return is load-bearing: without it, a Codex-only user
+	// running the CC uninstall form by mistake would delete the shims their
+	// trusted hooks.json entries point at, silently killing coordination there.
+	if _, err := os.Stat(settingsPath); os.IsNotExist(err) {
+		return nil
+	}
 	if err := removeManagedEntries(settingsPath); err != nil {
 		return err
 	}
 	// Remove the Director-owned shims too — the inverse of Install's writeShims
-	// (best-effort: only the exact Director filenames, never foreign files).
-	if hooksDir, err := DefaultHooksDir(); err == nil {
-		removeShims(hooksDir)
+	// (best-effort: only the exact Director filenames, never foreign files) —
+	// UNLESS a Codex install still references them: the shims are shared, and a
+	// CC uninstall must not silently break a coexisting Codex install (the
+	// mirror of UninstallCodex leaving them for CC).
+	if !codexInstallPresent() {
+		if hooksDir, err := DefaultHooksDir(); err == nil {
+			removeShims(hooksDir)
+		}
 	}
 	// And the Director-owned slash commands — the inverse of writeCommands, same
 	// best-effort, exact-filenames-only discipline.
@@ -227,7 +240,9 @@ func Uninstall(settingsPath string) error {
 
 // removeManagedEntries strips Director's tagged command objects from the hooks
 // file at path — the shared removal core behind Uninstall (CC) and
-// UninstallCodex. A missing file is a no-op.
+// UninstallCodex. Callers gate on the file's existence themselves (both
+// uninstalls treat a missing file as "nothing installed, touch nothing"); the
+// stat here is only a belt against a caller that didn't.
 func removeManagedEntries(path string) error {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil
