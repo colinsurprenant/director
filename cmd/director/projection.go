@@ -131,12 +131,16 @@ func runBrief(args []string) int {
 	return 0
 }
 
-// runOpenItems lists THIS workstream's OPEN open-items (`<ULID> <body>` per line),
+// runOpenItems lists a workstream's OPEN open-items (`<ULID> <body>` per line),
 // the read affordance `/complete` consumes to present, recommend, and resolve them.
-// It is scoped to the current workstream because the repo log is shared across every
-// branch on the repo (§5.3) — run it from the session being closed out.
+// The default scope is the CURRENT workstream because the repo log is shared across
+// every branch on the repo (§5.3); --workstream retargets the filter to a sibling —
+// the close-out path for a dead workstream whose session is gone. Either way the
+// log read is cwd-derived, so run it from inside the repo (any checkout of it).
 func runOpenItems(args []string) int {
 	fs := flag.NewFlagSet("open-items", flag.ContinueOnError)
+	var workstream string
+	fs.StringVar(&workstream, "workstream", "", "list this workstream id's open-items instead of the current workstream's")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -145,13 +149,17 @@ func runOpenItems(args []string) int {
 		fmt.Fprintf(os.Stderr, "open-items: %v\n", err)
 		return 1
 	}
+	target := ws.ID
+	if workstream != "" {
+		target = workstream
+	}
 	store := event.NewStore(hub, ws.RepoKey)
 	events, err := store.ReadAll()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "open-items: %v\n", err)
 		return 1
 	}
-	fmt.Print(render.OpenItemsFor(render.Fold(events), ws.ID))
+	fmt.Print(render.OpenItemsFor(render.Fold(events), target))
 	return 0
 }
 

@@ -126,6 +126,50 @@ func Done(hub, workstream, uuid string, now time.Time) error {
 	return nil
 }
 
+// DoneWorkstream archives EVERY live row belonging to workstream — the
+// cross-workstream close-out (`done --workstream`, driven by /director:complete
+// targeting a dead sibling) uses it because a sibling's session uuids are
+// unknowable from outside, and archiving only some rows would leave the ghost
+// alive. Each matching row goes through the same terminal transition as Done.
+// Zero matches returns ErrRowNotFound so a typo'd workstream id fails loud
+// instead of reporting success. A corrupt row is skipped (its workstream can't
+// be read), consistent with List's leniency for ephemeral rows.
+//
+// Deliberately no branch-alive guard: archiving a still-active workstream by
+// mistake self-heals — Heartbeat is create-or-update, so the live session's
+// next hook fire re-materializes its row.
+func DoneWorkstream(hub, workstream string, now time.Time) (int, error) {
+	if workstream == "" {
+		return 0, fmt.Errorf("fleet: done requires a workstream")
+	}
+	dir := filepath.Join(hub, fleetDir)
+	files, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return 0, ErrRowNotFound
+	}
+	if err != nil {
+		return 0, fmt.Errorf("fleet: read fleet dir: %w", err)
+	}
+	archived := 0
+	for _, e := range files {
+		if e.IsDir() || filepath.Ext(e.Name()) != rowExt {
+			continue
+		}
+		row, err := readRow(filepath.Join(dir, e.Name()))
+		if err != nil || row.Workstream != workstream {
+			continue
+		}
+		if err := Done(hub, row.Workstream, row.UUID, now); err != nil {
+			return archived, err
+		}
+		archived++
+	}
+	if archived == 0 {
+		return 0, ErrRowNotFound
+	}
+	return archived, nil
+}
+
 // rowFile is the per-row filename: <workstream>--<uuid>-<hash>.json. The slugged
 // components keep it readable and prevent a branch-derived workstream or an odd
 // uuid from escaping the dir or colliding on a path separator; the 8-hex SHA-256 of

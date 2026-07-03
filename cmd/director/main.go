@@ -92,12 +92,13 @@ projections:
   render      deterministic machine digest (+ --verify, manifest)
   brief       human re-orientation view (the bigger picture)
   status      one-line-per-workstream fleet cockpit
-  open-items  this workstream's unresolved open-items (ULID + body), for /complete
+  open-items  a workstream's unresolved open-items (ULID + body), for /complete
+              (default: current workstream; --workstream <id> targets a sibling)
 
 fleet lifecycle (hook-emitted):
   register    create/refresh this workstream's fleet row
   heartbeat   touch liveness
-  done        archive the workstream's row
+  done        archive this session's row (--workstream <id>: all of a sibling's rows)
 
 adoption & install:
   adopt       register an existing repo (identity + CHARTER stub + fleet row)

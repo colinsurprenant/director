@@ -57,7 +57,16 @@ func Status(hub string, now time.Time) (string, error) {
 		folds := make(map[string]Projection)
 		// fleet.List already returns rows sorted by workstream, giving a stable cockpit.
 		for _, l := range live {
-			blocked, err := needsYou(hub, l, folds)
+			var blocked string
+			var err error
+			if l.State == fleet.StateGone {
+				// A gone workstream is an action item, not a blocked one: its column
+				// carries the open-loop count and the close-out remedy instead of the
+				// escalation band (the close-out reviews every item anyway).
+				blocked, err = goneRemedy(hub, l, folds)
+			} else {
+				blocked, err = needsYou(hub, l, folds)
+			}
 			if err != nil {
 				return "", err
 			}
@@ -83,15 +92,9 @@ func needsYou(hub string, l fleet.Liveness, folds map[string]Projection) (string
 	if l.RepoKey == "" {
 		return "ok", nil
 	}
-	proj, cached := folds[l.RepoKey]
-	if !cached {
-		store := event.NewStore(hub, l.RepoKey)
-		events, err := store.ReadAll()
-		if err != nil {
-			return "", fmt.Errorf("status: read log for %s: %w", l.Workstream, err)
-		}
-		proj = Fold(events)
-		folds[l.RepoKey] = proj
+	proj, err := foldFor(hub, l, folds)
+	if err != nil {
+		return "", err
 	}
 
 	// The log is repo-scoped — one log shared by every workstream/branch on the
@@ -123,6 +126,46 @@ func needsYou(hub string, l fleet.Liveness, folds map[string]Projection) (string
 		parts = append(parts, fmt.Sprintf("+%d more", overflow))
 	}
 	return fmt.Sprintf("blocked(%d): %s", len(escalate), strings.Join(parts, "; ")), nil
+}
+
+// goneRemedy is the blocked-on column for a gone workstream: its branch/worktree
+// no longer exists, so the actionable fact is how many open loops the corpse still
+// owns and the command that closes them out — not its escalation band (the
+// /director:complete flow reviews every item with the human anyway). A row with no
+// locatable LOG still gets the remedy; only the count is unavailable.
+func goneRemedy(hub string, l fleet.Liveness, folds map[string]Projection) (string, error) {
+	remedy := "/director:complete " + l.Workstream
+	if l.RepoKey == "" {
+		return remedy, nil
+	}
+	proj, err := foldFor(hub, l, folds)
+	if err != nil {
+		return "", err
+	}
+	open := 0
+	for _, o := range proj.OpenItems {
+		if o.Workstream == l.Workstream {
+			open++
+		}
+	}
+	return fmt.Sprintf("%d open item(s) — %s", open, remedy), nil
+}
+
+// foldFor returns the folded projection for l's repo log, caching per RepoKey for
+// the lifetime of one Status() render so workstreams sharing a repo fold it once.
+// Callers must have checked l.RepoKey is non-empty (no locatable LOG otherwise).
+func foldFor(hub string, l fleet.Liveness, folds map[string]Projection) (Projection, error) {
+	if proj, cached := folds[l.RepoKey]; cached {
+		return proj, nil
+	}
+	store := event.NewStore(hub, l.RepoKey)
+	events, err := store.ReadAll()
+	if err != nil {
+		return Projection{}, fmt.Errorf("status: read log for %s: %w", l.Workstream, err)
+	}
+	proj := Fold(events)
+	folds[l.RepoKey] = proj
+	return proj, nil
 }
 
 // handleOf prefers the human handle, falling back to the workstream id so a row

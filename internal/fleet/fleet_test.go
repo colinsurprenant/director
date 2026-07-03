@@ -143,6 +143,58 @@ func TestLifecycleDoneMissingRow(t *testing.T) {
 	}
 }
 
+// TestLifecycleDoneWorkstreamArchivesAllRows: the cross-workstream close-out
+// archives EVERY live row of the target (a dead sibling's session uuids are
+// unknowable, and a partial archive leaves the ghost alive) while another
+// workstream's rows survive untouched.
+func TestLifecycleDoneWorkstreamArchivesAllRows(t *testing.T) {
+	hub := t.TempDir()
+	ws := "widget-feature-abc123"
+	for _, uuid := range []string{"uuid-A", "uuid-B"} {
+		if err := Register(hub, Row{Workstream: ws, UUID: uuid, Heartbeat: fixedTime.Format(heartbeatLayout)}); err != nil {
+			t.Fatalf("Register %s: %v", uuid, err)
+		}
+	}
+	if err := Register(hub, Row{Workstream: "other-main-def456", UUID: "uuid-C", Heartbeat: fixedTime.Format(heartbeatLayout)}); err != nil {
+		t.Fatalf("Register other: %v", err)
+	}
+
+	n, err := DoneWorkstream(hub, ws, fixedTime)
+	if err != nil {
+		t.Fatalf("DoneWorkstream: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("archived %d rows, want 2", n)
+	}
+	for _, uuid := range []string{"uuid-A", "uuid-B"} {
+		if _, err := os.Stat(rowPath(hub, ws, uuid)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("live row %s still present after DoneWorkstream (err=%v)", uuid, err)
+		}
+		archived := filepath.Join(hub, fleetDir, archiveDir, fixedTime.Format(archiveDateLayout), rowFile(ws, uuid))
+		if got := readRowOrFail(t, archived); got.Status != StatusDone {
+			t.Errorf("archived row %s status = %q, want %q", uuid, got.Status, StatusDone)
+		}
+	}
+	if _, err := os.Stat(rowPath(hub, "other-main-def456", "uuid-C")); err != nil {
+		t.Errorf("unrelated workstream's row must survive a targeted done: %v", err)
+	}
+}
+
+// TestLifecycleDoneWorkstreamNoRows: zero matches fails loud (a typo'd id must
+// never report success), on both an empty hub and one with only other rows.
+func TestLifecycleDoneWorkstreamNoRows(t *testing.T) {
+	hub := t.TempDir()
+	if _, err := DoneWorkstream(hub, "nope", fixedTime); !errors.Is(err, ErrRowNotFound) {
+		t.Errorf("DoneWorkstream on empty hub: got %v, want ErrRowNotFound", err)
+	}
+	if err := Register(hub, Row{Workstream: "present", UUID: "u", Heartbeat: fixedTime.Format(heartbeatLayout)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DoneWorkstream(hub, "nope", fixedTime); !errors.Is(err, ErrRowNotFound) {
+		t.Errorf("DoneWorkstream with no matching rows: got %v, want ErrRowNotFound", err)
+	}
+}
+
 // TestLifecycleConcurrentUUIDsDoNotClobber is the core §15.4 guarantee: two
 // sessions on the SAME workstream write two DISTINCT row files.
 func TestLifecycleConcurrentUUIDsDoNotClobber(t *testing.T) {

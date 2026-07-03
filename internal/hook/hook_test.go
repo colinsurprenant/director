@@ -391,6 +391,137 @@ func TestSessionStartRegistersBranchForGone(t *testing.T) {
 	}
 }
 
+// TestSessionStartCloseOutNudgeForGoneSibling: the "later session" surface of
+// the branch-gone signal. A worktree session leaves an open-item, its branch
+// merges away and is deleted; the NEXT session on the repo (a different
+// workstream — its own branch can never read gone while checked out) gets a
+// pre-computed nudge naming the dead sibling, its open count, and the
+// /director:complete target.
+func TestSessionStartCloseOutNudgeForGoneSibling(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+
+	// The sibling is a real linked worktree — the shape that actually produces a
+	// gone SIBLING. Same-directory branch switching cannot: the workstream id is
+	// persisted per worktree toplevel (.director/workstream-id), so a later
+	// session in the same dir IS the same workstream, not a sibling of it.
+	wtDir := filepath.Join(t.TempDir(), "widget-feature")
+	gitIn(t, repo, "worktree", "add", "-q", "-b", "feature", wtDir)
+	sibling := mustResolve(t, wtDir)
+
+	// The sibling session registers its row (branch + dir stamped) and leaves an
+	// open loop in the shared repo log.
+	in := `{"session_id":"s-sib","cwd":` + jsonString(wtDir) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	if code := Dispatch(EventSessionStart, strings.NewReader(in), &bytes.Buffer{}, hub); code != 0 {
+		t.Fatalf("sibling session start exit = %d", code)
+	}
+	store := event.NewStore(hub, sibling.RepoKey)
+	if _, err := event.Emit(store, sibling.ID, event.EmitParams{Type: event.KindOpenItem, Area: "x", Body: "loose end"}); err != nil {
+		t.Fatalf("seed open-item: %v", err)
+	}
+
+	// The work merges; the worktree and its branch are deleted; the next session
+	// starts in the main checkout.
+	gitIn(t, repo, "worktree", "remove", "--force", wtDir)
+	gitIn(t, repo, "branch", "-D", "feature")
+
+	in2 := `{"session_id":"s-main","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	var out bytes.Buffer
+	if code := Dispatch(EventSessionStart, strings.NewReader(in2), &out, hub); code != 0 {
+		t.Fatalf("main session start exit = %d", code)
+	}
+	got := out.String()
+	if !strings.Contains(got, "## Close-out pending") {
+		t.Fatalf("injection missing the close-out nudge for a gone sibling with open items:\n%s", got)
+	}
+	if !strings.Contains(got, "/director:complete "+sibling.ID) {
+		t.Errorf("nudge should name the /director:complete target:\n%s", got)
+	}
+	if !strings.Contains(got, "1 open item(s)") {
+		t.Errorf("nudge should carry the sibling's open count:\n%s", got)
+	}
+}
+
+// TestSessionStartCloseOutNudgeSkipsZeroItemGone: a gone sibling with NO open
+// items earns no model nudge (nudge signal-to-noise is the scarce resource —
+// nothing is at risk; status still shows the row). The log is non-empty so the
+// adopted-repo gate is open and the absence is meaningful.
+func TestSessionStartCloseOutNudgeSkipsZeroItemGone(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+
+	wtDir := filepath.Join(t.TempDir(), "widget-feature")
+	gitIn(t, repo, "worktree", "add", "-q", "-b", "feature", wtDir)
+	sibling := mustResolve(t, wtDir)
+
+	in := `{"session_id":"s-sib","cwd":` + jsonString(wtDir) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	if code := Dispatch(EventSessionStart, strings.NewReader(in), &bytes.Buffer{}, hub); code != 0 {
+		t.Fatalf("sibling session start exit = %d", code)
+	}
+	// A note keeps the repo "adopted" without leaving an open loop.
+	store := event.NewStore(hub, sibling.RepoKey)
+	if _, err := event.Emit(store, sibling.ID, event.EmitParams{Type: event.KindNote, Area: "x", Body: "shipped"}); err != nil {
+		t.Fatalf("seed note: %v", err)
+	}
+
+	gitIn(t, repo, "worktree", "remove", "--force", wtDir)
+	gitIn(t, repo, "branch", "-D", "feature")
+
+	in2 := `{"session_id":"s-main","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	var out bytes.Buffer
+	if code := Dispatch(EventSessionStart, strings.NewReader(in2), &out, hub); code != 0 {
+		t.Fatalf("main session start exit = %d", code)
+	}
+	got := out.String()
+	if !strings.Contains(got, "## Director protocol") {
+		t.Fatalf("adopted-repo gate should be open (test setup), got:\n%s", got)
+	}
+	if strings.Contains(got, "## Close-out pending") {
+		t.Errorf("zero-open-item gone sibling must not trigger the nudge:\n%s", got)
+	}
+}
+
+// TestSessionStartCloseOutNudgeScopedToRepo: another repo's gone workstream is
+// noise here — the nudge is gated on the row's RepoKey matching the session's.
+func TestSessionStartCloseOutNudgeScopedToRepo(t *testing.T) {
+	hub := t.TempDir()
+
+	// Repo B: a workstream goes gone with an open item attached.
+	repoB := gitRepo(t, "other", "feature")
+	wsB := mustResolve(t, repoB)
+	inB := `{"session_id":"s-b","cwd":` + jsonString(repoB) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	if code := Dispatch(EventSessionStart, strings.NewReader(inB), &bytes.Buffer{}, hub); code != 0 {
+		t.Fatalf("repo B session start exit = %d", code)
+	}
+	storeB := event.NewStore(hub, wsB.RepoKey)
+	if _, err := event.Emit(storeB, wsB.ID, event.EmitParams{Type: event.KindOpenItem, Area: "x", Body: "B's loose end"}); err != nil {
+		t.Fatalf("seed open-item: %v", err)
+	}
+	gitIn(t, repoB, "checkout", "-q", "-B", "scratch")
+	gitIn(t, repoB, "branch", "-D", "feature")
+
+	// Repo A: adopted (non-empty log), unrelated to B.
+	repoA := gitRepo(t, "widget", "main")
+	wsA := mustResolve(t, repoA)
+	storeA := event.NewStore(hub, wsA.RepoKey)
+	if _, err := event.Emit(storeA, wsA.ID, event.EmitParams{Type: event.KindNote, Area: "x", Body: "working"}); err != nil {
+		t.Fatalf("seed note: %v", err)
+	}
+
+	inA := `{"session_id":"s-a","cwd":` + jsonString(repoA) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	var out bytes.Buffer
+	if code := Dispatch(EventSessionStart, strings.NewReader(inA), &out, hub); code != 0 {
+		t.Fatalf("repo A session start exit = %d", code)
+	}
+	got := out.String()
+	if !strings.Contains(got, "## Director protocol") {
+		t.Fatalf("adopted-repo gate should be open (test setup), got:\n%s", got)
+	}
+	if strings.Contains(got, "## Close-out pending") {
+		t.Errorf("another repo's gone workstream must not leak into this session's nudge:\n%s", got)
+	}
+}
+
 // --- Stop emit-guard --------------------------------------------------------
 
 // TestEmitGuardBlocksDecisionWithoutEmit is the core emit-guard case: a

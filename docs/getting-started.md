@@ -209,6 +209,10 @@ At block boundaries, two slash commands (installed by `director install`) mark w
   weeks later) rehydrates from the parked baton instead of re-deriving state.
 - **`/director:complete`** when a workstream is done and merged. It closes out the workstream's open loops
   with your confirmation and archives its fleet row. Nothing auto-resolves; close-out is human-confirmed.
+  It also takes a workstream id — `/director:complete <id>` — to close out a *dead sibling*: a worktree
+  that merged and was deleted before anyone ran the close-out. Its branch reads `gone` in `status`, and
+  the next session you start on that repo will surface a "close-out pending" nudge naming it; you don't
+  have to hunt for corpses yourself.
 
 A workstream parked between blocks is not a problem to clean up. Dormant is a first-class state: the parked handoff is
 what `brief` shows and what the next session starts from.
@@ -225,7 +229,7 @@ what `brief` shows and what the next session starts from.
 | **A hook seems broken** | Hooks are fail-safe by design — a failure never blocks a session, it logs. Read `$DIRECTOR_HUB/health/hook.log` (one line per outcome, `ok=false` marks failures). |
 | **`director _hook ...`** | Internal — invoked by the shims, never run by hand. |
 | **A row reads `idle` or `dormant` though the session is active** | Liveness is derived from heartbeat age. `PostToolUse` refreshes it on every tool call, so a session making no tool calls can age to `idle` (after 4h) then `dormant` (after 2d). Dormant is the normal between-blocks state, not an error. |
-| **A row reads `gone` despite a fresh heartbeat** | Liveness also checks that the workstream's branch still exists. A branch that no longer exists reads `gone` by design (merged away and deleted, or the whole worktree directory is gone: any failed branch check counts), meaning the workstream looks complete: close it out with `/director:complete`. Rows without branch/dir info fail open and age out by TTL only. |
+| **A row reads `gone` despite a fresh heartbeat** | Liveness also checks that the workstream's branch still exists. A branch that no longer exists reads `gone` by design (merged away and deleted, or the whole worktree directory is gone: any failed branch check counts), meaning the workstream looks complete: close it out with `/director:complete <workstream-id>` from any session on the repo. `status` shows its open-item count, and new sessions on the repo are nudged about it at start. Rows without branch/dir info fail open and age out by TTL only. |
 | **`status` shows "N unreadable fleet row(s) skipped"** | One or more row files under `$DIRECTOR_HUB/fleet/` are corrupt; the cockpit skips them rather than failing. Inspect/remove the bad files there. |
 | **`adopt` imported nothing** | By design — the CLI registers only (identity + CHARTER stub + fleet row). The import path is `/director:adopt` in a Claude Code session: it triages the repo's real open loops and imports only what you confirm. |
 | **`install` refused** | Your `~/.claude/settings.json` has a malformed (non-object) `hooks` value. Director won't overwrite data it doesn't understand — fix the file, then re-run. |
