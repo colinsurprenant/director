@@ -86,19 +86,19 @@ Install paths and runtime knobs, common to both agents unless a default says oth
 
 ## Adopt an existing repo
 
-A director's projects already exist, so adoption of existing repos is on the critical path. It has two layers: **`director adopt` registers; `/director:adopt` understands.** From inside (or pointing at) a repo:
+A director's projects already exist, so adoption of existing repos is on the critical path. It has two layers: **`director adopt` registers; `/director:adopt` understands** (on Codex: `$director-adopt` — same command, delivered as a skill). From inside (or pointing at) a repo:
 
 ```bash
 director adopt [<dir>]        # defaults to the current directory
 ```
 
-Working in Claude Code, you can skip straight to `/director:adopt`: it runs this registration itself as its first step. The bare CLI verb is what you use outside a session (scripts, a quick shell registration).
+Working in an agent session, you can skip straight to `/director:adopt` (Claude Code) or `$director-adopt` (Codex): the command runs this registration itself as its first step. The bare CLI verb is what you use outside a session (scripts, a quick shell registration).
 
 Adoption **requires a git repository** — workstream identity and liveness are derived from git. On a non-git directory `adopt` fails fast and tells you to `git init` first (an empty init is enough).
 
 `adopt` (the register layer) derives the repo's **stable workstream identity** (handling worktrees, remotes, and forks — see [Identity](#identity)), creates `projects/<repo-key>/` in the hub, scaffolds a ~3-line **CHARTER stub** there, and registers the workstream in the fleet. Re-adopting never clobbers an edited CHARTER. That is all the CLI does — deterministic, done in seconds.
 
-The understand layer is **`/director:adopt`**, a slash command installed by `director install` and run inside a Claude Code session. It starts with the same `director adopt`, then fans out read-only agents over the repo — docs and planning files, code TODOs read *in context*, git state, the repo's self-descriptions — and brings back two things for your confirmation:
+The understand layer is **`/director:adopt`** (Claude Code; `$director-adopt` on Codex), installed by the matching `director install` form and run inside an agent session. It starts with the same `director adopt`, then fans out read-only agents over the repo — docs and planning files, code TODOs read *in context*, git state, the repo's self-descriptions — and brings back two things for your confirmation:
 
 - a **CHARTER proposal** (goal, non-goals, risk line): every claim cited, inferences marked `(inferred)`, plus the short list of questions only you can answer. Approved, it replaces the stub; adoption starts from an informed draft instead of a blank template.
 - the repo's open loops, **triaged** into four buckets: genuinely **in-flight** work (imported as `open-item` events after your confirm — git state must corroborate the prose, which keeps this bucket naturally small), **backlog** (stays in the repo's own tracker and planning docs; Director is not the tracker), **doc-stamps** (facts wearing a TODO costume — they feed the CHARTER), and **fossils**. Every bucket's count is reported; nothing is imported silently.
