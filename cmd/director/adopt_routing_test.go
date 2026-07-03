@@ -80,4 +80,14 @@ func TestRunAdoptRegistersOnly(t *testing.T) {
 			t.Fatalf("adopt %s exit = %d, want 2 (flag removed with the keyword scan)", removed, code)
 		}
 	}
+
+	// A second positional is rejected loudly, not silently dropped.
+	if code := runAdopt([]string{repo, "extra"}); code != 2 {
+		t.Fatalf("adopt <dir> extra exit = %d, want 2", code)
+	}
+
+	// Non-git dir: the remedy branch exits 1 (and registers nothing new).
+	if code := runAdopt([]string{t.TempDir()}); code != 1 {
+		t.Fatalf("adopt on non-git dir exit = %d, want 1", code)
+	}
 }

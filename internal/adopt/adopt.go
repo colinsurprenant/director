@@ -68,9 +68,10 @@ func Adopt(hub, dir string) (Result, error) {
 	// Fail fast on non-git dirs with a typed error: adoption is structurally
 	// git-dependent (identity, liveness, branch-gone — see the informed-adoption
 	// spec's "Non-git directories"), and the rev-parse failure buried in
-	// Resolve's chain carries no remedy for the human.
+	// Resolve's chain carries no remedy for the human. The error already names
+	// the dir; no extra wrapping.
 	if err := identity.EnsureGitRepo(dir); err != nil {
-		return Result{}, fmt.Errorf("adopt: %w", err)
+		return Result{}, err
 	}
 	ws, err := identity.Resolve(dir)
 	if err != nil {

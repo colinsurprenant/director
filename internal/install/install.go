@@ -30,8 +30,9 @@ import (
 //go:embed shims/*.sh
 var shimFS embed.FS
 
-// commandsFS embeds the slash-command markdown (/director:complete,
-// /director:handoff) into the binary so `director install` places them itself, the
+// commandsFS embeds the slash-command markdown (/director:adopt,
+// /director:complete, /director:handoff) into the binary so `director install`
+// places them itself, the
 // same self-contained pattern as shimFS. internal/install/commands/ is the single
 // source of truth; the on-disk copies install writes therefore never drift from the
 // binary. These are model-orchestrated commands that drive existing `director` CLI

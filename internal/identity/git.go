@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -17,21 +18,32 @@ import (
 // ErrNotGitRepo reports that a directory is not inside a git work tree. Identity
 // and liveness are structurally git-derived, so callers surface this with the
 // `git init` remedy instead of a raw rev-parse failure.
-var ErrNotGitRepo = errors.New("not a git repository")
+var ErrNotGitRepo = errors.New("not inside a git work tree")
 
-// EnsureGitRepo verifies dir is inside a git work tree. Git's stable "not a git
-// repository" failure maps to ErrNotGitRepo (wrapped with dir) so callers can
-// fail fast with a remedy; any other failure (git missing from PATH, permission
-// errors) surfaces as-is rather than being mislabeled.
+// EnsureGitRepo verifies dir is inside a git work tree. Both failure shapes map
+// to ErrNotGitRepo (wrapped with dir): a non-repo dir fails the probe, and a
+// bare repo or a path inside .git answers it with "false" — the probe's exit
+// code alone cannot distinguish those from success, so stdout must be checked.
+// Any other failure (git missing from PATH, permission errors) surfaces as-is
+// rather than being mislabeled. The probe pins LC_ALL=C so the stderr match is
+// not defeated by a localized git.
 func EnsureGitRepo(dir string) error {
-	_, err := runGit(dir, "rev-parse", "--is-inside-work-tree")
-	if err == nil {
-		return nil
+	var stdout, stderr bytes.Buffer
+	cmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if strings.Contains(stderr.String(), "not a git repository") {
+			return fmt.Errorf("%s: %w", dir, ErrNotGitRepo)
+		}
+		return fmt.Errorf("git rev-parse --is-inside-work-tree: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
-	if strings.Contains(err.Error(), "not a git repository") {
+	if strings.TrimSpace(stdout.String()) != "true" {
 		return fmt.Errorf("%s: %w", dir, ErrNotGitRepo)
 	}
-	return err
+	return nil
 }
 
 // gitRunner runs git in dir and returns trimmed stdout. It is the injectable

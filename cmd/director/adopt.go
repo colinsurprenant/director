@@ -28,7 +28,11 @@ func runAdopt(args []string) int {
 	seenDir := false
 	flags := make([]string, 0, len(args))
 	for _, a := range args {
-		if !seenDir && !strings.HasPrefix(a, "-") {
+		if !strings.HasPrefix(a, "-") {
+			if seenDir {
+				fmt.Fprintf(os.Stderr, "adopt: unexpected argument %q (usage: director adopt [<dir>])\n", a)
+				return 2
+			}
 			dir, seenDir = a, true
 			continue
 		}
@@ -52,7 +56,7 @@ func runAdopt(args []string) int {
 	res, err := adopt.Adopt(hub, absDir)
 	if err != nil {
 		if errors.Is(err, identity.ErrNotGitRepo) {
-			fmt.Fprintf(os.Stderr, "adopt: %s is not a git repository\nDirector derives workstream identity and liveness from git — run 'git init' there first, then re-run adopt.\n", absDir)
+			fmt.Fprintf(os.Stderr, "adopt: %s is not inside a git work tree\nDirector derives workstream identity and liveness from git — run 'git init' there first (an empty init is enough; a bare repo or a .git path will not do), then re-run adopt.\n", absDir)
 			return 1
 		}
 		fmt.Fprintf(os.Stderr, "adopt: %v\n", err)

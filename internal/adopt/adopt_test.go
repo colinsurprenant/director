@@ -27,6 +27,26 @@ func TestAdoptNonGitDirFailsFast(t *testing.T) {
 	}
 }
 
+// TestAdoptEmptyInitRepo locks the spec's load-bearing claim that an empty
+// `git init` (no commits, no remote) is sufficient to adopt — the git-init
+// remedy the CLI prints depends on it staying true.
+func TestAdoptEmptyInitRepo(t *testing.T) {
+	hub := t.TempDir()
+	repo := filepath.Join(t.TempDir(), "fresh")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(t, repo, "init", "-q")
+
+	res, err := Adopt(hub, repo)
+	if err != nil {
+		t.Fatalf("Adopt on an empty git init: %v", err)
+	}
+	if !res.CharterScaffolded {
+		t.Error("empty-init adopt should scaffold the CHARTER")
+	}
+}
+
 // gitInit creates a real git repo at dir with the deterministic config the
 // identity package needs (no signing, fixed author) and one commit. It mirrors the
 // helper pattern in internal/identity/repokey_test.go so adoption is exercised

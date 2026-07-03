@@ -97,7 +97,7 @@ director adopt
 
 ```text
 adopted some-project-main-1a2b3c4d
-  CHARTER scaffolded at ~/.director/projects/<repo-key>/CHARTER.md — fill in goal / non-goals / risk-line
+  CHARTER scaffolded at ~/.director/projects/<repo-key>/CHARTER.md — fill in goal / non-goals / risk-line, or run /director:adopt in a session to draft it from the repo's docs
 ```
 
 A bare `adopt` **registers** — the fast, deterministic floor: it derives a **stable workstream identity**
