@@ -118,10 +118,12 @@ Adoption requires git, and the requirement is structural, not incidental:
 workstream identity derives from the git chain (repo-key, branch, short HEAD)
 and the liveness model's `gone` state is a branch fact. A path-based identity
 fallback would loosen the most determinism-sensitive code in the repo for a
-minority case, so it is explicitly not built. Instead `/director:adopt`
-detects a non-git directory **before any fan-out** and stops with the remedy:
-`git init` (one line, and it gives the project the history the whole model
-benefits from).
+minority case, so it is explicitly not built. Instead the failure is explicit
+at both layers: `director adopt` (CLI) fails fast with a typed error and the
+`git init` remedy (shipped in this block: `identity.EnsureGitRepo`), and
+`/director:adopt` detects a non-git directory **before any fan-out** and stops
+with the same remedy. An empty `git init` is sufficient to adopt (verified:
+identity derives without commits); history only matters to the analysis pass.
 
 The genuinely degraded case is **thin history**: a freshly-initialized repo
 has an arbiter with nothing to say. There the corroboration rule falls back

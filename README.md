@@ -71,6 +71,8 @@ A director's projects already exist, so adoption of existing repos is on the cri
 director adopt [<dir>]        # defaults to the current directory
 ```
 
+Adoption **requires a git repository** — workstream identity and liveness are derived from git. On a non-git directory `adopt` fails fast and tells you to `git init` first (an empty init is enough).
+
 `adopt` (Tier 0) derives the repo's **stable workstream identity** (handling worktrees, remotes, and forks — see [Identity](#identity)), creates `projects/<repo-key>/` in the hub, scaffolds a ~3-line **CHARTER stub** there, and registers the workstream in the fleet. Filling in the CHARTER (goal, non-goals, and the standing "needs a human" risk line) is the one manual step today; a planned adopt-time pass will instead draft a **CHARTER proposal** from the repo's main docs (README, architecture notes, planning files) for you to confirm, so adoption starts from an informed draft rather than a blank stub. Re-adopting never clobbers an edited CHARTER.
 
 A bare `adopt` stops there (Tier 0). With `--scan` it also runs **Tier 1**: scans the repo's *tracked* files for open loops — `TODO` / `FIXME` / `DEFERRED` / `HACK` / `XXX` and unchecked markdown checklist items (`- [ ]`) — and offers to import the ones you pick as `open-item` events. Tier 1 is opt-in because this keyword scan is noisy on real repos (it surfaces docs/comments/test fixtures, not just real loops); the accurate brownfield import is the planned **Tier-2 LLM-assisted import**. The point of importing is to consolidate loops that would otherwise scatter between memory and per-project docs into their one home in the LOG.

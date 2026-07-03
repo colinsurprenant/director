@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/colinsurprenant/director/internal/adopt"
+	"github.com/colinsurprenant/director/internal/identity"
 )
 
 // runAdopt brings an existing repo into the fleet (§6). Tier 0 always runs
@@ -64,6 +66,10 @@ func runAdopt(args []string) int {
 	// Tier 0 — the operational floor.
 	res, err := adopt.Adopt(hub, absDir)
 	if err != nil {
+		if errors.Is(err, identity.ErrNotGitRepo) {
+			fmt.Fprintf(os.Stderr, "adopt: %s is not a git repository\nDirector derives workstream identity and liveness from git — run 'git init' there first, then re-run adopt.\n", absDir)
+			return 1
+		}
 		fmt.Fprintf(os.Stderr, "adopt: %v\n", err)
 		return 1
 	}

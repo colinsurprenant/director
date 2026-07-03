@@ -2,6 +2,7 @@ package adopt
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,21 @@ import (
 	"github.com/colinsurprenant/director/internal/event"
 	"github.com/colinsurprenant/director/internal/identity"
 )
+
+// TestAdoptNonGitDirFailsFast: adoption is structurally git-dependent, so a
+// non-git dir must fail before any hub state is touched, with the typed error
+// the CLI turns into the `git init` remedy.
+func TestAdoptNonGitDirFailsFast(t *testing.T) {
+	hub := t.TempDir()
+	dir := t.TempDir() // deliberately not a git repo
+
+	if _, err := Adopt(hub, dir); !errors.Is(err, identity.ErrNotGitRepo) {
+		t.Fatalf("Adopt on non-git dir: got %v, want identity.ErrNotGitRepo", err)
+	}
+	if entries, err := os.ReadDir(filepath.Join(hub, "projects")); err == nil && len(entries) > 0 {
+		t.Fatalf("Adopt on non-git dir left hub state behind: %v", entries)
+	}
+}
 
 // gitInit creates a real git repo at dir with the deterministic config the
 // identity package needs (no signing, fixed author) and one commit. It mirrors the

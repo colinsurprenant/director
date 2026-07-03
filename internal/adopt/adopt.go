@@ -69,6 +69,13 @@ type Result struct {
 // was taken), and refreshes the single adoption fleet row rather than duplicating
 // it.
 func Adopt(hub, dir string) (Result, error) {
+	// Fail fast on non-git dirs with a typed error: adoption is structurally
+	// git-dependent (identity, liveness, branch-gone — see the informed-adoption
+	// spec's "Non-git directories"), and the rev-parse failure buried in
+	// Resolve's chain carries no remedy for the human.
+	if err := identity.EnsureGitRepo(dir); err != nil {
+		return Result{}, fmt.Errorf("adopt: %w", err)
+	}
 	ws, err := identity.Resolve(dir)
 	if err != nil {
 		return Result{}, fmt.Errorf("adopt: resolve identity: %w", err)
