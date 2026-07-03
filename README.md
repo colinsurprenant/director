@@ -71,6 +71,8 @@ A director's projects already exist, so adoption of existing repos is on the cri
 director adopt [<dir>]        # defaults to the current directory
 ```
 
+Working in Claude Code, you can skip straight to `/director:adopt`: it runs this registration itself as its first step. The bare CLI verb is what you use outside a session (scripts, a quick shell registration).
+
 Adoption **requires a git repository** — workstream identity and liveness are derived from git. On a non-git directory `adopt` fails fast and tells you to `git init` first (an empty init is enough).
 
 `adopt` (the register layer) derives the repo's **stable workstream identity** (handling worktrees, remotes, and forks — see [Identity](#identity)), creates `projects/<repo-key>/` in the hub, scaffolds a ~3-line **CHARTER stub** there, and registers the workstream in the fleet. Re-adopting never clobbers an edited CHARTER. That is all the CLI does — deterministic, done in seconds.
@@ -208,13 +210,14 @@ go build -o bin/director ./cmd/director
 sudo install bin/director /usr/local/bin/director
 director install
 
-# 2. Bring an existing repo into the fleet — then run /director:adopt in a
-#    session to draft its CHARTER from the repo's docs (or fill in the stub by hand)
+# 2. Register an existing repo in the fleet
 cd ~/dev/src/some-project
 director adopt
 
-# 3. Open a Claude Code session in that repo — its SessionStart hook registers
-#    the workstream and injects CHARTER + digest as Ground Truth.
+# 3. Open a Claude Code session in that repo and run /director:adopt — it drafts
+#    the CHARTER from the repo's docs and triages its real open loops for import,
+#    everything confirmed by you (or skip it and fill in the CHARTER stub by hand).
+#    From here on, every session start injects CHARTER + digest as Ground Truth.
 
 # 4. See the cockpit
 director status
