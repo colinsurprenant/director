@@ -277,13 +277,14 @@ func TestInstallWritesAndUninstallRemovesShims(t *testing.T) {
 // TestInstallWritesAndUninstallRemovesCommands verifies Install materializes the
 // embedded slash-command markdown into the commands dir — byte-identical to the
 // embedded source and mode 0644 (read by CC, not executed) — and Uninstall removes
-// them. This is the turnkey delivery of /director:complete and /director:handoff:
-// no manual command placement, and entirely separate from the settings.json merge.
+// them. This is the turnkey delivery of /director:adopt, /director:complete, and
+// /director:handoff: no manual command placement, and entirely separate from the
+// settings.json merge.
 func TestInstallWritesAndUninstallRemovesCommands(t *testing.T) {
 	path, _ := writeFixture(t, "")
 	commandsDir := filepath.Join(t.TempDir(), "commands")
 	t.Setenv(commandsDirEnv, commandsDir)
-	cmds := []string{"complete.md", "handoff.md"}
+	cmds := []string{"adopt.md", "complete.md", "handoff.md"}
 
 	if err := Install(path); err != nil {
 		t.Fatal(err)
@@ -348,7 +349,7 @@ func TestUninstallPreservesForeignCommands(t *testing.T) {
 	}
 
 	// Director's own commands are gone...
-	for _, name := range []string{"complete.md", "handoff.md"} {
+	for _, name := range []string{"adopt.md", "complete.md", "handoff.md"} {
 		if _, err := os.Stat(filepath.Join(commandsDir, name)); !os.IsNotExist(err) {
 			t.Errorf("Uninstall left Director command %s in place", name)
 		}

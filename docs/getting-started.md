@@ -60,7 +60,7 @@ director install
 ```text
 installed Director hooks into /Users/you/.claude/settings.json
   shims written to /Users/you/.claude/director/hooks (set DIRECTOR_HOOKS_DIR to override)
-  commands written to /Users/you/.claude/commands/director (/director:complete, /director:handoff; set DIRECTOR_COMMANDS_DIR to override)
+  commands written to /Users/you/.claude/commands/director (/director:adopt, /director:complete, /director:handoff; set DIRECTOR_COMMANDS_DIR to override)
 ```
 
 `director install` is **self-contained and idempotent**:
@@ -69,8 +69,9 @@ installed Director hooks into /Users/you/.claude/settings.json
   There is no manual copy step.
 - It merges three hooks into `~/.claude/settings.json` (`SessionStart`, `PostToolUse`, `Stop`), each tagged
   `"_managedBy":"director"` so they coexist with GSD and any hand-rolled hooks. Re-running changes nothing.
-- It materializes the two boundary slash commands: `/director:handoff` (pause a workstream, park the baton)
-  and `/director:complete` (close out a finished, merged workstream). More on both in section 5.
+- It materializes the three slash commands: `/director:adopt` (informed adoption — see section 3),
+  `/director:handoff` (pause a workstream, park the baton) and `/director:complete` (close out a finished,
+  merged workstream). More on the boundary pair in section 5.
 
 Verify it took:
 
@@ -96,42 +97,37 @@ director adopt
 
 ```text
 adopted some-project-main-1a2b3c4d
-  CHARTER scaffolded at ~/.director/projects/<repo-key>/CHARTER.md — fill in goal / non-goals / risk-line
+  CHARTER scaffolded at ~/.director/projects/<repo-key>/CHARTER.md — fill in goal / non-goals / risk-line, or run /director:adopt in a session to draft it from the repo's docs
 ```
 
-A bare `adopt` does **Tier 0 only** — the fast, quiet floor:
+A bare `adopt` **registers** — the fast, deterministic floor: it derives a **stable workstream identity**
+(handles worktrees, remotes, forks), creates `projects/<repo-key>/` in the hub, scaffolds a ~3-line
+**CHARTER stub**, and registers the workstream. Re-adopting never clobbers an edited CHARTER.
 
-- **Tier 0** — derives a **stable workstream identity** (handles worktrees, remotes, forks), creates
-  `projects/<repo-key>/` in the hub, scaffolds a ~3-line **CHARTER stub**, and registers the workstream.
-- **Tier 1 (opt-in, `--scan`)** — scans the repo's *tracked* files for open loops
-  (`TODO`/`FIXME`/`DEFERRED`/`HACK`/`XXX` and unchecked `- [ ]` items) and lets you import the ones you pick
-  as `open-item` events. It's opt-in because the keyword scan is noisy on real repos (it can surface dozens of
-  false hits from docs/comments); the richer, accurate brownfield import is the coming Tier-2 fan-out. With
-  `--scan` you'd see:
+The understand layer is the **`/director:adopt`** slash command (installed in section 1), run inside a
+Claude Code session. It starts with the same `director adopt`, then fans out read-only agents over the repo
+(docs and planning files, code TODOs read *in context*, git state, the repo's self-descriptions) and brings
+back two things for your confirmation:
 
-```text
-  found 3 open-loop candidate(s):
-    [1] internal/api/handler.go:42  // TODO: rate-limit this endpoint
-    [2] README.md:88  - [ ] document the deploy flow
-    [3] db/schema.sql:5  -- FIXME: add an index on user_id
-  import which as open-items? [all / none / e.g. 1,3,5]:
-```
+- a **CHARTER proposal** — every claim cited, inferences marked, plus the questions only you can answer —
+  so adoption starts from an informed draft instead of a blank template;
+- the repo's open loops **triaged**: genuinely **in-flight** work (imported as `open-item` events after your
+  confirm; git state must corroborate the prose, which keeps this bucket small), **backlog** (stays in your
+  tracker and TODO docs), **doc-stamps** (feed the CHARTER), and **fossils**. Every bucket's count is
+  reported; nothing is imported silently.
 
-Variants:
+Re-run `/director:adopt` anytime — on an adopted repo it refreshes a stale CHARTER (shown as a diff) and
+triages only loops the log doesn't already carry.
 
-```bash
-director adopt --scan         # also run the Tier-1 scan; pick which open-loops to import
-director adopt --import-all   # scan and import every discovered loop, no prompt
-director adopt path/to/repo --scan   # flags may go before or after <dir>
-```
+### The CHARTER — where you steer
 
-### Fill the CHARTER — the one manual step
-
-`adopt` scaffolds `~/.director/projects/<repo-key>/CHARTER.md` with placeholders. Editing it is the **only**
-thing you must do by hand, because intent isn't in the code:
+`adopt` scaffolds `~/.director/projects/<repo-key>/CHARTER.md` with placeholders. Intent isn't in the code,
+so the content comes from you — but you don't have to write it from scratch: run **`/director:adopt`** and
+confirm the proposal it drafts from the repo's own docs (the recommended path), or hand-edit the stub (the
+fallback, and still the way to steer it afterwards):
 
 ```markdown
-# CHARTER: some-project-main-1a2b3c4d
+# CHARTER: github.com-acme-some-project
 
 - **Goal:** ship the v2 billing API behind a flag, dark-launched to 5% of traffic
 - **Non-goals:** migrating the legacy invoice store; touching the auth service
@@ -231,7 +227,7 @@ what `brief` shows and what the next session starts from.
 | **A row reads `idle` or `dormant` though the session is active** | Liveness is derived from heartbeat age. `PostToolUse` refreshes it on every tool call, so a session making no tool calls can age to `idle` (after 4h) then `dormant` (after 2d). Dormant is the normal between-blocks state, not an error. |
 | **A row reads `gone` despite a fresh heartbeat** | Liveness also checks that the workstream's branch still exists. A branch that no longer exists reads `gone` by design (merged away and deleted, or the whole worktree directory is gone: any failed branch check counts), meaning the workstream looks complete: close it out with `/director:complete`. Rows without branch/dir info fail open and age out by TTL only. |
 | **`status` shows "N unreadable fleet row(s) skipped"** | One or more row files under `$DIRECTOR_HUB/fleet/` are corrupt; the cockpit skips them rather than failing. Inspect/remove the bad files there. |
-| **`adopt` imported nothing** | A bare `adopt` is **Tier 0 only by design** — it doesn't scan. Use `--scan` (pick) or `--import-all`. The scan covers only *tracked* files (via `git ls-files`) from the repo root; `git add` untracked files first if they should be scanned. |
+| **`adopt` imported nothing** | By design — the CLI registers only (identity + CHARTER stub + fleet row). The import path is `/director:adopt` in a Claude Code session: it triages the repo's real open loops and imports only what you confirm. |
 | **`install` refused** | Your `~/.claude/settings.json` has a malformed (non-object) `hooks` value. Director won't overwrite data it doesn't understand — fix the file, then re-run. |
 
 ---
@@ -244,7 +240,7 @@ committable, ignoring the volatile `fleet/` and `health/`):
 
 ```bash
 export DIRECTOR_HUB=$(git rev-parse --show-toplevel)
-director adopt          # Tier 0 only; avoid --import-all here — the keyword scan floods a doc-heavy repo
+director adopt          # register only; run /director:adopt in a session for the informed pass
 director brief
 ```
 

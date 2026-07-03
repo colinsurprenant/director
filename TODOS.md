@@ -27,7 +27,7 @@ v1 = visibility-first CLI (see `docs/specs/2026-06-03-director-coordination-desi
 ## The soul (after demand is proven)
 - **Shadow-fleet autonomy (C)** — opt-in dry-run mirror that coordinates in parallel and surfaces a ranked "promote these diffs" queue; human approves promotions, not micro-decisions.
   - *Why:* the invisible-auto-coordination soul, expressed safely. Build only once visibility v1 has users who want autonomy.
-- **Brownfield adoption tool (B)** — explicitly-invoked fan-out (built-in Explore agents) that maps a repo, classifies docs (living/record/rot), drafts an arc42 overview + CHARTER, seeds the log. Default adoption stays a CHARTER stub.
+- **Brownfield adoption tool (B)** — ✅ core shipped as `/director:adopt` (informed adoption: CHARTER proposal + triaged open-loop import; see `docs/specs/2026-07-03-informed-adoption-design.md`). Remaining someday: doc living/record/rot classification and an arc42 overview draft.
 
 ## Later
 - **CHARTER freshness sweep** — `area→doc` join flags living docs stale vs decisions touching their area.

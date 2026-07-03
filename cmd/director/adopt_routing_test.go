@@ -8,8 +8,9 @@ import (
 	"testing"
 )
 
-// gitInitRepo creates a real git repo at dir with one tracked file carrying a TODO,
-// so adopt's Tier-1 scan has a candidate to find when it is asked to run.
+// gitInitRepo creates a real git repo at dir with one tracked file carrying a
+// TODO marker — the bait a keyword scan would have imported; the log-emptiness
+// assertion below proves nothing bites.
 func gitInitRepo(t *testing.T, dir string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -56,29 +57,37 @@ func projectLogEventCount(t *testing.T, hub string) int {
 	return total
 }
 
-// TestRunAdoptScanIsOptIn locks the demoted-scan default: a bare `adopt` does
-// Tier-0 only (no scan, nothing imported), and the keyword scan runs only when
-// explicitly requested — exercised here via --import-all (which skips the prompt,
-// so no stdin is needed).
-func TestRunAdoptScanIsOptIn(t *testing.T) {
+// TestRunAdoptRegistersOnly locks adopt's deterministic floor: `adopt` registers
+// (identity + CHARTER + fleet row) and imports NOTHING into the log — the import
+// path is the model-orchestrated /director:adopt command, not the CLI. The
+// removed keyword-scan flags must fail loudly as unknown, not be silently
+// accepted.
+func TestRunAdoptRegistersOnly(t *testing.T) {
 	hub := t.TempDir()
 	t.Setenv("DIRECTOR_HUB", hub)
 	repo := filepath.Join(t.TempDir(), "proj")
 	gitInitRepo(t, repo)
 
-	// Bare adopt: Tier-0 only — the TODO must NOT be imported.
 	if code := runAdopt([]string{repo}); code != 0 {
 		t.Fatalf("adopt exit = %d, want 0", code)
 	}
 	if n := projectLogEventCount(t, hub); n != 0 {
-		t.Fatalf("bare adopt imported %d event(s); the default must be Tier-0 only", n)
+		t.Fatalf("adopt imported %d event(s); the CLI must register only", n)
 	}
 
-	// --import-all: opts into the scan and imports the TODO → at least one event.
-	if code := runAdopt([]string{"--import-all", repo}); code != 0 {
-		t.Fatalf("adopt --import-all exit = %d, want 0", code)
+	for _, removed := range []string{"--scan", "--import-all"} {
+		if code := runAdopt([]string{removed, repo}); code != 2 {
+			t.Fatalf("adopt %s exit = %d, want 2 (flag removed with the keyword scan)", removed, code)
+		}
 	}
-	if n := projectLogEventCount(t, hub); n < 1 {
-		t.Fatalf("adopt --import-all imported %d event(s), want >=1", n)
+
+	// A second positional is rejected loudly, not silently dropped.
+	if code := runAdopt([]string{repo, "extra"}); code != 2 {
+		t.Fatalf("adopt <dir> extra exit = %d, want 2", code)
+	}
+
+	// Non-git dir: the remedy branch exits 1 (and registers nothing new).
+	if code := runAdopt([]string{t.TempDir()}); code != 1 {
+		t.Fatalf("adopt on non-git dir exit = %d, want 1", code)
 	}
 }

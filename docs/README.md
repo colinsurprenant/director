@@ -12,6 +12,7 @@ Two kinds of documents live here, and the distinction is deliberate (it mirrors 
 
 - [`specs/2026-06-03-director-coordination-design.md`](specs/2026-06-03-director-coordination-design.md) — the v1 design, including the corrections from adversarial review that shaped it.
 - [`specs/2026-07-01-close-out-commands-design.md`](specs/2026-07-01-close-out-commands-design.md) — the close-out commands design (`/director:complete`, `/director:handoff`, the `open-items` verb).
+- [`specs/2026-07-03-informed-adoption-design.md`](specs/2026-07-03-informed-adoption-design.md) — the informed-adoption design (`/director:adopt`: CHARTER proposal + triaged open-loop import; keyword-scan removal).
 - [`plans/2026-06-08-director-v1.md`](plans/2026-06-08-director-v1.md) — the v1 build plan as executed.
 - [`review-2026-06-08-director-v1.md`](review-2026-06-08-director-v1.md) — the v1 pre-merge review, findings and resolutions.
 - [`dogfood.md`](dogfood.md) — the pre-code validation exercise (superseded before v1 shipped).

@@ -111,7 +111,7 @@ func writeProjectBrief(b *strings.Builder, hub, repoKey string) error {
 
 // charterOutlook returns the project's CHARTER.md verbatim (trimmed) so the human
 // reads the destination as written, or a stable "no charter yet" line when it is
-// absent — adoption Tier 0 writes a CHARTER stub, so absence is the pre-adoption
+// absent — `director adopt` writes a CHARTER stub, so absence is the pre-adoption
 // state, a graceful degrade rather than an error (§5.4, §6).
 func charterOutlook(hub, repoKey string) string {
 	path := filepath.Join(hub, "projects", repoKey, "CHARTER.md")

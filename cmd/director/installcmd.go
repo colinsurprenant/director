@@ -37,7 +37,7 @@ func runInstall(args []string) int {
 		fmt.Fprintf(os.Stderr, "install: resolve commands dir for confirmation: %v\n", err)
 		return 0
 	}
-	fmt.Printf("  commands written to %s (/director:complete, /director:handoff; set DIRECTOR_COMMANDS_DIR to override)\n", commandsDir)
+	fmt.Printf("  commands written to %s (/director:adopt, /director:complete, /director:handoff; set DIRECTOR_COMMANDS_DIR to override)\n", commandsDir)
 	return 0
 }
 

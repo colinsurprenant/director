@@ -18,7 +18,7 @@ The LOG (plus the deliberately-edited living docs) is the only system of record;
 
 ![Director demo: a session emits decisions, open items, and a handoff as it works; three weeks later a cold session rehydrates from the log with brief and status, then closes the loop with resolve](docs/assets/director-demo.gif)
 
-> **Status: v1.** Director ships the hook-first coordination core plus repo adoption with an opt-in open-loop scan (see [Status & scope](#status--scope)). Single-machine.
+> **Status: v1.** Director ships the hook-first coordination core plus informed repo adoption (see [Status & scope](#status--scope)). Single-machine.
 
 > **New here?** [`docs/getting-started.md`](docs/getting-started.md) is the task-oriented first-run guide (install → adopt → first session → cockpit), plus how the model uses Director and a troubleshooting section. This README is the reference.
 
@@ -49,7 +49,7 @@ director install
 
 1. **Writes the hook shims.** The shims are embedded in the binary, so `install` materializes them (executable) into the hooks dir — there is **no manual copy step**.
 2. **Merges the hooks into `~/.claude/settings.json`.** Every entry it writes carries a `"_managedBy":"director"` tag, so Director's hooks run **alongside** GSD's and any hand-rolled hooks without clobbering them. Re-running adds nothing; `director uninstall` removes only Director's tagged entries **and** the shims and command files it wrote. Pass `--settings <path>` to target a project or test settings file.
-3. **Materializes the slash commands.** The `/director:complete` and `/director:handoff` commands (also embedded) are written under `~/.claude/commands/director/`, namespaced so they never clobber a user's own `complete`/`handoff` commands.
+3. **Materializes the slash commands.** The `/director:adopt`, `/director:complete`, and `/director:handoff` commands (also embedded) are written under `~/.claude/commands/director/`, namespaced so they never clobber a user's own commands.
 
 The installed hook commands point at the **shims**, not the binary directly, so rebuilding or relocating `director` never requires rewriting `settings.json` (re-run `install` to refresh the shims to the current binary). If `~/.claude/settings.json` already has a malformed (non-object) `hooks` value, `install` refuses rather than overwrite it.
 
@@ -65,23 +65,22 @@ The installed hook commands point at the **shims**, not the binary directly, so 
 
 ## Adopt an existing repo
 
-A director's projects already exist, so adoption of existing repos is on the critical path. Adoption is **tiered by depth**: Tier 0 registers the repo (identity + CHARTER + fleet row), Tier 1 optionally scans it for open loops to import, and Tier 2 (planned) is an LLM-assisted import of the repo's real backlog. From inside (or pointing at) a repo:
+A director's projects already exist, so adoption of existing repos is on the critical path. It has two layers: **`director adopt` registers; `/director:adopt` understands.** From inside (or pointing at) a repo:
 
 ```bash
 director adopt [<dir>]        # defaults to the current directory
 ```
 
-`adopt` (Tier 0) derives the repo's **stable workstream identity** (handling worktrees, remotes, and forks — see [Identity](#identity)), creates `projects/<repo-key>/` in the hub, scaffolds a ~3-line **CHARTER stub** there, and registers the workstream in the fleet. Filling in the CHARTER (goal, non-goals, and the standing "needs a human" risk line) is the one manual step today; a planned adopt-time pass will instead draft a **CHARTER proposal** from the repo's main docs (README, architecture notes, planning files) for you to confirm, so adoption starts from an informed draft rather than a blank stub. Re-adopting never clobbers an edited CHARTER.
+Adoption **requires a git repository** — workstream identity and liveness are derived from git. On a non-git directory `adopt` fails fast and tells you to `git init` first (an empty init is enough).
 
-A bare `adopt` stops there (Tier 0). With `--scan` it also runs **Tier 1**: scans the repo's *tracked* files for open loops — `TODO` / `FIXME` / `DEFERRED` / `HACK` / `XXX` and unchecked markdown checklist items (`- [ ]`) — and offers to import the ones you pick as `open-item` events. Tier 1 is opt-in because this keyword scan is noisy on real repos (it surfaces docs/comments/test fixtures, not just real loops); the accurate brownfield import is the planned **Tier-2 LLM-assisted import**. The point of importing is to consolidate loops that would otherwise scatter between memory and per-project docs into their one home in the LOG.
+`adopt` (the register layer) derives the repo's **stable workstream identity** (handling worktrees, remotes, and forks — see [Identity](#identity)), creates `projects/<repo-key>/` in the hub, scaffolds a ~3-line **CHARTER stub** there, and registers the workstream in the fleet. Re-adopting never clobbers an edited CHARTER. That is all the CLI does — deterministic, done in seconds.
 
-```bash
-director adopt                # Tier 0 only — identity + CHARTER + register
-director adopt --scan         # also scan tracked files; pick which open-loops to import
-director adopt --import-all   # scan and import every discovered open-loop, no prompt
-```
+The understand layer is **`/director:adopt`**, a slash command installed by `director install` and run inside a Claude Code session. It starts with the same `director adopt`, then fans out read-only agents over the repo — docs and planning files, code TODOs read *in context*, git state, the repo's self-descriptions — and brings back two things for your confirmation:
 
-Flags may go before or after the optional `<dir>` (`director adopt path/to/repo --scan`).
+- a **CHARTER proposal** (goal, non-goals, risk line): every claim cited, inferences marked `(inferred)`, plus the short list of questions only you can answer. Approved, it replaces the stub; adoption starts from an informed draft instead of a blank template.
+- the repo's open loops, **triaged** into four buckets: genuinely **in-flight** work (imported as `open-item` events after your confirm — git state must corroborate the prose, which keeps this bucket naturally small), **backlog** (stays in the repo's own tracker and planning docs; Director is not the tracker), **doc-stamps** (facts wearing a TODO costume — they feed the CHARTER), and **fossils**. Every bucket's count is reported; nothing is imported silently.
+
+Re-running `/director:adopt` on an adopted repo is the refresh path: the proposal diffs against your current CHARTER, and triage dedupes against the log's existing open-set.
 
 ## Commands
 
@@ -102,7 +101,7 @@ fleet lifecycle (hook-emitted):
   done        archive the workstream's row
 
 adoption & install:
-  adopt       bring an existing repo into the fleet (CHARTER + open-loop import)
+  adopt       register an existing repo (identity + CHARTER stub + fleet row)
   install     idempotent merge of Director hooks into settings.json
   uninstall   remove only Director-managed hook entries
 
@@ -170,9 +169,9 @@ A workstream's id is `<repo>-<branch>-<shortid>`, derived deterministically from
 
 ## Status & scope
 
-**In v1:** the hook-first coordination core (CLI write path, identity, event store, fleet/liveness, `render`/`brief`/`status`, hooks + the `_managedBy` installer, the protocol skill) and **adoption Tiers 0–1** (`adopt`: identity + CHARTER + register, plus an opt-in `--scan` open-loop import — see [Adopt an existing repo](#adopt-an-existing-repo)). Single-machine.
+**In v1:** the hook-first coordination core (CLI write path, identity, event store, fleet/liveness, `render`/`brief`/`status`, hooks + the `_managedBy` installer, the protocol skill) and **informed adoption** (`adopt` registers; `/director:adopt` drafts the CHARTER proposal and runs the triaged open-loop import — see [Adopt an existing repo](#adopt-an-existing-repo)). Single-machine.
 
-**Deferred:** the **Tier-2 brownfield import** (LLM-assisted: parallel code-mapping, doc reconciliation, a drafted CHARTER proposal, back-dated decision records) is the immediate fast-follow. A **Codex adapter** is on the roadmap (see `TODOS.md`): the core is already agent-agnostic (plain NDJSON log + CLI write path), so only the thin delivery layer (injection, heartbeat, nudges) is Claude Code-specific today. `brief --synthesize` (model-narrated prose) is deferred — v1 ships the deterministic brief. A background monitor/reaper, notifications, a freshness sweep, and multi-machine sync come later.
+**Deferred:** deeper brownfield analysis beyond the informed-adopt pass (doc living/record/rot reconciliation, an arc42 overview draft, back-dated decision records). A **Codex adapter** is on the roadmap (see `TODOS.md`): the core is already agent-agnostic (plain NDJSON log + CLI write path), so only the thin delivery layer (injection, heartbeat, nudges) is Claude Code-specific today. `brief --synthesize` (model-narrated prose) is deferred — v1 ships the deterministic brief. A background monitor/reaper, notifications, a freshness sweep, and multi-machine sync come later.
 
 **Quality gate** (the bar for "done"):
 
@@ -208,7 +207,8 @@ go build -o bin/director ./cmd/director
 sudo install bin/director /usr/local/bin/director
 director install
 
-# 2. Bring an existing repo into the fleet (fill in the CHARTER it scaffolds)
+# 2. Bring an existing repo into the fleet — then run /director:adopt in a
+#    session to draft its CHARTER from the repo's docs (or fill in the stub by hand)
 cd ~/dev/src/some-project
 director adopt
 

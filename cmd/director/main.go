@@ -100,7 +100,7 @@ fleet lifecycle (hook-emitted):
   done        archive the workstream's row
 
 adoption & install:
-  adopt       bring an existing repo into the fleet (CHARTER + open-loop import)
+  adopt       register an existing repo (identity + CHARTER stub + fleet row)
   install     idempotent merge of Director hooks into settings.json
   uninstall   remove only Director-managed hook entries
 

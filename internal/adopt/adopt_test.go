@@ -2,15 +2,56 @@ package adopt
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/colinsurprenant/director/internal/event"
 	"github.com/colinsurprenant/director/internal/identity"
 )
+
+// TestAdoptNonGitDirFailsFast: adoption is structurally git-dependent, so a
+// non-git dir must fail before any hub state is touched, with the typed error
+// the CLI turns into the `git init` remedy.
+func TestAdoptNonGitDirFailsFast(t *testing.T) {
+	hub := t.TempDir()
+	dir := t.TempDir() // deliberately not a git repo
+
+	if _, err := Adopt(hub, dir); !errors.Is(err, identity.ErrNotGitRepo) {
+		t.Fatalf("Adopt on non-git dir: got %v, want identity.ErrNotGitRepo", err)
+	}
+	// The whole hub must stay empty — not just projects/ non-empty: an empty
+	// projects/ dir would still be state left behind by a failed adopt.
+	entries, err := os.ReadDir(hub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) > 0 {
+		t.Fatalf("Adopt on non-git dir left hub state behind: %v", entries)
+	}
+}
+
+// TestAdoptEmptyInitRepo locks the spec's load-bearing claim that an empty
+// `git init` (no commits, no remote) is sufficient to adopt — the git-init
+// remedy the CLI prints depends on it staying true.
+func TestAdoptEmptyInitRepo(t *testing.T) {
+	hub := t.TempDir()
+	repo := filepath.Join(t.TempDir(), "fresh")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(t, repo, "init", "-q")
+
+	res, err := Adopt(hub, repo)
+	if err != nil {
+		t.Fatalf("Adopt on an empty git init: %v", err)
+	}
+	if !res.CharterScaffolded {
+		t.Error("empty-init adopt should scaffold the CHARTER")
+	}
+}
 
 // gitInit creates a real git repo at dir with the deterministic config the
 // identity package needs (no signing, fixed author) and one commit. It mirrors the
@@ -26,19 +67,6 @@ func gitInit(t *testing.T, dir string) {
 	mustGit(t, dir, "config", "user.name", "tester")
 	mustGit(t, dir, "config", "commit.gpgsign", "false")
 	mustGit(t, dir, "commit", "-q", "--allow-empty", "-m", "init")
-}
-
-// writeFile writes content to dir/rel, creating parent dirs as needed.
-func writeFile(t *testing.T, dir, rel, content string) string {
-	t.Helper()
-	full := filepath.Join(dir, filepath.FromSlash(rel))
-	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return full
 }
 
 func mustGit(t *testing.T, dir string, args ...string) string {
@@ -141,193 +169,4 @@ func fleetRowExists(t *testing.T, hub, workstream string) bool {
 		}
 	}
 	return false
-}
-
-// TestScanOpenLoops is Task 7.2 (scan half): TODO/FIXME/deferred/checklist markers
-// in tracked files surface as candidates; untracked files and .git are ignored.
-func TestScanOpenLoops(t *testing.T) {
-	repo := filepath.Join(t.TempDir(), "proj")
-	gitInit(t, repo)
-
-	writeFile(t, repo, "main.go", "package main\n// TODO: wire the flag\nfunc main() {}\n// FIXME later\n")
-	writeFile(t, repo, "NOTES.md", "# Notes\n- [ ] finish the import path\n- [x] already done\nplain line\nDeferred: revisit caching\n")
-	writeFile(t, repo, "clean.go", "package clean\n// all good here\n")
-	// Untracked file with a marker — must NOT surface.
-	writeFile(t, repo, "untracked.go", "// TODO: this is untracked and should be ignored\n")
-
-	mustGit(t, repo, "add", "main.go", "NOTES.md", "clean.go")
-	mustGit(t, repo, "commit", "-q", "-m", "seed")
-
-	cands, truncated, err := ScanOpenLoops(repo)
-	if err != nil {
-		t.Fatalf("ScanOpenLoops: %v", err)
-	}
-	if truncated {
-		t.Error("small fixture should not be truncated")
-	}
-
-	wantContains := []string{
-		"TODO: wire the flag",
-		"FIXME later",
-		"- [ ] finish the import path",
-		"Deferred: revisit caching",
-	}
-	for _, want := range wantContains {
-		if !hasCandidateContaining(cands, want) {
-			t.Errorf("missing candidate containing %q; got %+v", want, cands)
-		}
-	}
-
-	// Negative cases: checked checklist, clean lines, and untracked files.
-	for _, unwanted := range []string{"already done", "all good here", "untracked"} {
-		if hasCandidateContaining(cands, unwanted) {
-			t.Errorf("did not expect a candidate containing %q", unwanted)
-		}
-	}
-
-	// The TODO candidate carries its source file:line.
-	for _, c := range cands {
-		if strings.Contains(c.Text, "TODO: wire the flag") {
-			if c.File != "main.go" || c.Line != 2 {
-				t.Errorf("TODO candidate file/line = %s:%d, want main.go:2", c.File, c.Line)
-			}
-		}
-	}
-}
-
-// TestScanOpenLoopsFromSubdir verifies the scan covers the WHOLE repo even when
-// invoked from a nested subdirectory — `git ls-files` from a subdir would
-// otherwise list only that subtree and silently miss loops elsewhere (M5).
-func TestScanOpenLoopsFromSubdir(t *testing.T) {
-	repo := filepath.Join(t.TempDir(), "proj")
-	gitInit(t, repo)
-
-	writeFile(t, repo, "root.go", "// TODO: at the repo root\n")
-	writeFile(t, repo, "sub/deep.go", "// FIXME: in a subdir\n")
-	mustGit(t, repo, "add", "root.go", "sub/deep.go")
-	mustGit(t, repo, "commit", "-q", "-m", "seed")
-
-	// Scan from the nested subdir: it must still find the repo-root loop.
-	cands, _, err := ScanOpenLoops(filepath.Join(repo, "sub"))
-	if err != nil {
-		t.Fatalf("ScanOpenLoops from subdir: %v", err)
-	}
-	if !hasCandidateContaining(cands, "TODO: at the repo root") {
-		t.Errorf("scan from subdir missed the repo-root loop; got %+v", cands)
-	}
-	if !hasCandidateContaining(cands, "FIXME: in a subdir") {
-		t.Errorf("scan from subdir missed the subdir loop; got %+v", cands)
-	}
-	// Paths are repo-root-relative (as ls-files reports from the root).
-	for _, c := range cands {
-		if strings.Contains(c.Text, "at the repo root") && c.File != "root.go" {
-			t.Errorf("root loop file = %q, want repo-root-relative root.go", c.File)
-		}
-	}
-}
-
-// TestScanOpenLoopsUnreadableFileIsTruncated locks the §9 fix: a tracked, regular,
-// in-cap file that can't be read (here chmod 0000) is skipped but reported via
-// truncated, so adopt never claims a complete scan when a real file was missed.
-func TestScanOpenLoopsUnreadableFileIsTruncated(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("chmod 0000 does not block reads when running as root")
-	}
-	repo := filepath.Join(t.TempDir(), "proj")
-	gitInit(t, repo)
-
-	writeFile(t, repo, "readable.go", "// TODO: this one scans fine\n")
-	unreadable := writeFile(t, repo, "locked.go", "// TODO: cannot read me\n")
-	mustGit(t, repo, "add", "readable.go", "locked.go")
-	mustGit(t, repo, "commit", "-q", "-m", "seed")
-
-	if err := os.Chmod(unreadable, 0o000); err != nil {
-		t.Fatalf("chmod: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o644) }) // let TempDir cleanup remove it
-
-	cands, truncated, err := ScanOpenLoops(repo)
-	if err != nil {
-		t.Fatalf("ScanOpenLoops: %v", err)
-	}
-	if !truncated {
-		t.Error("an unreadable tracked file must make the scan report truncated (partial)")
-	}
-	// The readable file's loop still surfaces — one bad file doesn't blind the scan.
-	if !hasCandidateContaining(cands, "this one scans fine") {
-		t.Errorf("readable file's loop missing despite an unreadable sibling: %+v", cands)
-	}
-}
-
-func hasCandidateContaining(cands []Candidate, sub string) bool {
-	for _, c := range cands {
-		if strings.Contains(c.Text, sub) {
-			return true
-		}
-	}
-	return false
-}
-
-// TestImport is Task 7.2 (import half): a chosen subset of candidates is emitted as
-// open-item events into the workstream's LOG, asserted via store.ReadAll(), with
-// the candidate text carried in the body.
-func TestImport(t *testing.T) {
-	hub := t.TempDir()
-	repo := filepath.Join(t.TempDir(), "proj")
-	gitInit(t, repo)
-
-	ws, err := identity.Resolve(repo)
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-
-	chosen := []Candidate{
-		{File: "main.go", Line: 2, Text: "TODO: wire the flag"},
-		{File: "NOTES.md", Line: 3, Text: "- [ ] finish the import path"},
-	}
-
-	emitted, err := Import(hub, ws, chosen)
-	if err != nil {
-		t.Fatalf("Import: %v", err)
-	}
-	if len(emitted) != len(chosen) {
-		t.Fatalf("emitted %d events, want %d", len(emitted), len(chosen))
-	}
-
-	store := event.NewStore(hub, ws.RepoKey)
-	got, err := store.ReadAll()
-	if err != nil {
-		t.Fatalf("ReadAll: %v", err)
-	}
-	if len(got) != len(chosen) {
-		t.Fatalf("log has %d events, want %d", len(got), len(chosen))
-	}
-
-	for i, ev := range got {
-		if ev.Type != event.KindOpenItem {
-			t.Errorf("event %d type = %q, want open-item", i, ev.Type)
-		}
-		if ev.Status != event.StatusOpen {
-			t.Errorf("event %d status = %q, want open", i, ev.Status)
-		}
-		if ev.Workstream != ws.ID {
-			t.Errorf("event %d workstream = %q, want %q", i, ev.Workstream, ws.ID)
-		}
-		// The candidate text travels into the body (with its file:line provenance).
-		if !strings.Contains(ev.Body, chosen[i].Text) {
-			t.Errorf("event %d body %q missing candidate text %q", i, ev.Body, chosen[i].Text)
-		}
-		if !strings.Contains(ev.Body, chosen[i].File) {
-			t.Errorf("event %d body %q missing source file %q", i, ev.Body, chosen[i].File)
-		}
-	}
-
-	// An empty chosen set is a no-op: no events, no error.
-	none, err := Import(hub, ws, nil)
-	if err != nil {
-		t.Fatalf("Import(nil): %v", err)
-	}
-	if len(none) != 0 {
-		t.Errorf("Import(nil) emitted %d events, want 0", len(none))
-	}
 }
