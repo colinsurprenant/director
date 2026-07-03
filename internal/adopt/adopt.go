@@ -1,17 +1,13 @@
 // Package adopt brings an existing repo under Director with near-zero ceremony
-// (§6, the tiered-adoption v1 line). Tier 0 is the operational floor — derive the
-// stable identity, scaffold a CHARTER stub, and register the workstream in the
-// fleet — so a brownfield repo is coordinated in ~5 minutes. Tier 1 is the
-// assisted import of a repo's *existing* open loops (TODO/FIXME/deferred/checklist
-// markers) into the LOG, consolidating the §17 MEMORY-vs-docs scatter into its one
-// home. The heavy Tier 2 fan-out (code-mapping, doc living/record/rot
-// reconciliation, arc42 synthesis) is deferred to a fast-follow and intentionally
-// not built here.
+// (§6). The CLI floor is deterministic: derive the stable identity, scaffold a
+// CHARTER stub, and register the workstream in the fleet, so a brownfield repo
+// is registered in seconds. The analysis pass — CHARTER proposal + triaged
+// open-loop import — is the model-orchestrated /director:adopt command
+// (docs/specs/2026-07-03-informed-adoption-design.md); it drives this floor via
+// the CLI and deliberately never lives inside the binary.
 //
-// Every function takes explicit params (hub, dir, the resolved workstream) and
-// performs no prompting itself, so the package is fully testable against real git
-// repos; the thin interactive CLI that prompts for CHARTER lines and presents
-// candidates is wired separately by cmd/director.
+// Every function takes explicit params (hub, dir), performs no prompting, and is
+// fully testable against real git repos.
 package adopt
 
 import (
@@ -56,7 +52,7 @@ type Result struct {
 	CharterScaffolded bool   // true only when Adopt wrote the stub this run
 }
 
-// Adopt is the Tier-0 operational floor for the repo at dir against the hub.
+// Adopt is the deterministic operational floor for the repo at dir against the hub.
 //
 // It (1) derives the stable identity via identity.Resolve — which already handles
 // worktrees, remotes, and forks and is derive-once, so a re-adopt resolves the
