@@ -24,13 +24,14 @@ Get the `director` binary onto your `PATH` by any of the three paths below, then
 Each tagged release publishes prebuilt binaries for macOS and Linux (amd64 and arm64) as
 `director_<tag>_<os>_<arch>.tar.gz`, plus a `checksums.txt`, on the
 [releases page](https://github.com/colinsurprenant/director/releases). Download the tarball for your
-platform, verify it, and put the binary on your `PATH`. For example, on an Apple Silicon Mac:
+platform, verify it, and put the binary on your `PATH`. For example, on an Apple Silicon Mac
+(substitute the [latest tag](https://github.com/colinsurprenant/director/releases/latest) for `v1.3.0`):
 
 ```bash
-curl -LO https://github.com/colinsurprenant/director/releases/download/v1.1.0/director_v1.1.0_darwin_arm64.tar.gz
-curl -LO https://github.com/colinsurprenant/director/releases/download/v1.1.0/checksums.txt
+curl -LO https://github.com/colinsurprenant/director/releases/download/v1.3.0/director_v1.3.0_darwin_arm64.tar.gz
+curl -LO https://github.com/colinsurprenant/director/releases/download/v1.3.0/checksums.txt
 shasum -a 256 --check --ignore-missing checksums.txt   # on Linux: sha256sum --check --ignore-missing
-tar -xzf director_v1.1.0_darwin_arm64.tar.gz
+tar -xzf director_v1.3.0_darwin_arm64.tar.gz
 sudo install director /usr/local/bin/director          # or copy anywhere on PATH
 ```
 
@@ -49,7 +50,7 @@ sudo install bin/director /usr/local/bin/director   # or copy anywhere on PATH
 ```
 
 Confirm the binary resolves with `director version`. A release binary prints its tag (e.g.
-`director v1.1.0`); a `go install` or source build prints `director dev`, because the version is stamped
+`director v1.3.0`); a `go install` or source build prints `director dev`, because the version is stamped
 only at release time.
 
 ### Wire the hooks
