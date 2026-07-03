@@ -103,6 +103,10 @@ Codex-specific notes:
 - Ground truth injection, liveness, and close-out work identically on both agents. The Stop emit-guard
   and the context-fill handoff nudge are Claude Code-only for now (they read CC's transcript format and
   stay safely inert on Codex).
+- Codex exposes no session id to shell commands, so a hand-run `director done` (including
+  `$director-complete`'s final step) may report "row not found" there — not a failure: the Stop hook
+  archives the session's row at turn end, and everything durable was already written. Targeted
+  `done --workstream <id>` is unaffected.
 
 `director uninstall --codex` removes only the tagged entries and the three skill directories. The hook
 shims are shared between the two agents: a `--codex` uninstall leaves them for a Claude Code install,

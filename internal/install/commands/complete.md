@@ -28,5 +28,6 @@ You are running the TERMINAL close-out for a workstream: its task is finished an
 
 6. **Archive the fleet row(s):**
    `director done`   (for a sibling: `director done --workstream <id>` — archives every row it left behind)
+   If bare `director done` reports no row found, that is NOT a failure of this close-out: the session's row is archived by the Stop hook at turn end (and on Codex the CLI cannot see this session's id at all) — everything durable was already written in steps 4–5. Move on.
 
 7. **Confirm to me plainly:** which items you resolved, which stay open (now inherited by `main`), and the note's ULID. Do NOT emit a handoff event.
