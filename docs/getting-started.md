@@ -119,13 +119,15 @@ back two things for your confirmation:
 Re-run `/director:adopt` anytime — on an adopted repo it refreshes a stale CHARTER (shown as a diff) and
 triages only loops the log doesn't already carry.
 
-### Fill the CHARTER — the one manual step
+### The CHARTER — where you steer
 
-`adopt` scaffolds `~/.director/projects/<repo-key>/CHARTER.md` with placeholders. Editing it is the **only**
-thing you must do by hand, because intent isn't in the code:
+`adopt` scaffolds `~/.director/projects/<repo-key>/CHARTER.md` with placeholders. Intent isn't in the code,
+so the content comes from you — but you don't have to write it from scratch: run **`/director:adopt`** and
+confirm the proposal it drafts from the repo's own docs (the recommended path), or hand-edit the stub (the
+fallback, and still the way to steer it afterwards):
 
 ```markdown
-# CHARTER: some-project-main-1a2b3c4d
+# CHARTER: github.com-acme-some-project
 
 - **Goal:** ship the v2 billing API behind a flag, dark-launched to 5% of traffic
 - **Non-goals:** migrating the legacy invoice store; touching the auth service

@@ -207,7 +207,8 @@ go build -o bin/director ./cmd/director
 sudo install bin/director /usr/local/bin/director
 director install
 
-# 2. Bring an existing repo into the fleet (fill in the CHARTER it scaffolds)
+# 2. Bring an existing repo into the fleet — then run /director:adopt in a
+#    session to draft its CHARTER from the repo's docs (or fill in the stub by hand)
 cd ~/dev/src/some-project
 director adopt
 
