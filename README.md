@@ -9,6 +9,7 @@ Director moves you from **message bus** to **reviewer**. It is a standalone Go C
 - Sessions **`emit`** typed events as they work (`decision` · `open-item` · `handoff` · `note`) and **`resolve`** open loops when they truly close.
 - Deterministic folds project the log into **`render`** (the machine digest), **`brief`** (the human re-orientation view), and **`status`** (the one-line-per-workstream cockpit).
 - A SessionStart hook **injects** the CHARTER + digest into every new session as ground truth, so re-entering a project after three weeks starts from your parked handoff instead of from git archaeology.
+- The log is **model-agnostic**: the next session can be you tomorrow, you after a compaction, or a stronger model you escalate a stuck problem to, with the tried-and-failed hypotheses traveling along. Escalate with context, not with amnesia.
 
 The LOG (plus the deliberately-edited living docs) is the only system of record; sessions and every rendered view are disposable caches reconstructible from it. A single static binary, stdlib-first, one vetted build-time dependency (`github.com/oklog/ulid/v2`). No daemon, no database, no cloud: the log is plain NDJSON you could read with `cat`.
 
@@ -168,7 +169,7 @@ A workstream's id is `<repo>-<branch>-<shortid>`, derived deterministically from
 
 **In v1:** the hook-first coordination core (CLI write path, identity, event store, fleet/liveness, `render`/`brief`/`status`, hooks + the `_managedBy` installer, the protocol skill) and **adoption Tiers 0–1** (`adopt`: identity + CHARTER + register, plus an opt-in `--scan` open-loop import — see [Adopt an existing repo](#adopt-an-existing-repo)). Single-machine.
 
-**Deferred:** the **Tier-2 brownfield import** (LLM-assisted: parallel code-mapping, doc reconciliation, a drafted CHARTER proposal, back-dated decision records) is the immediate fast-follow. `brief --synthesize` (model-narrated prose) is deferred — v1 ships the deterministic brief. A background monitor/reaper, notifications, a freshness sweep, and multi-machine sync come later.
+**Deferred:** the **Tier-2 brownfield import** (LLM-assisted: parallel code-mapping, doc reconciliation, a drafted CHARTER proposal, back-dated decision records) is the immediate fast-follow. A **Codex adapter** is on the roadmap (see `TODOS.md`): the core is already agent-agnostic (plain NDJSON log + CLI write path), so only the thin delivery layer (injection, heartbeat, nudges) is Claude Code-specific today. `brief --synthesize` (model-narrated prose) is deferred — v1 ships the deterministic brief. A background monitor/reaper, notifications, a freshness sweep, and multi-machine sync come later.
 
 **Quality gate** (the bar for "done"):
 
