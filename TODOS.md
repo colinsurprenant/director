@@ -3,6 +3,9 @@
 Deferred/future work surfaced during design, office-hours, and eng-review (2026-06-04).
 v1 = visibility-first CLI (see `docs/specs/2026-06-03-director-coordination-design.md` §11, §15).
 
+## Standing checkpoint
+- **Abandonment kill-criteria review** — due at the first genuine Pager re-entry, or **2026-10-01**, whichever comes first. The ratified criteria live in the Director CHARTER (decision `01KWMKYP5S`): the kill-scoped re-entry test, emission-during-block, the why-is-this-open sweep of the open-set, and the always-on lie test. Kill = re-entry fails AND emission dead; anything else is calibration.
+
 ## At the OSS-release milestone
 - **Release pipeline** — ✅ shipped via `.github/workflows/release.yml` (plain `go build` cross-compile matrix, darwin/linux × amd64/arm64, published to GitHub Releases on tag push). Remaining sub-item: a `curl|sh` installer.
   - *Depends on:* a tagged release; the CLI being stable.
