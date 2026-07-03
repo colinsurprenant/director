@@ -84,7 +84,7 @@ director status
 > found, the shims exit 0 (fail-safe) and coordination silently no-ops — nothing breaks, but nothing
 > coordinates. After rebuilding the binary, re-run `director install` to refresh the shims.
 
-### Also using OpenAI Codex?
+### Using OpenAI Codex?
 
 ```bash
 director install --codex
