@@ -82,8 +82,11 @@ func Adopt(hub, dir string) (Result, error) {
 		return Result{}, fmt.Errorf("adopt: create project dir %s: %w", projectDir, err)
 	}
 
+	// Title the stub with the repo-key, not the workstream handle: the CHARTER is
+	// a per-repo document (it lives at projects/<repoKey>/), while a handle names
+	// one branch's workstream — the balise dogfood surfaced the mismatch.
 	charterPath := filepath.Join(projectDir, charterFile)
-	scaffolded, err := scaffoldCharter(charterPath, ws.ID)
+	scaffolded, err := scaffoldCharter(charterPath, ws.RepoKey)
 	if err != nil {
 		return Result{}, err
 	}
