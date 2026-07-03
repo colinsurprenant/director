@@ -44,6 +44,7 @@ func writeFixture(t *testing.T, contents string) (path, hooksDir string) {
 	// ~/.codex/hooks.json and flip the shim-removal behavior under test.
 	t.Setenv(commandsDirEnv, filepath.Join(t.TempDir(), "commands"))
 	t.Setenv(codexHooksPathEnv, filepath.Join(t.TempDir(), "codex-hooks.json"))
+	t.Setenv(codexSkillsDirEnv, filepath.Join(t.TempDir(), "skills"))
 	dir := t.TempDir()
 	path = filepath.Join(dir, "settings.json")
 	if contents != "" {

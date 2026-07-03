@@ -28,8 +28,8 @@ func runInstall(args []string) int {
 		if hooksDir, err := install.DefaultHooksDir(); err == nil {
 			fmt.Printf("  shims written to %s (shared with a Claude Code install; set DIRECTOR_HOOKS_DIR to override)\n", hooksDir)
 		}
-		if promptsDir, err := install.DefaultCodexPromptsDir(); err == nil {
-			fmt.Printf("  prompts written to %s (/director-adopt, /director-complete, /director-handoff; set DIRECTOR_CODEX_PROMPTS_DIR to override)\n", promptsDir)
+		if skillsDir, err := install.DefaultCodexSkillsDir(); err == nil {
+			fmt.Printf("  skills written to %s ($director-adopt, $director-complete, $director-handoff; set DIRECTOR_CODEX_SKILLS_DIR to override)\n", skillsDir)
 		}
 		fmt.Println("  Codex will ask you to trust the three Director hooks at your next session start.")
 		fmt.Println("  If you dismiss or interrupt that prompt (an Esc is enough), run /hooks in the session to review and trust them.")

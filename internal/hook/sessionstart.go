@@ -191,15 +191,16 @@ func isCodexTranscript(path string) bool {
 }
 
 // codexCommandNames rewrites CC-namespaced command references
-// (/director:complete) to their Codex prompt names (/director-complete) when
-// the starting session is a Codex one. Applied ONLY to the protocol and nudge
-// blocks Director authors — never to the digest, which must stay byte-for-byte
-// the render output.
+// (/director:complete) to their Codex skill mentions ($director-complete —
+// the boundary commands install as agent skills there) when the starting
+// session is a Codex one. Applied ONLY to the protocol and nudge blocks
+// Director authors — never to the digest, which must stay byte-for-byte the
+// render output.
 func codexCommandNames(s string, codex bool) string {
 	if !codex {
 		return s
 	}
-	return strings.ReplaceAll(s, "/director:", "/director-")
+	return strings.ReplaceAll(s, "/director:", "$director-")
 }
 
 // closeOutNudge surfaces dead SIBLING workstreams of this repo — branch gone,

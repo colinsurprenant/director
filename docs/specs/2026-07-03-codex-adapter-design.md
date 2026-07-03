@@ -38,6 +38,14 @@ UNCHANGED Director shims and binary, wired via a project-local
 Conclusion: `internal/hook` needs **zero changes** for the core path. The
 adapter is install wiring plus documented degradations.
 
+**Second live test (same day, session on the shipped path):** the standalone
+`~/.codex/hooks.json` with `_managedBy`-tagged entries is accepted — the trust
+prompt listed all three hooks and, once trusted, the ground truth injected on
+the next session. (No banner at raw session start is expected: injection
+surfaces when the model first replies, and a task-shaped first turn can skip
+the acknowledge line — model compliance, not plumbing.) The same test refuted
+the `~/.codex/prompts` delivery, which drove the pivot to agent skills above.
+
 ## Design
 
 ### 1. `director install --codex` / `director uninstall --codex`
@@ -61,24 +69,29 @@ user's call per surface. It does two things:
   prompt (an Esc is enough), run /hooks in the session to review and trust the
   three Director hooks" (verified live: an interrupted trust prompt reads
   exactly like a broken install).
-- **Commands.** Materialize the boundary commands as Codex custom prompts under
-  `~/.codex/prompts/`: `director-complete.md`, `director-handoff.md`,
-  `director-adopt.md` (→ `/director-complete` etc.; prompts namespace by
-  filename, so the `director-` prefix is the collision guard the `director/`
-  subdir provides on CC). Same embedded markdown sources; the bodies drive the
-  same CLI verbs. The one per-agent transform: cross-references to
-  `/director:<cmd>` (CC namespacing) are rewritten to `/director-<cmd>` in the
-  Codex copies. Verify at implementation whether prompt frontmatter
-  (`description`) is honored; strip if not.
+- **Commands as agent skills.** Materialize the boundary commands as skills
+  under `~/.agents/skills/` (the agentskills.io layout Codex scans):
+  `director-complete/SKILL.md`, `director-handoff/SKILL.md`,
+  `director-adopt/SKILL.md`, invoked as `$director-complete` etc. or via the
+  `/skills` browser; the `director-` prefix is the collision guard the
+  `director/` subdir provides on CC. Same embedded markdown sources; the bodies
+  drive the same CLI verbs. Per-agent transforms: the required `name:`
+  frontmatter field is added, and cross-references to `/director:<cmd>` (CC
+  namespacing) are rewritten to `$director-<cmd>` mentions.
+  *History:* the first cut targeted `~/.codex/prompts/` custom prompts; the
+  second live test refuted it — no autocomplete, prompt never expanded — and
+  upstream has deprecated custom prompts in favor of skills (with open
+  regressions where prompts silently stop being discovered). Skills are the
+  documented forward path.
 
 - **Injected-protocol command names.** The ground truth injected by
   SessionStart names `/director:complete` and `/director:handoff` — CC names
-  that do not resolve on Codex. buildGroundTruth substitutes the `director-`
-  prompt names when the starting session is a Codex one, detected from the hook
-  payload's `transcript_path` (a Codex rollout lives under `~/.codex/` with a
-  `rollout-` basename; CC transcripts do not). Detection is best-effort and
-  defaults to CC names — a wrong guess costs only a command name the human can
-  map, never state.
+  that do not resolve on Codex. buildGroundTruth substitutes the
+  `$director-<cmd>` skill mentions when the starting session is a Codex one,
+  detected from the hook payload's `transcript_path` (a Codex rollout lives
+  under `~/.codex/` with a `rollout-` basename; CC transcripts do not).
+  Detection is best-effort and defaults to CC names — a wrong guess costs only
+  a command name the human can map, never state.
 
 Uninstall removes only `_managedBy: "director"` hook entries and the three
 prompt files, mirroring CC uninstall.

@@ -3,7 +3,8 @@
 // near-clone of Claude Code's — same stdin fields, same control JSON — so the
 // SAME shims serve both agents and the adapter reduces to install wiring: merge
 // the tagged entries into ~/.codex/hooks.json (never config.toml, the user's
-// main config) and materialize the boundary commands as Codex custom prompts.
+// main config) and materialize the boundary commands as agent skills under
+// ~/.agents/skills ($director-complete etc.).
 //
 // Codex adds its own safety net Claude Code lacks: a non-managed command hook
 // runs only after the human reviews and TRUSTS the exact definition in-product;
@@ -17,13 +18,14 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
-// codexHooksPathEnv / codexPromptsDirEnv let a caller (and the tests) redirect
+// codexHooksPathEnv / codexSkillsDirEnv let a caller (and the tests) redirect
 // the Codex targets, mirroring DIRECTOR_HOOKS_DIR / DIRECTOR_COMMANDS_DIR.
 const (
-	codexHooksPathEnv  = "DIRECTOR_CODEX_HOOKS_PATH"
-	codexPromptsDirEnv = "DIRECTOR_CODEX_PROMPTS_DIR"
+	codexHooksPathEnv = "DIRECTOR_CODEX_HOOKS_PATH"
+	codexSkillsDirEnv = "DIRECTOR_CODEX_SKILLS_DIR"
 )
 
 // codexEntries is the managed set for Codex. Unlike the CC set there is no
@@ -51,25 +53,27 @@ func DefaultCodexHooksPath() (string, error) {
 	return filepath.Join(home, ".codex", "hooks.json"), nil
 }
 
-// DefaultCodexPromptsDir resolves Codex's custom-prompt directory,
-// ~/.codex/prompts. Prompts namespace by FILENAME (there is no subdirectory
-// namespacing like CC's commands/director/), so the files carry a `director-`
-// prefix as the collision guard: /director-complete, /director-handoff,
-// /director-adopt.
-func DefaultCodexPromptsDir() (string, error) {
-	if d := os.Getenv(codexPromptsDirEnv); d != "" {
+// DefaultCodexSkillsDir resolves the user-global agent-skills directory Codex
+// scans, ~/.agents/skills (the agentskills.io layout Codex adopted; the older
+// ~/.codex/prompts custom-prompt surface is deprecated upstream and prone to
+// not being discovered at all — verified live on codex-cli 0.142.5). Skills
+// namespace by directory name, so each carries a `director-` prefix as the
+// collision guard, invoked as $director-complete / $director-handoff /
+// $director-adopt (or via the /skills browser).
+func DefaultCodexSkillsDir() (string, error) {
+	if d := os.Getenv(codexSkillsDirEnv); d != "" {
 		return d, nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("install: resolve home dir: %w", err)
 	}
-	return filepath.Join(home, ".codex", "prompts"), nil
+	return filepath.Join(home, ".agents", "skills"), nil
 }
 
 // InstallCodex wires Director into Codex: the SAME embedded shims (written to
 // the shared hooks dir — they are agent-agnostic stdin→`director _hook`→stdout
-// indirection), the boundary commands as Codex prompts, and the tagged-entry
+// indirection), the boundary commands as agent skills, and the tagged-entry
 // merge into hooksPath. Same ordering discipline as Install: all file drops
 // happen before the merge, so a failure never leaves hooks.json pointing at
 // shims that aren't there.
@@ -81,19 +85,19 @@ func InstallCodex(hooksPath string) error {
 	if err := writeShims(hooksDir); err != nil {
 		return err
 	}
-	promptsDir, err := DefaultCodexPromptsDir()
+	skillsDir, err := DefaultCodexSkillsDir()
 	if err != nil {
 		return err
 	}
-	if err := writeCodexPrompts(promptsDir); err != nil {
+	if err := writeCodexSkills(skillsDir); err != nil {
 		return err
 	}
 	return mergeManagedEntries(hooksPath, codexEntries, hooksDir)
 }
 
 // UninstallCodex removes Director's tagged entries from hooksPath and the
-// Director-owned prompt files. A missing hooks file means no Codex install to
-// undo — touch nothing, mirroring the CC Uninstall. The shared shims are
+// Director-owned skill directories. A missing hooks file means no Codex install
+// to undo — touch nothing, mirroring the CC Uninstall. The shared shims are
 // deliberately LEFT in place either way: a Claude Code install may still
 // reference them, and `director uninstall` (the CC form) removes them when no
 // Codex install remains.
@@ -104,8 +108,8 @@ func UninstallCodex(hooksPath string) error {
 	if err := removeManagedEntries(hooksPath); err != nil {
 		return err
 	}
-	if promptsDir, err := DefaultCodexPromptsDir(); err == nil {
-		removeCodexPrompts(promptsDir)
+	if skillsDir, err := DefaultCodexSkillsDir(); err == nil {
+		removeCodexSkills(skillsDir)
 	}
 	return nil
 }
@@ -154,22 +158,21 @@ func codexInstallPresent() bool {
 	return false
 }
 
-// codexPromptName maps an embedded command filename to its Codex prompt
-// filename: complete.md → director-complete.md. The prefix is the namespace.
-func codexPromptName(name string) string {
-	return "director-" + name
+// codexSkillName maps an embedded command filename to its skill name:
+// complete.md → director-complete. The prefix is the namespace, and the name is
+// both the skill directory and the $director-complete mention.
+func codexSkillName(filename string) string {
+	return "director-" + strings.TrimSuffix(filename, ".md")
 }
 
-// writeCodexPrompts materializes the embedded boundary commands as Codex custom
-// prompts. Two transforms against the CC copies: the filename gains the
-// `director-` prefix (Codex's flat, filename-based namespace), and every
-// cross-reference to a CC-namespaced command (`/director:<cmd>`) is rewritten
-// to its Codex prompt name (`/director-<cmd>`) so a command's advice to run its
-// sibling resolves on the agent it's installed into.
-func writeCodexPrompts(promptsDir string) error {
-	if err := os.MkdirAll(promptsDir, 0o755); err != nil {
-		return fmt.Errorf("install: create codex prompts dir %s: %w", promptsDir, err)
-	}
+// writeCodexSkills materializes the embedded boundary commands as agent skills:
+// one <skillsDir>/<director-name>/SKILL.md per command. Three transforms against
+// the CC copies: the required `name:` frontmatter field is added (CC commands
+// carry only `description:`), every cross-reference to a CC-namespaced command
+// (`/director:<cmd>`) is rewritten to its skill mention (`$director-<cmd>`) so a
+// command's advice to run its sibling resolves on the agent it's installed
+// into, and the file lands as SKILL.md inside the skill's own directory.
+func writeCodexSkills(skillsDir string) error {
 	entries, err := fs.ReadDir(commandsFS, "commands")
 	if err != nil {
 		return fmt.Errorf("install: read embedded commands: %w", err)
@@ -182,24 +185,46 @@ func writeCodexPrompts(promptsDir string) error {
 		if err != nil {
 			return fmt.Errorf("install: read embedded command %s: %w", e.Name(), err)
 		}
-		data = bytes.ReplaceAll(data, []byte("/director:"), []byte("/director-"))
-		if err := writeFileAtomic(filepath.Join(promptsDir, codexPromptName(e.Name())), data, 0o644); err != nil {
+		name := codexSkillName(e.Name())
+		data = bytes.ReplaceAll(data, []byte("/director:"), []byte("$director-"))
+		data = withSkillName(data, name)
+		dir := filepath.Join(skillsDir, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("install: create skill dir %s: %w", dir, err)
+		}
+		if err := writeFileAtomic(filepath.Join(dir, "SKILL.md"), data, 0o644); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// removeCodexPrompts deletes the Director-owned prompt files — exact filenames
-// only, so a user's own prompts are never touched — then drops the dir if it is
-// left empty. Best-effort, mirroring removeCommands.
-func removeCodexPrompts(promptsDir string) {
+// withSkillName inserts the required `name:` field at the top of the SKILL.md
+// frontmatter. The embedded commands are Director's own files with a known
+// shape (a leading `---\n` frontmatter fence), so this is a targeted insert,
+// not a YAML parser; a file without the fence gets a fresh frontmatter block.
+func withSkillName(data []byte, name string) []byte {
+	nameLine := []byte("name: " + name + "\n")
+	fence := []byte("---\n")
+	if bytes.HasPrefix(data, fence) {
+		return append(append(append([]byte{}, fence...), nameLine...), data[len(fence):]...)
+	}
+	return append(append(append(append([]byte{}, fence...), nameLine...), fence...), data...)
+}
+
+// removeCodexSkills deletes the Director-owned skill directories — exact names
+// only, and only their SKILL.md within, so a user's own skills (or extra files
+// they added inside ours) are never touched — then drops the skills dir if it
+// is left empty. Best-effort, mirroring removeCommands.
+func removeCodexSkills(skillsDir string) {
 	entries, err := fs.ReadDir(commandsFS, "commands")
 	if err != nil {
 		return
 	}
 	for _, e := range entries {
-		_ = os.Remove(filepath.Join(promptsDir, codexPromptName(e.Name())))
+		dir := filepath.Join(skillsDir, codexSkillName(e.Name()))
+		_ = os.Remove(filepath.Join(dir, "SKILL.md"))
+		_ = os.Remove(dir) // succeeds only if empty; user-added files keep it intact
 	}
-	_ = os.Remove(promptsDir) // succeeds only if now empty; foreign prompts keep it intact
+	_ = os.Remove(skillsDir) // succeeds only if now empty; foreign skills keep it intact
 }

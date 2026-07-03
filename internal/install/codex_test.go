@@ -9,8 +9,8 @@ import (
 
 // codex_test.go exercises the Codex delivery target: the same tagged merge
 // against ~/.codex/hooks.json (reusing the CC fixture — the two files share the
-// {"hooks": {...}} structure), the prompt materialization with its filename and
-// cross-reference transforms, and the asymmetric uninstall (prompts removed,
+// {"hooks": {...}} structure), the skill materialization with its naming and
+// cross-reference transforms, and the asymmetric uninstall (skills removed,
 // shared shims left for a possible CC install).
 
 // codexFixture pins the coexistence guarantee on a hooks.json that already
@@ -29,22 +29,22 @@ const codexFixture = `{
 }
 `
 
-// setupCodex points the installer's Codex prompt target at a throwaway dir and
+// setupCodex points the installer's Codex skills target at a throwaway dir and
 // returns a fresh hooks.json path (missing until InstallCodex creates it) plus
-// the shims/prompts dirs for assertions.
-func setupCodex(t *testing.T, fixture string) (hooksPath, hooksDir, promptsDir string) {
+// the shims/skills dirs for assertions.
+func setupCodex(t *testing.T, fixture string) (hooksPath, hooksDir, skillsDir string) {
 	t.Helper()
 	hooksDir = filepath.Join(t.TempDir(), "hooks")
 	t.Setenv(hooksDirEnv, hooksDir)
-	promptsDir = filepath.Join(t.TempDir(), "prompts")
-	t.Setenv(codexPromptsDirEnv, promptsDir)
+	skillsDir = filepath.Join(t.TempDir(), "skills")
+	t.Setenv(codexSkillsDirEnv, skillsDir)
 	hooksPath = filepath.Join(t.TempDir(), "hooks.json")
 	if fixture != "" {
 		if err := os.WriteFile(hooksPath, []byte(fixture), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	return hooksPath, hooksDir, promptsDir
+	return hooksPath, hooksDir, skillsDir
 }
 
 // TestInstallCodexMergesAndPreservesForeign: the three tagged entries land (no
@@ -91,43 +91,51 @@ func TestInstallCodexMergesAndPreservesForeign(t *testing.T) {
 	}
 }
 
-// TestInstallCodexWritesPrompts: the boundary commands materialize under the
-// prompts dir with the director- filename prefix (Codex's flat namespace) and
-// with every CC-namespaced cross-reference rewritten to its prompt name.
-func TestInstallCodexWritesPrompts(t *testing.T) {
-	hooksPath, _, promptsDir := setupCodex(t, "")
+// TestInstallCodexWritesSkills: the boundary commands materialize as agent
+// skills — one <skillsDir>/<director-name>/SKILL.md each, carrying the required
+// name: frontmatter and with every CC-namespaced cross-reference rewritten to
+// its skill mention.
+func TestInstallCodexWritesSkills(t *testing.T) {
+	hooksPath, _, skillsDir := setupCodex(t, "")
 
 	if err := InstallCodex(hooksPath); err != nil {
 		t.Fatalf("InstallCodex: %v", err)
 	}
-	for _, name := range []string{"director-adopt.md", "director-complete.md", "director-handoff.md"} {
-		b, err := os.ReadFile(filepath.Join(promptsDir, name))
+	for _, name := range []string{"director-adopt", "director-complete", "director-handoff"} {
+		b, err := os.ReadFile(filepath.Join(skillsDir, name, "SKILL.md"))
 		if err != nil {
-			t.Fatalf("prompt %s not materialized: %v", name, err)
+			t.Fatalf("skill %s not materialized: %v", name, err)
+		}
+		if !strings.HasPrefix(string(b), "---\nname: "+name+"\n") {
+			t.Errorf("%s/SKILL.md missing the required name: frontmatter field:\n%.120s", name, b)
 		}
 		if strings.Contains(string(b), "/director:") {
 			t.Errorf("%s still carries a CC-namespaced /director: reference:\n%s", name, b)
 		}
 	}
-	// complete.md's advice to use the handoff command must now name the prompt.
-	b, err := os.ReadFile(filepath.Join(promptsDir, "director-complete.md"))
+	// complete's advice to use the handoff command must now be a skill mention.
+	b, err := os.ReadFile(filepath.Join(skillsDir, "director-complete", "SKILL.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), "/director-handoff") {
-		t.Errorf("director-complete.md should cross-reference /director-handoff:\n%s", b)
+	if !strings.Contains(string(b), "$director-handoff") {
+		t.Errorf("director-complete/SKILL.md should cross-reference $director-handoff:\n%s", b)
 	}
 }
 
 // TestUninstallCodexRemovesOnlyItsOwn: uninstall strips the tagged entries and
-// the prompt files but preserves the user's hook, foreign prompts, and — unlike
+// the skill dirs but preserves the user's hook, foreign skills, and — unlike
 // the CC uninstall — the shared shims, which a CC install may still reference.
 func TestUninstallCodexRemovesOnlyItsOwn(t *testing.T) {
-	hooksPath, hooksDir, promptsDir := setupCodex(t, codexFixture)
+	hooksPath, hooksDir, skillsDir := setupCodex(t, codexFixture)
 	if err := InstallCodex(hooksPath); err != nil {
 		t.Fatalf("InstallCodex: %v", err)
 	}
-	foreign := filepath.Join(promptsDir, "my-prompt.md")
+	foreignDir := filepath.Join(skillsDir, "my-skill")
+	if err := os.MkdirAll(foreignDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	foreign := filepath.Join(foreignDir, "SKILL.md")
 	if err := os.WriteFile(foreign, []byte("mine"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -144,13 +152,13 @@ func TestUninstallCodexRemovesOnlyItsOwn(t *testing.T) {
 	if !contains(commands(t, root, "PreToolUse"), "my-own-guard.sh") {
 		t.Errorf("user's own hook did not survive uninstall")
 	}
-	for _, name := range []string{"director-adopt.md", "director-complete.md", "director-handoff.md"} {
-		if _, err := os.Stat(filepath.Join(promptsDir, name)); !os.IsNotExist(err) {
-			t.Errorf("prompt %s survived uninstall (err=%v)", name, err)
+	for _, name := range []string{"director-adopt", "director-complete", "director-handoff"} {
+		if _, err := os.Stat(filepath.Join(skillsDir, name)); !os.IsNotExist(err) {
+			t.Errorf("skill dir %s survived uninstall (err=%v)", name, err)
 		}
 	}
 	if _, err := os.Stat(foreign); err != nil {
-		t.Errorf("foreign prompt removed by uninstall: %v", err)
+		t.Errorf("foreign skill removed by uninstall: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(hooksDir, "sessionstart.sh")); err != nil {
 		t.Errorf("shared shims must survive a codex uninstall (CC may reference them): %v", err)
@@ -158,15 +166,15 @@ func TestUninstallCodexRemovesOnlyItsOwn(t *testing.T) {
 }
 
 // TestUninstallCodexMissingFileNoop: an absent hooks.json means no Codex
-// install to undo — total no-op, prompts included, mirroring the CC uninstall's
+// install to undo — total no-op, skills included, mirroring the CC uninstall's
 // missing-file stance.
 func TestUninstallCodexMissingFileNoop(t *testing.T) {
-	hooksPath, _, promptsDir := setupCodex(t, "")
-	if err := os.MkdirAll(promptsDir, 0o755); err != nil {
+	hooksPath, _, skillsDir := setupCodex(t, "")
+	skill := filepath.Join(skillsDir, "director-complete", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skill), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	prompt := filepath.Join(promptsDir, "director-complete.md")
-	if err := os.WriteFile(prompt, []byte("stale copy"), 0o644); err != nil {
+	if err := os.WriteFile(skill, []byte("stale copy"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -176,8 +184,8 @@ func TestUninstallCodexMissingFileNoop(t *testing.T) {
 	if _, err := os.Stat(hooksPath); !os.IsNotExist(err) {
 		t.Errorf("UninstallCodex created a hooks file where none should exist")
 	}
-	if _, err := os.Stat(prompt); err != nil {
-		t.Errorf("UninstallCodex on missing hooks file must not remove prompts: %v", err)
+	if _, err := os.Stat(skill); err != nil {
+		t.Errorf("UninstallCodex on missing hooks file must not remove skills: %v", err)
 	}
 }
 

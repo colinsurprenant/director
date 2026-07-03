@@ -92,8 +92,10 @@ director install --codex
 
 Codex's hook contract mirrors Claude Code's, so the same shims serve both agents. The `--codex` form
 merges the three hooks into `~/.codex/hooks.json` (never your `config.toml`) and installs the boundary
-commands as custom prompts: `/director-adopt`, `/director-complete`, `/director-handoff` (Codex prompts
-namespace by filename, hence the dash). Two Codex-specific notes:
+commands as **agent skills** under `~/.agents/skills`: invoke them as `$director-adopt`,
+`$director-complete`, `$director-handoff` (or find them in the `/skills` browser). Skills are the
+surface Codex recommends — its older `~/.codex/prompts` custom prompts are deprecated upstream. Two
+Codex-specific notes:
 
 - **Trust the hooks once.** Codex asks you to review and trust the three hook definitions at your next
   session start; until you do, they are silently skipped. If you dismiss or interrupt that prompt (an
@@ -102,7 +104,7 @@ namespace by filename, hence the dash). Two Codex-specific notes:
   and the context-fill handoff nudge are Claude Code-only for now (they read CC's transcript format and
   stay safely inert on Codex).
 
-`director uninstall --codex` removes only the tagged entries and the three prompt files. The hook
+`director uninstall --codex` removes only the tagged entries and the three skill directories. The hook
 shims are shared between the two agents: a `--codex` uninstall leaves them for a Claude Code install,
 and the plain `director uninstall` leaves them while a Codex install still references them — so
 uninstalling one agent never silently breaks the other.

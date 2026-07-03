@@ -392,9 +392,9 @@ func TestSessionStartRegistersBranchForGone(t *testing.T) {
 }
 
 // TestSessionStartCodexCommandNames: a Codex session (detected from its
-// rollout-format transcript_path) gets the protocol block with Codex prompt
-// names (/director-complete), not CC command names (/director:complete) that
-// would not resolve there. The digest itself is never rewritten.
+// rollout-format transcript_path) gets the protocol block with Codex skill
+// mentions ($director-complete), not CC command names (/director:complete)
+// that would not resolve there. The digest itself is never rewritten.
 func TestSessionStartCodexCommandNames(t *testing.T) {
 	hub := t.TempDir()
 	repo := gitRepo(t, "widget", "main")
@@ -413,8 +413,8 @@ func TestSessionStartCodexCommandNames(t *testing.T) {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
 	got := out.String()
-	if !strings.Contains(got, "/director-complete") || !strings.Contains(got, "/director-handoff") {
-		t.Errorf("codex session should get prompt-named commands in the protocol:\n%s", got)
+	if !strings.Contains(got, "$director-complete") || !strings.Contains(got, "$director-handoff") {
+		t.Errorf("codex session should get skill-mention commands in the protocol:\n%s", got)
 	}
 	if strings.Contains(got, "/director:complete") || strings.Contains(got, "/director:handoff") {
 		t.Errorf("codex session must not be told CC command names:\n%s", got)

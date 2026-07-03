@@ -103,7 +103,7 @@ fleet lifecycle (hook-emitted):
 adoption & install:
   adopt       register an existing repo (identity + CHARTER stub + fleet row)
   install     idempotent merge of Director hooks into settings.json
-              (--codex: Codex's hooks.json + /director-* custom prompts instead)
+              (--codex: Codex's hooks.json + $director-* agent skills instead)
   uninstall   remove only Director-managed hook entries (--codex: Codex's)
 
 misc:
