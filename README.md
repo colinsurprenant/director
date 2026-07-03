@@ -53,10 +53,20 @@ director install
 
 The installed hook commands point at the **shims**, not the binary directly, so rebuilding or relocating `director` never requires rewriting `settings.json` (re-run `install` to refresh the shims to the current binary). If `~/.claude/settings.json` already has a malformed (non-object) `hooks` value, `install` refuses rather than overwrite it.
 
+### Also using OpenAI Codex?
+
+```bash
+director install --codex
+```
+
+Codex's hook contract mirrors Claude Code's, so the **same shims serve both agents** — and neither install needs the other: `--codex` works standalone on a machine that has never run Claude Code. It merges the three hooks into `~/.codex/hooks.json` (never your `config.toml`) and installs the boundary commands as agent skills under `~/.agents/skills`, invoked as `$director-adopt`, `$director-complete`, `$director-handoff`. Codex asks you to **trust** the three hooks at your next session start (if you dismiss that prompt, run `/hooks` in the session). Details, including what degrades on Codex, in [`docs/getting-started.md`](docs/getting-started.md).
+
 | Variable | Default | Selects |
 |---|---|---|
 | `DIRECTOR_HOOKS_DIR` | `~/.claude/director/hooks` | where `install` writes the shims and the settings entries point; override to relocate them |
 | `DIRECTOR_COMMANDS_DIR` | `~/.claude/commands/director` | where `install` writes the `/director:*` slash commands |
+| `DIRECTOR_CODEX_HOOKS_PATH` | `~/.codex/hooks.json` | the Codex hooks file `install --codex` merges into |
+| `DIRECTOR_CODEX_SKILLS_DIR` | `~/.agents/skills` | where `install --codex` writes the `$director-*` agent skills |
 | `DIRECTOR_HUB` | `~/.director` | the central hub that holds all cross-repo coordination state |
 | `DIRECTOR_BIN` | (PATH) | which `director` binary the shims invoke (defaults to `director` on `PATH`) |
 | `DIRECTOR_HANDOFF_NUDGE_TOKENS` | (unset) | the context-fill handoff nudge: an absolute token threshold at which sessions are nudged toward `/director:handoff`; unset or `0` disables it. Fires once per crossing and re-arms only after context falls below half the threshold (a compaction or a context clear) |
@@ -106,7 +116,8 @@ fleet lifecycle (hook-emitted):
 adoption & install:
   adopt       register an existing repo (identity + CHARTER stub + fleet row)
   install     idempotent merge of Director hooks into settings.json
-  uninstall   remove only Director-managed hook entries
+              (--codex: Codex's hooks.json + $director-* agent skills instead)
+  uninstall   remove only Director-managed hook entries (--codex: Codex's)
 
 misc:
   version     print the director version
