@@ -8,10 +8,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 )
 
-// version is stamped at release time via -ldflags "-X main.version=vX.Y.Z";
-// a source build reports "dev".
+// version is stamped at release time via -ldflags "-X main.version=vX.Y.Z".
+// Unstamped binaries fall back to the module version Go embeds in build info —
+// so a `go install ...@v1.3.0` binary still reports "v1.3.0" — and only a true
+// source build (embedded version "(devel)" or none) reports "dev".
 var version = "dev"
 
 // runVersion prints the stamped version. Extra arguments are a usage error,
@@ -25,7 +28,23 @@ func runVersion(rest []string) int {
 	return 0
 }
 
-func versionLine() string { return "director " + version }
+func versionLine() string { return "director " + resolveVersion(version, debug.ReadBuildInfo) }
+
+// resolveVersion prefers the release-stamped version, then the module version
+// from build info (the go-install case), then "dev". The build-info reader is
+// injected so both fallback branches are testable — the real one reports the
+// test binary itself as "(devel)".
+func resolveVersion(stamped string, readBuildInfo func() (*debug.BuildInfo, bool)) string {
+	if stamped != "dev" {
+		return stamped
+	}
+	if info, ok := readBuildInfo(); ok && info != nil {
+		if v := info.Main.Version; v != "" && v != "(devel)" {
+			return v
+		}
+	}
+	return "dev"
+}
 
 func main() {
 	os.Exit(run(os.Args[1:]))
