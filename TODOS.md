@@ -4,8 +4,7 @@ Deferred/future work surfaced during design, office-hours, and eng-review (2026-
 v1 = visibility-first CLI (see `docs/specs/2026-06-03-director-coordination-design.md` §11, §15).
 
 ## At the OSS-release milestone
-- **Release pipeline** — goreleaser cross-compile matrix (darwin/linux × amd64/arm64) + `curl|sh` installer + GitHub Releases.
-  - *Why:* v1 builds locally (`go build`); none of this is needed until others install it.
+- **Release pipeline** — ✅ shipped via `.github/workflows/release.yml` (plain `go build` cross-compile matrix, darwin/linux × amd64/arm64, published to GitHub Releases on tag push). Remaining sub-item: a `curl|sh` installer.
   - *Depends on:* a tagged release; the CLI being stable.
 - **Secret-scan before any share/sync** — lint rejecting key-like patterns in events; scan adoption/mapper output.
   - *Why:* the hub aggregates semantic notes across repos; safe while local-only, a leak trap once shared. (Spec §8.)
@@ -26,6 +25,6 @@ v1 = visibility-first CLI (see `docs/specs/2026-06-03-director-coordination-desi
   - *Why:* the invisible-auto-coordination soul, expressed safely. Build only once visibility v1 has users who want autonomy.
 - **Brownfield adoption tool (B)** — explicitly-invoked fan-out (built-in Explore agents) that maps a repo, classifies docs (living/record/rot), drafts an arc42 overview + CHARTER, seeds the log. Default adoption stays a CHARTER stub.
 
-## Phase 3
+## Later
 - **CHARTER freshness sweep** — `area→doc` join flags living docs stale vs decisions touching their area.
-- **Notifications + cron monitor** — a single periodic digest (not per-event pings); a reaper for stale/abandoned workstreams.
+- **Notifications + cron monitor** — a single periodic digest (not per-event pings); a reaper for long-dormant or `gone` workstreams.

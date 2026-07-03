@@ -41,16 +41,18 @@ sudo install bin/director /usr/local/bin/director   # or copy it anywhere on PAT
 director install
 ```
 
-`director install` does two things, both idempotent and self-contained:
+`director install` does three things, all idempotent and self-contained:
 
 1. **Writes the hook shims.** The shims are embedded in the binary, so `install` materializes them (executable) into the hooks dir — there is **no manual copy step**.
-2. **Merges the hooks into `~/.claude/settings.json`.** Every entry it writes carries a `"_managedBy":"director"` tag, so Director's hooks run **alongside** GSD's and any hand-rolled hooks without clobbering them. Re-running adds nothing; `director uninstall` removes only Director's tagged entries **and** the shims it wrote. Pass `--settings <path>` to target a project or test settings file.
+2. **Merges the hooks into `~/.claude/settings.json`.** Every entry it writes carries a `"_managedBy":"director"` tag, so Director's hooks run **alongside** GSD's and any hand-rolled hooks without clobbering them. Re-running adds nothing; `director uninstall` removes only Director's tagged entries **and** the shims and command files it wrote. Pass `--settings <path>` to target a project or test settings file.
+3. **Materializes the slash commands.** The `/director:complete` and `/director:handoff` commands (also embedded) are written under `~/.claude/commands/director/`, namespaced so they never clobber a user's own `complete`/`handoff` commands.
 
 The installed hook commands point at the **shims**, not the binary directly, so rebuilding or relocating `director` never requires rewriting `settings.json` (re-run `install` to refresh the shims to the current binary). If `~/.claude/settings.json` already has a malformed (non-object) `hooks` value, `install` refuses rather than overwrite it.
 
 | Variable | Default | Selects |
 |---|---|---|
 | `DIRECTOR_HOOKS_DIR` | `~/.claude/director/hooks` | where `install` writes the shims and the settings entries point; override to relocate them |
+| `DIRECTOR_COMMANDS_DIR` | `~/.claude/commands/director` | where `install` writes the `/director:*` slash commands |
 | `DIRECTOR_HUB` | `~/.director` | the central hub that holds all cross-repo coordination state |
 | `DIRECTOR_BIN` | (PATH) | which `director` binary the shims invoke (defaults to `director` on `PATH`) |
 | `DIRECTOR_HANDOFF_NUDGE_TOKENS` | (unset) | the context-fill handoff nudge: an absolute token threshold at which sessions are nudged toward `/director:handoff`; unset or `0` disables it. Fires once per crossing and re-arms only after context falls below half the threshold (a compaction or a context clear) |
@@ -88,16 +90,20 @@ projections:
   render      deterministic machine digest (+ --verify, manifest)
   brief       human re-orientation view (the bigger picture)
   status      one-line-per-workstream fleet cockpit
+  open-items  this workstream's unresolved open-items (ULID + body), for /complete
 
-fleet lifecycle (normally hook-driven):
+fleet lifecycle (hook-emitted):
   register    create/refresh this workstream's fleet row
   heartbeat   touch liveness
   done        archive the workstream's row
 
 adoption & install:
-  adopt       bring an existing repo into the fleet
+  adopt       bring an existing repo into the fleet (CHARTER + open-loop import)
   install     idempotent merge of Director hooks into settings.json
   uninstall   remove only Director-managed hook entries
+
+misc:
+  version     print the director version
 ```
 
 ### emit — the model write path
@@ -117,7 +123,7 @@ director emit --type decision|open-item|handoff|note --area <subsystem> \
 director resolve <ulid>
 ```
 
-`resolve` appends a close-marker for an open-item. The `<ulid>` **must** be one the CLI surfaced (from `emit`, `render`, `status`, or `brief`) — `resolve` validates the target and rejects invented ids, non-open-items, and already-closed items.
+`resolve` appends a close-marker for an open-item. The `<ulid>` **must** be one the CLI surfaced (from `emit`, `render`, or `open-items`) — `resolve` validates the target and rejects invented ids, non-open-items, and already-closed items.
 
 ### The three projections
 
@@ -127,7 +133,7 @@ director resolve <ulid>
 | `brief [--project <key>]` | human | the on-demand bigger-picture re-orientation view (outlook from CHARTER, latest handoff per workstream, open/escalate items, recent decisions), at project or whole-fleet altitude. |
 | `status` | human | the one-line-per-workstream fleet cockpit: handle · liveness · heartbeat recency · the **Needs-you** band (open `escalate` items). |
 
-`brief` and `render` share the same byte-identical fold — the human reads the same picture a fresh session reads.
+`brief` and `render` share the same byte-identical fold — the human reads the same picture a fresh session reads. A fourth, narrower projection, `open-items`, lists the current workstream's unresolved open-items (ULID + body); it exists to feed `resolve` and `/director:complete`.
 
 ### Fleet lifecycle
 
@@ -193,8 +199,9 @@ In each adopted worktree: `.director/workstream-id` (and `.director/repo-key`), 
 ## Fresh walkthrough
 
 ```bash
-# 1. Build and install the hooks
+# 1. Build the binary, put it on PATH, install the hooks
 go build -o bin/director ./cmd/director
+sudo install bin/director /usr/local/bin/director
 director install
 
 # 2. Bring an existing repo into the fleet (fill in the CHARTER it scaffolds)

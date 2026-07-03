@@ -32,7 +32,7 @@ Most multi-agent tooling assumes the swarm: many simultaneous sessions on one re
 That shapes the design:
 
 - **Dormant is a first-class state.** A workstream untouched for three weeks with its baton parked in a handoff isn't stale data to clean up. It's a project between blocks, waiting for re-entry, and `status` and `brief` treat it that way.
-- **Block boundaries are handoffs to your future self.** The `/handoff` you write when leaving a project is the rehydration your next block starts from, injected automatically instead of re-derived from git archaeology.
+- **Block boundaries are handoffs to your future self.** The `/director:handoff` you write when leaving a project is the rehydration your next block starts from, injected automatically instead of re-derived from git archaeology.
 - **Re-entry is the payoff.** Opening a session on a repo you haven't touched since last month, and having it already know what was decided, what's open, and what's next: that's the moment Director is built for.
 - **Simultaneous sessions work too.** Parallel worktree sessions share the same log, see each other's decisions, and appear side by side in the cockpit. Supported and proven, just not the headline, because for most developers it's the occasional burst rather than the norm.
 

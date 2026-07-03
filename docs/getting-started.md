@@ -184,7 +184,7 @@ handoff. It's fully deterministic: you read the same picture a fresh session rea
 When an item in the Needs-you band is yours to decide, make the call in the session, then close the loop:
 
 ```bash
-director resolve <ulid>   # the ULID shown in status/brief; rejects invented/closed ids
+director resolve <ulid>   # the ULID from emit/render/open-items; rejects invented/closed ids
 ```
 
 ---
@@ -231,7 +231,7 @@ what `brief` shows and what the next session starts from.
 | **A row reads `idle` or `dormant` though the session is active** | Liveness is derived from heartbeat age. `PostToolUse` refreshes it on every tool call, so a session making no tool calls can age to `idle` (after 4h) then `dormant` (after 2d). Dormant is the normal between-blocks state, not an error. |
 | **A row reads `gone` despite a fresh heartbeat** | Liveness also checks that the workstream's branch still exists. A branch that no longer exists reads `gone` by design (merged away and deleted, or the whole worktree directory is gone: any failed branch check counts), meaning the workstream looks complete: close it out with `/director:complete`. Rows without branch/dir info fail open and age out by TTL only. |
 | **`status` shows "N unreadable fleet row(s) skipped"** | One or more row files under `$DIRECTOR_HUB/fleet/` are corrupt; the cockpit skips them rather than failing. Inspect/remove the bad files there. |
-| **`adopt` imported nothing** | A bare `adopt` is **Tier-0 only by design** — it doesn't scan. Use `--scan` (pick) or `--import-all`. The scan covers only *tracked* files (via `git ls-files`) from the repo root; `git add` untracked files first if they should be scanned. |
+| **`adopt` imported nothing** | A bare `adopt` is **Tier 0 only by design** — it doesn't scan. Use `--scan` (pick) or `--import-all`. The scan covers only *tracked* files (via `git ls-files`) from the repo root; `git add` untracked files first if they should be scanned. |
 | **`install` refused** | Your `~/.claude/settings.json` has a malformed (non-object) `hooks` value. Director won't overwrite data it doesn't understand — fix the file, then re-run. |
 
 ---
@@ -244,7 +244,7 @@ committable, ignoring the volatile `fleet/` and `health/`):
 
 ```bash
 export DIRECTOR_HUB=$(git rev-parse --show-toplevel)
-director adopt          # Tier-0 only; avoid --import-all here — the keyword scan floods a doc-heavy repo
+director adopt          # Tier 0 only; avoid --import-all here — the keyword scan floods a doc-heavy repo
 director brief
 ```
 
