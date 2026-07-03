@@ -12,7 +12,7 @@ import (
 // agent's hooks file (idempotent; never touches other plugins' hooks — §5.4) AND
 // materializes the embedded shims + boundary commands, so install is
 // self-contained with no manual copy step. Default target is Claude Code
-// (settings.json); --codex targets Codex (hooks.json + custom prompts) instead.
+// (settings.json); --codex targets Codex (hooks.json + agent skills) instead.
 func runInstall(args []string) int {
 	path, codex, code := installTargetFlags("install", args)
 	if path == "" {
@@ -62,7 +62,7 @@ func runInstall(args []string) int {
 
 // runUninstall removes only Director's tagged hook entries, leaving hand-rolled
 // and other-plugin (GSD) hooks intact (§5.4), plus the Director-owned shims
-// (CC) or prompt files (--codex). The shared shims survive a --codex uninstall:
+// (CC) or skill directories (--codex). The shared shims survive a --codex uninstall:
 // a Claude Code install may still reference them.
 func runUninstall(args []string) int {
 	path, codex, code := installTargetFlags("uninstall", args)
@@ -92,7 +92,7 @@ func runUninstall(args []string) int {
 func installTargetFlags(name string, args []string) (path string, codex bool, code int) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.StringVar(&path, "settings", "", "target hooks file (default: ~/.claude/settings.json, or ~/.codex/hooks.json with --codex)")
-	fs.BoolVar(&codex, "codex", false, "target Codex (hooks.json + custom prompts) instead of Claude Code")
+	fs.BoolVar(&codex, "codex", false, "target Codex (hooks.json + $director-* agent skills) instead of Claude Code")
 	if err := fs.Parse(args); err != nil {
 		return "", false, 2
 	}

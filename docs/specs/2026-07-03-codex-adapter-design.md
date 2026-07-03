@@ -102,7 +102,8 @@ user's call per surface. It does two things:
   a command name the human can map, never state.
 
 Uninstall removes only `_managedBy: "director"` hook entries and the three
-prompt files, mirroring CC uninstall.
+skill directories (each skill's `SKILL.md` and its dir, exact names only),
+mirroring CC uninstall.
 
 ### 2. Degradations, documented (all fail-open, all verified or by construction)
 
@@ -146,7 +147,7 @@ prompt files, mirroring CC uninstall.
 
 ## Build sequence
 
-1. `install`/`uninstall --codex`: hooks.json merge + prompts drop + install
+1. `install`/`uninstall --codex`: hooks.json merge + skills drop + install
    output naming the trust step (Go + tests).
 2. Docs: README scope paragraph (Codex adapter shipped, what degrades),
    getting-started section, TODOS roadmap entry closes.

@@ -129,7 +129,7 @@ func refreshFleet(hub string, ws identity.Workstream, uuid, cwd string) error {
 // cockpit shows — no drift between injected and authoritative state. sessionID
 // is only for health-logging a close-out-nudge failure (which is fail-open,
 // never blocking the injection). codex switches the protocol/nudge command
-// names to Codex's prompt namespace (see codexCommandNames).
+// names to Codex's skill-mention namespace (see codexCommandNames).
 func buildGroundTruth(hub, repoKey, workstreamID, sessionID string, codex bool) (string, error) {
 	store := event.NewStore(hub, repoKey)
 	events, err := store.ReadAll()
@@ -178,8 +178,10 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID string, codex bool) 
 // a Codex session: Codex rollouts live under a .codex directory with a
 // `rollout-` basename, neither of which a Claude Code transcript carries.
 // Best-effort by design — a wrong guess costs only a command name the human can
-// map (/director:complete vs /director-complete), never state — and an empty
-// path (payload without one) reads as Claude Code.
+// map (/director:complete vs $director-complete), never state — and an empty
+// path (payload without one) reads as Claude Code. The path is normalized to
+// forward slashes so a '/'-separated payload examined on a '\'-separated host
+// (or vice versa) can't dodge the .codex segment check.
 func isCodexTranscript(path string) bool {
 	if path == "" {
 		return false
@@ -187,7 +189,7 @@ func isCodexTranscript(path string) bool {
 	if strings.HasPrefix(filepath.Base(path), "rollout-") {
 		return true
 	}
-	return strings.Contains(path, string(filepath.Separator)+".codex"+string(filepath.Separator))
+	return strings.Contains(filepath.ToSlash(path), "/.codex/")
 }
 
 // codexCommandNames rewrites CC-namespaced command references
