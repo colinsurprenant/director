@@ -112,6 +112,22 @@ numbering: the vocabulary becomes **`director adopt` registers;
 `/director:adopt` understands.** Docs updated accordingly (README adoption
 section, getting-started, troubleshooting table).
 
+## Non-git directories
+
+Adoption requires git, and the requirement is structural, not incidental:
+workstream identity derives from the git chain (repo-key, branch, short HEAD)
+and the liveness model's `gone` state is a branch fact. A path-based identity
+fallback would loosen the most determinism-sensitive code in the repo for a
+minority case, so it is explicitly not built. Instead `/director:adopt`
+detects a non-git directory **before any fan-out** and stops with the remedy:
+`git init` (one line, and it gives the project the history the whole model
+benefits from).
+
+The genuinely degraded case is **thin history**: a freshly-initialized repo
+has an arbiter with nothing to say. There the corroboration rule falls back
+to prose plus file recency, and the command marks its in-flight judgments as
+low-confidence rather than pretending git corroborated them.
+
 ## Non-goals
 
 - No LLM call inside the Go binary, ever (deterministic-CLI boundary).
