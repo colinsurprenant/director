@@ -25,13 +25,13 @@ Each tagged release publishes prebuilt binaries for macOS and Linux (amd64 and a
 `director_<tag>_<os>_<arch>.tar.gz`, plus a `checksums.txt`, on the
 [releases page](https://github.com/colinsurprenant/director/releases). Download the tarball for your
 platform, verify it, and put the binary on your `PATH`. For example, on an Apple Silicon Mac
-(substitute the [latest tag](https://github.com/colinsurprenant/director/releases/latest) for `v1.3.0`):
+(substitute the [latest tag](https://github.com/colinsurprenant/director/releases/latest) for `v1.3.1`):
 
 ```bash
-curl -LO https://github.com/colinsurprenant/director/releases/download/v1.3.0/director_v1.3.0_darwin_arm64.tar.gz
-curl -LO https://github.com/colinsurprenant/director/releases/download/v1.3.0/checksums.txt
+curl -LO https://github.com/colinsurprenant/director/releases/download/v1.3.1/director_v1.3.1_darwin_arm64.tar.gz
+curl -LO https://github.com/colinsurprenant/director/releases/download/v1.3.1/checksums.txt
 shasum -a 256 --check --ignore-missing checksums.txt   # on Linux: sha256sum --check --ignore-missing
-tar -xzf director_v1.3.0_darwin_arm64.tar.gz
+tar -xzf director_v1.3.1_darwin_arm64.tar.gz
 sudo install director /usr/local/bin/director          # or copy anywhere on PATH
 ```
 
@@ -50,7 +50,7 @@ sudo install bin/director /usr/local/bin/director   # or copy anywhere on PATH
 ```
 
 Confirm the binary resolves with `director version`. A release or `go install` binary prints its
-version (e.g. `director v1.3.0`); a `go build` from a git clone prints the version Go derives from
+version (e.g. `director v1.3.1`); a `go build` from a git clone prints the version Go derives from
 the checkout (a tag or pseudo-version, `+dirty` if modified); `director dev` appears only when no
 VCS metadata is available.
 
