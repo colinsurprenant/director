@@ -46,6 +46,14 @@ surfaces when the model first replies, and a task-shaped first turn can skip
 the acknowledge line — model compliance, not plumbing.) The same test refuted
 the `~/.codex/prompts` delivery, which drove the pivot to agent skills above.
 
+**Third live test (shipped skills path):** `/skills` lists the three Director
+skills; `$director-complete` expanded ("I'm using the director-complete skill
+because you invoked it directly"), the banner was relayed, and the skill's own
+guardrails held — it sanity-checked via `director status`, listed the open set,
+and refused the terminal close-out on an active workstream without resolving,
+noting, archiving, or writing a handoff. Every adapter layer is verified on
+codex-cli 0.142.5.
+
 ## Design
 
 ### 1. `director install --codex` / `director uninstall --codex`
