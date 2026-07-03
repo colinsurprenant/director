@@ -68,6 +68,10 @@ director install --codex
 
 Codex's hook contract mirrors Claude Code's, so the **same shims serve both agents** — and neither install needs the other: `--codex` works standalone on a machine that has never run Claude Code. It merges the three hooks into `~/.codex/hooks.json` (never your `config.toml`) and installs the boundary commands as agent skills under `~/.agents/skills`, invoked as `$director-adopt`, `$director-complete`, `$director-handoff`. Codex asks you to **trust** the three hooks at your next session start (if you dismiss that prompt, run `/hooks` in the session). Details, including what degrades on Codex, in [`docs/getting-started.md`](docs/getting-started.md).
 
+### Environment variables
+
+Install paths and runtime knobs, common to both agents unless a default says otherwise:
+
 | Variable | Default | Selects |
 |---|---|---|
 | `DIRECTOR_HOOKS_DIR` | `~/.claude/director/hooks` | where `install` writes the shims and the settings entries point; override to relocate them |
