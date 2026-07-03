@@ -1,6 +1,7 @@
 package render
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -86,6 +87,47 @@ func TestStatusBlockedOnPerWorkstream(t *testing.T) {
 	}
 	if !strings.Contains(lines[1], "blocked(1)") || !strings.Contains(lines[1], "B needs") || strings.Contains(lines[1], "A needs") {
 		t.Errorf("wsB line should show only B's escalation: %q", lines[1])
+	}
+}
+
+// TestStatusGoneShowsRemedy: a gone workstream's blocked-on column carries its
+// open-loop count and the /director:complete remedy instead of the escalation
+// band — the branch is gone, so the actionable fact is the close-out, and the
+// close-out flow reviews every item (escalate included) with the human anyway.
+func TestStatusGoneShowsRemedy(t *testing.T) {
+	hub := t.TempDir()
+
+	seedProject(t, hub, "repo1", []event.Event{
+		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Risk: event.RiskLow, Body: "loose end one"},
+		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Risk: event.RiskEscalate, Body: "loose end two"},
+	})
+	// A row whose Branch+Dir point at a vanished worktree reads gone: BranchAlive
+	// treats any show-ref failure (here, the dir not existing) as branch-gone.
+	row := fleet.Row{
+		Workstream: "ws1",
+		UUID:       "uuid-ws1",
+		RepoKey:    "repo1",
+		Handle:     "@ws1",
+		Branch:     "feature",
+		Dir:        filepath.Join(hub, "vanished-worktree"),
+		Heartbeat:  statusNow.Add(-time.Minute).Format(time.RFC3339Nano),
+	}
+	if err := fleet.Register(hub, row); err != nil {
+		t.Fatalf("register ws1: %v", err)
+	}
+
+	out, err := Status(hub, statusNow)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if !strings.Contains(out, "· gone ·") {
+		t.Errorf("cockpit should derive gone for a vanished worktree:\n%s", out)
+	}
+	if !strings.Contains(out, "2 open item(s) — /director:complete ws1") {
+		t.Errorf("gone line should carry the open count and close-out remedy:\n%s", out)
+	}
+	if strings.Contains(out, "blocked(") {
+		t.Errorf("gone line should show the remedy instead of the escalation band:\n%s", out)
 	}
 }
 

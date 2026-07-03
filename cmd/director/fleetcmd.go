@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"time"
@@ -56,9 +58,44 @@ func runHeartbeat(args []string) int {
 	return 0
 }
 
-// runDone archives this session's row on the terminal transition (§5.5). The row
-// is moved to fleet/archive/<date>/, never deleted.
+// runDone archives fleet rows on the terminal transition (§5.5): bare, this
+// session's own (cwd-derived workstream, session-uuid) row; with --workstream,
+// EVERY live row of the named workstream — the cross-workstream close-out
+// /director:complete uses on a dead sibling whose session uuids are unknowable.
+// Rows are moved to fleet/archive/<date>/, never deleted. Zero matches on
+// --workstream is a user error (exit 2, likely a typo'd id — check `director
+// status` for the real one), never silent success.
 func runDone(args []string) int {
+	fs := flag.NewFlagSet("done", flag.ContinueOnError)
+	var workstream string
+	fs.StringVar(&workstream, "workstream", "", "archive every live row of this workstream id (default: this session's own row)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	if workstream != "" {
+		// Fleet rows live under the hub, not the repo, so a targeted done needs no
+		// cwd identity — it works from anywhere.
+		hub, err := hubRoot()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "done: %v\n", err)
+			return 1
+		}
+		n, err := fleet.DoneWorkstream(hub, workstream, time.Now().UTC())
+		if err != nil {
+			if errors.Is(err, fleet.ErrRowNotFound) {
+				fmt.Fprintf(os.Stderr, "done: no live rows for workstream %q (already archived, a typo, or its rows are unreadable — see `director status`)\n", workstream)
+				return 2
+			}
+			fmt.Fprintf(os.Stderr, "done: %v\n", err)
+			return 1
+		}
+		// A targeted done can archive several rows; say how many so the close-out
+		// flow can report what actually happened.
+		fmt.Printf("archived %d row(s) for %s\n", n, workstream)
+		return 0
+	}
+
 	hub, ws, err := resolveContext()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "done: %v\n", err)

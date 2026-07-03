@@ -143,6 +143,96 @@ func TestLifecycleDoneMissingRow(t *testing.T) {
 	}
 }
 
+// TestLifecycleDoneWorkstreamArchivesAllRows: the cross-workstream close-out
+// archives EVERY live row of the target (a dead sibling's session uuids are
+// unknowable, and a partial archive leaves the ghost alive) while another
+// workstream's rows survive untouched.
+func TestLifecycleDoneWorkstreamArchivesAllRows(t *testing.T) {
+	hub := t.TempDir()
+	ws := "widget-feature-abc123"
+	for _, uuid := range []string{"uuid-A", "uuid-B"} {
+		if err := Register(hub, Row{Workstream: ws, UUID: uuid, Heartbeat: fixedTime.Format(heartbeatLayout)}); err != nil {
+			t.Fatalf("Register %s: %v", uuid, err)
+		}
+	}
+	if err := Register(hub, Row{Workstream: "other-main-def456", UUID: "uuid-C", Heartbeat: fixedTime.Format(heartbeatLayout)}); err != nil {
+		t.Fatalf("Register other: %v", err)
+	}
+
+	n, err := DoneWorkstream(hub, ws, fixedTime)
+	if err != nil {
+		t.Fatalf("DoneWorkstream: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("archived %d rows, want 2", n)
+	}
+	for _, uuid := range []string{"uuid-A", "uuid-B"} {
+		if _, err := os.Stat(rowPath(hub, ws, uuid)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("live row %s still present after DoneWorkstream (err=%v)", uuid, err)
+		}
+		archived := filepath.Join(hub, fleetDir, archiveDir, fixedTime.Format(archiveDateLayout), rowFile(ws, uuid))
+		if got := readRowOrFail(t, archived); got.Status != StatusDone {
+			t.Errorf("archived row %s status = %q, want %q", uuid, got.Status, StatusDone)
+		}
+	}
+	if _, err := os.Stat(rowPath(hub, "other-main-def456", "uuid-C")); err != nil {
+		t.Errorf("unrelated workstream's row must survive a targeted done: %v", err)
+	}
+}
+
+// TestLifecycleDoneWorkstreamSkipsCorruptAndArchivesDriftedName: a corrupt row
+// file must not abort the sweep (its workstream can't be read — same leniency
+// as List), and a row whose FILENAME drifted from its identity hash (hand-copied
+// or renamed) still archives, because archiveRow moves the path it actually
+// scanned rather than recomputing it from the body — otherwise the drifted row
+// would be a permanent ghost every targeted done trips over.
+func TestLifecycleDoneWorkstreamSkipsCorruptAndArchivesDriftedName(t *testing.T) {
+	hub := t.TempDir()
+	ws := "widget-feature-abc123"
+	if err := Register(hub, Row{Workstream: ws, UUID: "uuid-A", Heartbeat: fixedTime.Format(heartbeatLayout)}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	// A matching row living under a filename its identity does not hash to.
+	drifted := filepath.Join(hub, fleetDir, "hand-copied"+rowExt)
+	if err := writeRow(drifted, Row{Workstream: ws, UUID: "uuid-B", Heartbeat: fixedTime.Format(heartbeatLayout)}); err != nil {
+		t.Fatalf("write drifted row: %v", err)
+	}
+	// A corrupt row file in the same dir.
+	if err := os.WriteFile(filepath.Join(hub, fleetDir, "corrupt"+rowExt), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := DoneWorkstream(hub, ws, fixedTime)
+	if err != nil {
+		t.Fatalf("DoneWorkstream: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("archived %d rows, want 2 (registered + drifted-name)", n)
+	}
+	if _, err := os.Stat(drifted); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("drifted-name live row still present after DoneWorkstream (err=%v)", err)
+	}
+	archived := filepath.Join(hub, fleetDir, archiveDir, fixedTime.Format(archiveDateLayout), rowFile(ws, "uuid-B"))
+	if got := readRowOrFail(t, archived); got.Status != StatusDone {
+		t.Errorf("drifted-name row not archived terminal: %+v", got)
+	}
+}
+
+// TestLifecycleDoneWorkstreamNoRows: zero matches fails loud (a typo'd id must
+// never report success), on both an empty hub and one with only other rows.
+func TestLifecycleDoneWorkstreamNoRows(t *testing.T) {
+	hub := t.TempDir()
+	if _, err := DoneWorkstream(hub, "nope", fixedTime); !errors.Is(err, ErrRowNotFound) {
+		t.Errorf("DoneWorkstream on empty hub: got %v, want ErrRowNotFound", err)
+	}
+	if err := Register(hub, Row{Workstream: "present", UUID: "u", Heartbeat: fixedTime.Format(heartbeatLayout)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DoneWorkstream(hub, "nope", fixedTime); !errors.Is(err, ErrRowNotFound) {
+		t.Errorf("DoneWorkstream with no matching rows: got %v, want ErrRowNotFound", err)
+	}
+}
+
 // TestLifecycleConcurrentUUIDsDoNotClobber is the core §15.4 guarantee: two
 // sessions on the SAME workstream write two DISTINCT row files.
 func TestLifecycleConcurrentUUIDsDoNotClobber(t *testing.T) {

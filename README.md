@@ -93,12 +93,13 @@ projections:
   render      deterministic machine digest (+ --verify, manifest)
   brief       human re-orientation view (the bigger picture)
   status      one-line-per-workstream fleet cockpit
-  open-items  this workstream's unresolved open-items (ULID + body), for /complete
+  open-items  a workstream's unresolved open-items (ULID + body), for /complete
+              (default: current workstream; --workstream <id> targets a sibling)
 
 fleet lifecycle (hook-emitted):
   register    create/refresh this workstream's fleet row
   heartbeat   touch liveness
-  done        archive the workstream's row
+  done        archive this session's row (--workstream <id>: all of a sibling's rows)
 
 adoption & install:
   adopt       register an existing repo (identity + CHARTER stub + fleet row)
@@ -136,11 +137,11 @@ director resolve <ulid>
 | `brief [--project <key>]` | human | the on-demand bigger-picture re-orientation view (outlook from CHARTER, latest handoff per workstream, open/escalate items, recent decisions), at project or whole-fleet altitude. |
 | `status` | human | the one-line-per-workstream fleet cockpit: handle · liveness · heartbeat recency · the **Needs-you** band (open `escalate` items). |
 
-`brief` and `render` share the same byte-identical fold — the human reads the same picture a fresh session reads. A fourth, narrower projection, `open-items`, lists the current workstream's unresolved open-items (ULID + body); it exists to feed `resolve` and `/director:complete`.
+`brief` and `render` share the same byte-identical fold — the human reads the same picture a fresh session reads. A fourth, narrower projection, `open-items`, lists a workstream's unresolved open-items (ULID + body); it exists to feed `resolve` and `/director:complete`. It defaults to the current workstream; `--workstream <id>` retargets it at a sibling — the close-out path for a workstream whose session is already gone.
 
 ### Fleet lifecycle
 
-`register` / `heartbeat` / `done` maintain a workstream's liveness row and are normally fired by the hooks, not run by hand. Liveness is **derived from heartbeat age** (TTL/lease) — never self-declared: a workstream that stops heartbeating ages to `idle` (after 4h) then `dormant` (after 2d), and dormant is a first-class state (a project parked between blocks), not a fault. A workstream whose branch no longer exists reads `gone` regardless of heartbeat: it looks complete and is the `/director:complete` candidate. `done` archives the row to `fleet/archive/<date>/` rather than deleting it.
+`register` / `heartbeat` / `done` maintain a workstream's liveness row and are normally fired by the hooks, not run by hand. Liveness is **derived from heartbeat age** (TTL/lease) — never self-declared: a workstream that stops heartbeating ages to `idle` (after 4h) then `dormant` (after 2d), and dormant is a first-class state (a project parked between blocks), not a fault. A workstream whose branch no longer exists reads `gone` regardless of heartbeat: it looks complete and is the `/director:complete` candidate. Because git refuses to delete a checked-out branch, a gone workstream is always a *sibling* (a worktree that merged and was removed), never the session's own — so the surfacing happens one session later: `status` shows the gone row's open-item count with the remedy, and — if the gone workstream still owns open items — the next Claude Code session on that repo gets a session-start nudge naming it (a zero-loop corpse has nothing at risk, so it gets the `status` remedy only). `/director:complete <workstream-id>` then closes out the dead sibling from wherever you are in the repo (`done --workstream <id>` archives every row it left behind). `done` archives rows to `fleet/archive/<date>/` rather than deleting them.
 
 ## The four event kinds
 

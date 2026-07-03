@@ -2,8 +2,11 @@
 
 Status: Frozen design record — all three build-sequence steps have since shipped
 (the `open-items` verb + the two commands + install wiring, the injected-protocol
-update, and the handoff nudge). Kept as-written for provenance; trust the code and
-README for current behavior. Supersedes the informal notes in the LOG
+update, and the handoff nudge). The branch-gone → `/complete` targeting gap flagged
+below has since been closed too — see
+`docs/specs/2026-07-03-branch-gone-targeting-design.md`. Kept as-written for
+provenance; trust the code and README for current behavior. Supersedes the informal
+notes in the LOG
 (decisions `01KWCH30WRTMKVMYETR34KS8PQ`, `01KWFEZZT3V6GSD8PX9R3XZJBJ`; open-items
 `01KW0BKQXQS12AQ9BZVZ6FBP3W`, `01KW0BKQXAFBXYK7M1R4M01NAV`).
 

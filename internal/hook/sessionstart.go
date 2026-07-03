@@ -78,7 +78,7 @@ func handleSessionStart(in Input, out io.Writer, hub string) error {
 		}
 	}
 
-	ctx, err := buildGroundTruth(hub, ws.RepoKey, ws.ID)
+	ctx, err := buildGroundTruth(hub, ws.RepoKey, ws.ID, in.SessionID)
 	if err != nil {
 		logFailure(hub, EventSessionStart, in.SessionID, fmt.Sprintf("build ground truth: %v", err))
 		return nil
@@ -126,8 +126,10 @@ func refreshFleet(hub string, ws identity.Workstream, uuid, cwd string) error {
 // project CHARTER (graceful when absent), and the deterministic digest folded
 // from the LOG. The digest is the same one `director render` and
 // `--verify` anchor on, so what the session is handed is exactly what the
-// cockpit shows — no drift between injected and authoritative state.
-func buildGroundTruth(hub, repoKey, workstreamID string) (string, error) {
+// cockpit shows — no drift between injected and authoritative state. sessionID
+// is only for health-logging a close-out-nudge failure (which is fail-open,
+// never blocking the injection).
+func buildGroundTruth(hub, repoKey, workstreamID, sessionID string) (string, error) {
 	store := event.NewStore(hub, repoKey)
 	events, err := store.ReadAll()
 	if err != nil {
@@ -155,10 +157,69 @@ func buildGroundTruth(hub, repoKey, workstreamID string) (string, error) {
 	if charterExists(hub, repoKey) || len(events) > 0 {
 		b.WriteString("\n")
 		b.WriteString(emitProtocol)
+		nudge, err := closeOutNudge(hub, repoKey, workstreamID, proj, time.Now().UTC())
+		if err != nil {
+			// Fail open: the nudge is advisory — a fleet read problem must never
+			// cost the session its Ground Truth. Log it and inject without.
+			logFailure(hub, EventSessionStart, sessionID, fmt.Sprintf("close-out nudge: %v", err))
+		} else if nudge != "" {
+			b.WriteString("\n")
+			b.WriteString(nudge)
+		}
 		b.WriteString("\n")
 		b.WriteString(startupBanner(workstreamID, proj))
 	}
 
+	return b.String(), nil
+}
+
+// closeOutNudge surfaces dead SIBLING workstreams of this repo — branch gone,
+// open-items still attached — as a pre-computed /director:complete suggestion.
+// This is the "later session" surface for the branch-gone signal: a session's
+// own branch ref survives while its worktree lives (git refuses to delete a
+// checked-out branch), so gone always identifies a sibling, never the current
+// workstream. Gating, all required: state gone, same repo (another project's
+// corpses are noise here), not the current workstream, and ≥1 open item owned
+// by it (a zero-loop gone row keeps its status remedy but earns no model nudge
+// — nudge signal-to-noise is the scarce resource). No once-marker: the
+// condition self-clears when /director:complete archives the rows. proj is the
+// repo fold the caller already performed — counting from it avoids a second
+// log read.
+func closeOutNudge(hub, repoKey, currentWS string, proj render.Projection, now time.Time) (string, error) {
+	// The branch check spawns a git subprocess per row; short-circuit it for
+	// other repos' rows (the RepoKey gate below discards them regardless of
+	// derived state) so SessionStart latency scales with THIS repo's rows, not
+	// the whole fleet's.
+	branchAlive := func(r fleet.Row) bool {
+		if r.RepoKey != repoKey {
+			return true
+		}
+		return fleet.BranchAlive(r)
+	}
+	live, _, err := fleet.List(hub, now, render.IdleAfter, render.DormantAfter, branchAlive)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	for _, l := range live {
+		if l.State != fleet.StateGone || l.RepoKey != repoKey || l.Workstream == currentWS {
+			continue
+		}
+		open := 0
+		for _, o := range proj.OpenItems {
+			if o.Workstream == l.Workstream {
+				open++
+			}
+		}
+		if open == 0 {
+			continue
+		}
+		if b.Len() == 0 {
+			b.WriteString("## Close-out pending\n")
+		}
+		fmt.Fprintf(&b, "Sibling workstream %s looks complete — its branch is gone and it still owns %d open item(s). Suggest `/director:complete %s` to the human; do not resolve its items outside that flow.\n",
+			l.Workstream, open, l.Workstream)
+	}
 	return b.String(), nil
 }
 
