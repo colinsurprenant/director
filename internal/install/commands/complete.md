@@ -1,5 +1,5 @@
 ---
-description: Close out a finished, merged workstream — resolve what it completed, hand genuine follow-ups to the repo backlog, and archive its fleet row. Targets this workstream by default, or a named dead sibling (branch gone). Use when the task is DONE and the branch is merged/gone; to pause work you will resume, use /director:handoff instead.
+description: Close out a finished, merged workstream — resolve what it completed, hand genuine follow-ups to the repo backlog, and archive its fleet row(s). Targets this workstream by default, or a named dead sibling (branch gone). Use when the task is DONE and the branch is merged/gone; to pause work you will resume, use /director:handoff instead.
 ---
 
 You are running the TERMINAL close-out for a workstream: its task is finished and its branch is merged (or gone). This is not a pause — a finished workstream has no next action, so you must NOT write a handoff (that would leave a phantom baton that keeps showing the workstream as resumable). Work through these steps in order.

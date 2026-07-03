@@ -84,7 +84,7 @@ func runDone(args []string) int {
 		n, err := fleet.DoneWorkstream(hub, workstream, time.Now().UTC())
 		if err != nil {
 			if errors.Is(err, fleet.ErrRowNotFound) {
-				fmt.Fprintf(os.Stderr, "done: no live rows for workstream %q (already archived, or a typo — see `director status`)\n", workstream)
+				fmt.Fprintf(os.Stderr, "done: no live rows for workstream %q (already archived, a typo, or its rows are unreadable — see `director status`)\n", workstream)
 				return 2
 			}
 			fmt.Fprintf(os.Stderr, "done: %v\n", err)
