@@ -180,6 +180,44 @@ func TestLifecycleDoneWorkstreamArchivesAllRows(t *testing.T) {
 	}
 }
 
+// TestLifecycleDoneWorkstreamSkipsCorruptAndArchivesDriftedName: a corrupt row
+// file must not abort the sweep (its workstream can't be read — same leniency
+// as List), and a row whose FILENAME drifted from its identity hash (hand-copied
+// or renamed) still archives, because archiveRow moves the path it actually
+// scanned rather than recomputing it from the body — otherwise the drifted row
+// would be a permanent ghost every targeted done trips over.
+func TestLifecycleDoneWorkstreamSkipsCorruptAndArchivesDriftedName(t *testing.T) {
+	hub := t.TempDir()
+	ws := "widget-feature-abc123"
+	if err := Register(hub, Row{Workstream: ws, UUID: "uuid-A", Heartbeat: fixedTime.Format(heartbeatLayout)}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	// A matching row living under a filename its identity does not hash to.
+	drifted := filepath.Join(hub, fleetDir, "hand-copied"+rowExt)
+	if err := writeRow(drifted, Row{Workstream: ws, UUID: "uuid-B", Heartbeat: fixedTime.Format(heartbeatLayout)}); err != nil {
+		t.Fatalf("write drifted row: %v", err)
+	}
+	// A corrupt row file in the same dir.
+	if err := os.WriteFile(filepath.Join(hub, fleetDir, "corrupt"+rowExt), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := DoneWorkstream(hub, ws, fixedTime)
+	if err != nil {
+		t.Fatalf("DoneWorkstream: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("archived %d rows, want 2 (registered + drifted-name)", n)
+	}
+	if _, err := os.Stat(drifted); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("drifted-name live row still present after DoneWorkstream (err=%v)", err)
+	}
+	archived := filepath.Join(hub, fleetDir, archiveDir, fixedTime.Format(archiveDateLayout), rowFile(ws, "uuid-B"))
+	if got := readRowOrFail(t, archived); got.Status != StatusDone {
+		t.Errorf("drifted-name row not archived terminal: %+v", got)
+	}
+}
+
 // TestLifecycleDoneWorkstreamNoRows: zero matches fails loud (a typo'd id must
 // never report success), on both an empty hub and one with only other rows.
 func TestLifecycleDoneWorkstreamNoRows(t *testing.T) {

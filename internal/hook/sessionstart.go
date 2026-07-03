@@ -186,7 +186,17 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID string) (string, err
 // repo fold the caller already performed — counting from it avoids a second
 // log read.
 func closeOutNudge(hub, repoKey, currentWS string, proj render.Projection, now time.Time) (string, error) {
-	live, _, err := fleet.List(hub, now, render.IdleAfter, render.DormantAfter, fleet.BranchAlive)
+	// The branch check spawns a git subprocess per row; short-circuit it for
+	// other repos' rows (the RepoKey gate below discards them regardless of
+	// derived state) so SessionStart latency scales with THIS repo's rows, not
+	// the whole fleet's.
+	branchAlive := func(r fleet.Row) bool {
+		if r.RepoKey != repoKey {
+			return true
+		}
+		return fleet.BranchAlive(r)
+	}
+	live, _, err := fleet.List(hub, now, render.IdleAfter, render.DormantAfter, branchAlive)
 	if err != nil {
 		return "", err
 	}

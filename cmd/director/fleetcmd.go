@@ -81,7 +81,8 @@ func runDone(args []string) int {
 			fmt.Fprintf(os.Stderr, "done: %v\n", err)
 			return 1
 		}
-		if _, err := fleet.DoneWorkstream(hub, workstream, time.Now().UTC()); err != nil {
+		n, err := fleet.DoneWorkstream(hub, workstream, time.Now().UTC())
+		if err != nil {
 			if errors.Is(err, fleet.ErrRowNotFound) {
 				fmt.Fprintf(os.Stderr, "done: no live rows for workstream %q (already archived, or a typo — see `director status`)\n", workstream)
 				return 2
@@ -89,6 +90,9 @@ func runDone(args []string) int {
 			fmt.Fprintf(os.Stderr, "done: %v\n", err)
 			return 1
 		}
+		// A targeted done can archive several rows; say how many so the close-out
+		// flow can report what actually happened.
+		fmt.Printf("archived %d row(s) for %s\n", n, workstream)
 		return 0
 	}
 

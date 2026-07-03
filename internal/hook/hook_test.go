@@ -481,6 +481,41 @@ func TestSessionStartCloseOutNudgeSkipsZeroItemGone(t *testing.T) {
 	}
 }
 
+// TestSessionStartCloseOutNudgeFailsOpen: the nudge is advisory — a broken
+// fleet surface (here, <hub>/fleet existing as a regular FILE so every dir
+// op on it fails) must cost the session only the nudge, never its Ground
+// Truth. The failure lands in health/ instead.
+func TestSessionStartCloseOutNudgeFailsOpen(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+
+	// A non-empty log opens the adopted-repo gate, so the nudge path actually runs.
+	store := event.NewStore(hub, ws.RepoKey)
+	if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindNote, Area: "x", Body: "working"}); err != nil {
+		t.Fatalf("seed note: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(hub, "fleet"), []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	in := `{"session_id":"s-real","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	var out bytes.Buffer
+	if code := Dispatch(EventSessionStart, strings.NewReader(in), &out, hub); code != 0 {
+		t.Fatalf("exit code = %d, want 0 (hooks are fail-safe)", code)
+	}
+	got := out.String()
+	if !strings.Contains(got, groundTruthPreamble) || !strings.Contains(got, "## Director protocol") {
+		t.Fatalf("fleet failure must not cost the session its Ground Truth + protocol:\n%s", got)
+	}
+	if strings.Contains(got, "## Close-out pending") {
+		t.Errorf("broken fleet surface should skip the nudge, not fabricate one:\n%s", got)
+	}
+	if health := readHealth(t, hub); !strings.Contains(health, "close-out nudge") {
+		t.Errorf("nudge failure should be recorded in health/, got:\n%s", health)
+	}
+}
+
 // TestSessionStartCloseOutNudgeScopedToRepo: another repo's gone workstream is
 // noise here — the nudge is gated on the row's RepoKey matching the session's.
 func TestSessionStartCloseOutNudgeScopedToRepo(t *testing.T) {

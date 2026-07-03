@@ -108,19 +108,27 @@ func Done(hub, workstream, uuid string, now time.Time) error {
 	if err != nil {
 		return err
 	}
+	return archiveRow(hub, src, row, now)
+}
+
+// archiveRow marks row done and moves it from src (the path it actually lives
+// at — never recomputed from the body, so a row whose filename drifted from its
+// identity hash still archives cleanly) to the dated archive dir.
+func archiveRow(hub, src string, row Row, now time.Time) error {
 	row.Status = StatusDone
 
 	destDir := filepath.Join(hub, fleetDir, archiveDir, now.Format(archiveDateLayout))
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return fmt.Errorf("fleet: create archive dir: %w", err)
 	}
-	dest := filepath.Join(destDir, rowFile(workstream, uuid))
+	dest := filepath.Join(destDir, rowFile(row.Workstream, row.UUID))
 	// Write the terminal copy first, then drop the live row — so a crash mid-Done
-	// leaves the row recoverable (in fleet/ or archive/), never lost.
+	// leaves the row recoverable (in fleet/ or archive/), never lost. A live row
+	// already removed by a concurrent archive is the goal state, not a failure.
 	if err := writeRow(dest, row); err != nil {
 		return err
 	}
-	if err := os.Remove(src); err != nil {
+	if err := os.Remove(src); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("fleet: remove live row after archive: %w", err)
 	}
 	return nil
@@ -133,11 +141,16 @@ func Done(hub, workstream, uuid string, now time.Time) error {
 // alive. Each matching row goes through the same terminal transition as Done.
 // Zero matches returns ErrRowNotFound so a typo'd workstream id fails loud
 // instead of reporting success. A corrupt row is skipped (its workstream can't
-// be read), consistent with List's leniency for ephemeral rows.
+// be read), consistent with List's leniency for ephemeral rows; a matching row
+// that vanishes mid-scan (a concurrent archive won the race) is skipped too —
+// its absence is the goal state, and aborting there would misreport a partial
+// success as "no live rows".
 //
 // Deliberately no branch-alive guard: archiving a still-active workstream by
 // mistake self-heals — Heartbeat is create-or-update, so the live session's
-// next hook fire re-materializes its row.
+// next hook fire re-materializes its row (liveness only; RepoKey/Branch/Dir
+// return on its next SessionStart register, so the cockpit's blocked-on and
+// branch check are degraded until then).
 func DoneWorkstream(hub, workstream string, now time.Time) (int, error) {
 	if workstream == "" {
 		return 0, fmt.Errorf("fleet: done requires a workstream")
@@ -155,11 +168,12 @@ func DoneWorkstream(hub, workstream string, now time.Time) (int, error) {
 		if e.IsDir() || filepath.Ext(e.Name()) != rowExt {
 			continue
 		}
-		row, err := readRow(filepath.Join(dir, e.Name()))
+		src := filepath.Join(dir, e.Name())
+		row, err := readRow(src)
 		if err != nil || row.Workstream != workstream {
 			continue
 		}
-		if err := Done(hub, row.Workstream, row.UUID, now); err != nil {
+		if err := archiveRow(hub, src, row, now); err != nil {
 			return archived, err
 		}
 		archived++
