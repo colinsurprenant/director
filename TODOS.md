@@ -9,6 +9,10 @@ v1 = visibility-first CLI (see `docs/specs/2026-06-03-director-coordination-desi
 - **Secret-scan before any share/sync** — lint rejecting key-like patterns in events; scan adoption/mapper output.
   - *Why:* the hub aggregates semantic notes across repos; safe while local-only, a leak trap once shared. (Spec §8.)
 
+## On the roadmap
+- **Codex adapter** — deliver Director to OpenAI Codex sessions: the coordination core is already agent-agnostic (CLI write path + plain NDJSON log; any shell-capable agent can `emit`/`resolve` today), so this is the thin delivery layer only — emit protocol via the always-loaded AGENTS.md, plus digest-injection, heartbeat, and close-out equivalents over Codex's config surface.
+  - *Why:* first external ask post-launch (day 1); widens the audience beyond Claude Code and proves the adapter seam (`internal/hook/adapter.go`) is real. The locked event schema and boundary commands are untouched: an adapter is a new delivery target, not new core surface.
+
 ## When it grows / when sync is needed
 - **Multi-machine sync** — shard one NDJSON per repo×machine (git-merge-clean), push/pull the hub repo; SessionStart warns on foreign-host hub.
   - *Why:* v1 is single-machine ("one primary, rare other"); per-machine sharding keeps appends conflict-free. (Eng spec §15.2.)
