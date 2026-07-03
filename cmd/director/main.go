@@ -13,8 +13,10 @@ import (
 
 // version is stamped at release time via -ldflags "-X main.version=vX.Y.Z".
 // Unstamped binaries fall back to the module version Go embeds in build info —
-// so a `go install ...@v1.3.0` binary still reports "v1.3.0" — and only a true
-// source build (embedded version "(devel)" or none) reports "dev".
+// a `go install ...@v1.3.0` binary reports "v1.3.0", a git-clone `go build`
+// reports the VCS-derived tag or pseudo-version — and only a build without any
+// VCS-derived version info (embedded "(devel)" or none: test binaries,
+// -buildvcs=false, non-git source trees) reports "dev".
 var version = "dev"
 
 // runVersion prints the stamped version. Extra arguments are a usage error,

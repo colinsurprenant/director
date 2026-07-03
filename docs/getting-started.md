@@ -50,7 +50,9 @@ sudo install bin/director /usr/local/bin/director   # or copy anywhere on PATH
 ```
 
 Confirm the binary resolves with `director version`. A release or `go install` binary prints its
-version (e.g. `director v1.3.0`); only a from-source `go build` prints `director dev`.
+version (e.g. `director v1.3.0`); a `go build` from a git clone prints the version Go derives from
+the checkout (a tag or pseudo-version, `+dirty` if modified); `director dev` appears only when no
+VCS metadata is available.
 
 ### Wire the hooks
 
