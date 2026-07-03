@@ -391,6 +391,46 @@ func TestSessionStartRegistersBranchForGone(t *testing.T) {
 	}
 }
 
+// TestSessionStartCodexCommandNames: a Codex session (detected from its
+// rollout-format transcript_path) gets the protocol block with Codex prompt
+// names (/director-complete), not CC command names (/director:complete) that
+// would not resolve there. The digest itself is never rewritten.
+func TestSessionStartCodexCommandNames(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+
+	// Non-empty log opens the adopted-repo gate so the protocol block is present.
+	store := event.NewStore(hub, ws.RepoKey)
+	if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindNote, Area: "x", Body: "working"}); err != nil {
+		t.Fatalf("seed note: %v", err)
+	}
+
+	rollout := "/Users/u/.codex/sessions/2026/07/03/rollout-2026-07-03T15-43-27-abc.jsonl"
+	in := `{"session_id":"s-codex","transcript_path":` + jsonString(rollout) + `,"cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	var out bytes.Buffer
+	if code := Dispatch(EventSessionStart, strings.NewReader(in), &out, hub); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	got := out.String()
+	if !strings.Contains(got, "/director-complete") || !strings.Contains(got, "/director-handoff") {
+		t.Errorf("codex session should get prompt-named commands in the protocol:\n%s", got)
+	}
+	if strings.Contains(got, "/director:complete") || strings.Contains(got, "/director:handoff") {
+		t.Errorf("codex session must not be told CC command names:\n%s", got)
+	}
+
+	// The same start with a CC-shaped transcript path keeps the CC names.
+	inCC := `{"session_id":"s-cc","transcript_path":"/Users/u/.claude/projects/x/transcript.jsonl","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	out.Reset()
+	if code := Dispatch(EventSessionStart, strings.NewReader(inCC), &out, hub); code != 0 {
+		t.Fatalf("cc exit code = %d, want 0", code)
+	}
+	if !strings.Contains(out.String(), "/director:complete") {
+		t.Errorf("CC session should keep CC command names:\n%s", out.String())
+	}
+}
+
 // TestSessionStartCloseOutNudgeForGoneSibling: the "later session" surface of
 // the branch-gone signal. A worktree session leaves an open-item, its branch
 // merges away and is deleted; the NEXT session on the repo (a different

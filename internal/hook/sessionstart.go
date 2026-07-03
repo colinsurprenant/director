@@ -78,7 +78,7 @@ func handleSessionStart(in Input, out io.Writer, hub string) error {
 		}
 	}
 
-	ctx, err := buildGroundTruth(hub, ws.RepoKey, ws.ID, in.SessionID)
+	ctx, err := buildGroundTruth(hub, ws.RepoKey, ws.ID, in.SessionID, isCodexTranscript(in.TranscriptPath))
 	if err != nil {
 		logFailure(hub, EventSessionStart, in.SessionID, fmt.Sprintf("build ground truth: %v", err))
 		return nil
@@ -128,8 +128,9 @@ func refreshFleet(hub string, ws identity.Workstream, uuid, cwd string) error {
 // `--verify` anchor on, so what the session is handed is exactly what the
 // cockpit shows — no drift between injected and authoritative state. sessionID
 // is only for health-logging a close-out-nudge failure (which is fail-open,
-// never blocking the injection).
-func buildGroundTruth(hub, repoKey, workstreamID, sessionID string) (string, error) {
+// never blocking the injection). codex switches the protocol/nudge command
+// names to Codex's prompt namespace (see codexCommandNames).
+func buildGroundTruth(hub, repoKey, workstreamID, sessionID string, codex bool) (string, error) {
 	store := event.NewStore(hub, repoKey)
 	events, err := store.ReadAll()
 	if err != nil {
@@ -156,7 +157,7 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID string) (string, err
 	// never nags in an unrelated repo when the hooks are installed user-level.
 	if charterExists(hub, repoKey) || len(events) > 0 {
 		b.WriteString("\n")
-		b.WriteString(emitProtocol)
+		b.WriteString(codexCommandNames(emitProtocol, codex))
 		nudge, err := closeOutNudge(hub, repoKey, workstreamID, proj, time.Now().UTC())
 		if err != nil {
 			// Fail open: the nudge is advisory — a fleet read problem must never
@@ -164,13 +165,41 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID string) (string, err
 			logFailure(hub, EventSessionStart, sessionID, fmt.Sprintf("close-out nudge: %v", err))
 		} else if nudge != "" {
 			b.WriteString("\n")
-			b.WriteString(nudge)
+			b.WriteString(codexCommandNames(nudge, codex))
 		}
 		b.WriteString("\n")
 		b.WriteString(startupBanner(workstreamID, proj))
 	}
 
 	return b.String(), nil
+}
+
+// isCodexTranscript reports whether a hook payload's transcript_path identifies
+// a Codex session: Codex rollouts live under a .codex directory with a
+// `rollout-` basename, neither of which a Claude Code transcript carries.
+// Best-effort by design — a wrong guess costs only a command name the human can
+// map (/director:complete vs /director-complete), never state — and an empty
+// path (payload without one) reads as Claude Code.
+func isCodexTranscript(path string) bool {
+	if path == "" {
+		return false
+	}
+	if strings.HasPrefix(filepath.Base(path), "rollout-") {
+		return true
+	}
+	return strings.Contains(path, string(filepath.Separator)+".codex"+string(filepath.Separator))
+}
+
+// codexCommandNames rewrites CC-namespaced command references
+// (/director:complete) to their Codex prompt names (/director-complete) when
+// the starting session is a Codex one. Applied ONLY to the protocol and nudge
+// blocks Director authors — never to the digest, which must stay byte-for-byte
+// the render output.
+func codexCommandNames(s string, codex bool) string {
+	if !codex {
+		return s
+	}
+	return strings.ReplaceAll(s, "/director:", "/director-")
 }
 
 // closeOutNudge surfaces dead SIBLING workstreams of this repo — branch gone,

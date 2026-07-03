@@ -149,20 +149,29 @@ func Install(settingsPath string) error {
 	if err := writeCommands(commandsDir); err != nil {
 		return err
 	}
-	root, err := loadSettings(settingsPath)
+	return mergeManagedEntries(settingsPath, directorEntries, hooksDir)
+}
+
+// mergeManagedEntries performs the `_managedBy`-tagged merge of entries into the
+// hooks file at path. It is the shared core behind Install (CC settings.json) and
+// InstallCodex (Codex hooks.json) — both files carry the same top-level
+// {"hooks": {Event: [{matcher, hooks: [...]}]}} structure, so one merge serves
+// both. Idempotent: an identical tagged entry already present is left as-is.
+func mergeManagedEntries(path string, entries []managedEntry, hooksDir string) error {
+	root, err := loadSettings(path)
 	if err != nil {
 		return err
 	}
 
 	hooks, ok := typedMap(root, "hooks")
 	if !ok {
-		return fmt.Errorf("install: refusing to modify %s: \"hooks\" is present but not an object", settingsPath)
+		return fmt.Errorf("install: refusing to modify %s: \"hooks\" is present but not an object", path)
 	}
 
-	for _, e := range directorEntries {
+	for _, e := range entries {
 		groups, ok := typedArray(hooks, e.event)
 		if !ok {
-			return fmt.Errorf("install: refusing to modify %s: hooks.%s is present but not an array", settingsPath, e.event)
+			return fmt.Errorf("install: refusing to modify %s: hooks.%s is present but not an array", path, e.event)
 		}
 		command := commandFor(hooksDir, e.shim)
 
@@ -181,7 +190,7 @@ func Install(settingsPath string) error {
 		group := asMap(groups[gi])
 		cmds, ok := typedArray(group, "hooks")
 		if !ok {
-			return fmt.Errorf("install: refusing to modify %s: hooks.%s[%d].hooks is present but not an array", settingsPath, e.event, gi)
+			return fmt.Errorf("install: refusing to modify %s: hooks.%s[%d].hooks is present but not an array", path, e.event, gi)
 		}
 		if hasManagedCommand(cmds, command) {
 			continue // already installed — idempotent no-op
@@ -192,7 +201,7 @@ func Install(settingsPath string) error {
 	}
 
 	root["hooks"] = hooks
-	return writeSettings(settingsPath, root)
+	return writeSettings(path, root)
 }
 
 // Uninstall removes ONLY Director's `_managedBy:"director"` command objects from
@@ -200,22 +209,42 @@ func Install(settingsPath string) error {
 // result. Untagged commands, foreign groups, and non-hook settings are preserved
 // exactly. A missing settings file is a no-op.
 func Uninstall(settingsPath string) error {
-	if _, err := os.Stat(settingsPath); os.IsNotExist(err) {
+	if err := removeManagedEntries(settingsPath); err != nil {
+		return err
+	}
+	// Remove the Director-owned shims too — the inverse of Install's writeShims
+	// (best-effort: only the exact Director filenames, never foreign files).
+	if hooksDir, err := DefaultHooksDir(); err == nil {
+		removeShims(hooksDir)
+	}
+	// And the Director-owned slash commands — the inverse of writeCommands, same
+	// best-effort, exact-filenames-only discipline.
+	if commandsDir, err := DefaultCommandsDir(); err == nil {
+		removeCommands(commandsDir)
+	}
+	return nil
+}
+
+// removeManagedEntries strips Director's tagged command objects from the hooks
+// file at path — the shared removal core behind Uninstall (CC) and
+// UninstallCodex. A missing file is a no-op.
+func removeManagedEntries(path string) error {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil
 	}
-	root, err := loadSettings(settingsPath)
+	root, err := loadSettings(path)
 	if err != nil {
 		return err
 	}
 	hooks, ok := typedMap(root, "hooks")
 	if !ok {
-		return fmt.Errorf("install: refusing to uninstall from %s: \"hooks\" is present but not an object", settingsPath)
+		return fmt.Errorf("install: refusing to uninstall from %s: \"hooks\" is present but not an object", path)
 	}
 
 	for event := range hooks {
 		groups, ok := typedArray(hooks, event)
 		if !ok {
-			return fmt.Errorf("install: refusing to uninstall from %s: hooks.%s is present but not an array", settingsPath, event)
+			return fmt.Errorf("install: refusing to uninstall from %s: hooks.%s is present but not an array", path, event)
 		}
 		kept := make([]any, 0, len(groups))
 		for _, g := range groups {
@@ -256,20 +285,7 @@ func Uninstall(settingsPath string) error {
 	} else {
 		root["hooks"] = hooks
 	}
-	if err := writeSettings(settingsPath, root); err != nil {
-		return err
-	}
-	// Remove the Director-owned shims too — the inverse of Install's writeShims
-	// (best-effort: only the exact Director filenames, never foreign files).
-	if hooksDir, err := DefaultHooksDir(); err == nil {
-		removeShims(hooksDir)
-	}
-	// And the Director-owned slash commands — the inverse of writeCommands, same
-	// best-effort, exact-filenames-only discipline.
-	if commandsDir, err := DefaultCommandsDir(); err == nil {
-		removeCommands(commandsDir)
-	}
-	return nil
+	return writeSettings(path, root)
 }
 
 // writeShims materializes the embedded hook shims into hooksDir, creating the dir
