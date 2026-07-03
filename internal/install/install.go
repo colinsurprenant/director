@@ -253,13 +253,16 @@ func removeManagedEntries(path string) error {
 	}
 	hooks, ok := typedMap(root, "hooks")
 	if !ok {
-		return fmt.Errorf("install: refusing to uninstall from %s: \"hooks\" is present but not an object", path)
+		// No package prefix on the uninstall-path errors: the CLI wraps them with
+		// its verb ("uninstall: %v"), and "uninstall: install: ..." reads like two
+		// different operations fighting.
+		return fmt.Errorf("refusing to uninstall from %s: \"hooks\" is present but not an object", path)
 	}
 
 	for event := range hooks {
 		groups, ok := typedArray(hooks, event)
 		if !ok {
-			return fmt.Errorf("install: refusing to uninstall from %s: hooks.%s is present but not an array", path, event)
+			return fmt.Errorf("refusing to uninstall from %s: hooks.%s is present but not an array", path, event)
 		}
 		kept := make([]any, 0, len(groups))
 		for _, g := range groups {

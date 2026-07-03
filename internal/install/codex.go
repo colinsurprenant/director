@@ -121,6 +121,13 @@ func UninstallCodex(hooksPath string) error {
 // install", because refusing to remove shims on every read hiccup would make
 // the CC uninstall permanently leaky. Only a positive managed-entry sighting
 // spares the shims.
+//
+// KNOWN LIMIT: only the default path (or DIRECTOR_CODEX_HOOKS_PATH) is
+// checked. A Codex install placed at a custom `--settings <path>` without the
+// matching env var is invisible here, so a CC uninstall would remove the shims
+// it references. Deliberate: the override is an expert/test affordance, there
+// is no registry of custom paths to consult, and the failure is non-destructive
+// — re-running `install --codex` restores the shims.
 func codexInstallPresent() bool {
 	hooksPath, err := DefaultCodexHooksPath()
 	if err != nil {
