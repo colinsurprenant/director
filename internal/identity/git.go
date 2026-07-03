@@ -38,7 +38,12 @@ func EnsureGitRepo(dir string) error {
 		if strings.Contains(stderr.String(), "not a git repository") {
 			return fmt.Errorf("%s: %w", dir, ErrNotGitRepo)
 		}
-		return fmt.Errorf("git rev-parse --is-inside-work-tree: %w: %s", err, strings.TrimSpace(stderr.String()))
+		// Append stderr only when git produced any — a missing git binary fails
+		// with an empty stderr, and a bare "...: %s" would end in a dangling colon.
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return fmt.Errorf("git rev-parse --is-inside-work-tree: %w: %s", err, msg)
+		}
+		return fmt.Errorf("git rev-parse --is-inside-work-tree: %w", err)
 	}
 	if strings.TrimSpace(stdout.String()) != "true" {
 		return fmt.Errorf("%s: %w", dir, ErrNotGitRepo)

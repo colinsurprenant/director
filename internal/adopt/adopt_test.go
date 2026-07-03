@@ -22,7 +22,13 @@ func TestAdoptNonGitDirFailsFast(t *testing.T) {
 	if _, err := Adopt(hub, dir); !errors.Is(err, identity.ErrNotGitRepo) {
 		t.Fatalf("Adopt on non-git dir: got %v, want identity.ErrNotGitRepo", err)
 	}
-	if entries, err := os.ReadDir(filepath.Join(hub, "projects")); err == nil && len(entries) > 0 {
+	// The whole hub must stay empty — not just projects/ non-empty: an empty
+	// projects/ dir would still be state left behind by a failed adopt.
+	entries, err := os.ReadDir(hub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) > 0 {
 		t.Fatalf("Adopt on non-git dir left hub state behind: %v", entries)
 	}
 }
