@@ -80,6 +80,8 @@ func run(args []string) int {
 		return runStatus(rest)
 	case "open-items":
 		return runOpenItems(rest)
+	case "show":
+		return runShow(rest)
 	case "adopt": // adoption (Phase 7)
 		return runAdopt(rest)
 	case "install": // installer (Phase 5)
@@ -115,6 +117,8 @@ projections:
   status      one-line-per-workstream fleet cockpit
   open-items  a workstream's unresolved open-items (ULID + body), for /complete
               (default: current workstream; --workstream <id> targets a sibling)
+  show        one event in full by ULID — the pull path behind the digest's
+              capped headlines (--project <repo-key> targets another project)
 
 fleet lifecycle (hook-emitted):
   register    create/refresh this workstream's fleet row

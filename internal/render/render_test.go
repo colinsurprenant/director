@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/colinsurprenant/director/internal/event"
 )
@@ -57,6 +58,18 @@ func TestDigestThroughStore(t *testing.T) {
 	d2 := Digest(Fold(read2), "widget")
 	if d1 != d2 {
 		t.Fatalf("digest differed across two reads of the same store:\n%s\n---\n%s", d1, d2)
+	}
+
+	// Section order must hold on a POPULATED digest too, not just the empty
+	// skeleton — a future refactor that branches per-section could reorder one
+	// path without touching the other.
+	last := -1
+	for _, header := range []string{"## open-items", "## handoffs", "## decisions"} {
+		at := strings.Index(d1, header)
+		if at < 0 || at < last {
+			t.Fatalf("populated digest section %q missing or out of order (want open-items, handoffs, decisions):\n%s", header, d1)
+		}
+		last = at
 	}
 
 	// The escalate open-item must be marked in the digest.
@@ -134,4 +147,71 @@ func lastIDOf(events []event.Event) string {
 		}
 	}
 	return last
+}
+
+// TestDigestLineCaps locks the §15.5 per-line bounding: a decision body over the
+// headline cap renders cut (with the "…" marker and its area tag), while the cap
+// is rune-safe under multibyte text — a byte-boundary cut would corrupt the
+// byte-identical digest grammar.
+func TestDigestLineCaps(t *testing.T) {
+	long := strings.Repeat("décision — ", 60) // multibyte, ~660 runes
+	proj := Fold([]event.Event{
+		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Area: "hooks", Body: long},
+	})
+	d := Digest(proj, "widget")
+
+	line := ""
+	for _, l := range strings.Split(d, "\n") {
+		if strings.HasPrefix(l, "- ") && strings.Contains(l, "[hooks]") {
+			line = l
+		}
+	}
+	if line == "" {
+		t.Fatalf("digest missing the decision index line with its area tag:\n%s", d)
+	}
+	if !strings.HasSuffix(line, "…") {
+		t.Errorf("over-cap decision body should end with the cut marker:\n%s", line)
+	}
+	// "- " + 26-rune ULID + " " + "[hooks] " + capped headline + "…"
+	if got, max := len([]rune(line)), 2+26+1+len("[hooks] ")+decisionHeadlineRunes+1; got > max {
+		t.Errorf("decision line exceeds the headline cap: %d runes:\n%s", got, line)
+	}
+	if !utf8.ValidString(d) {
+		t.Errorf("digest contains invalid UTF-8 after capping (byte-boundary cut?)")
+	}
+
+	// Under-cap bodies pass through unmarked.
+	short := Digest(Fold([]event.Event{
+		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Body: "small decision"},
+	}), "widget")
+	if !strings.Contains(short, "- ") || strings.Contains(short, "…") {
+		t.Errorf("under-cap body must render whole, without a cut marker:\n%s", short)
+	}
+}
+
+// TestDigestCompact locks the deterministic degradation step: identical to the
+// full digest except decisions collapse to one count-plus-pointer line, and the
+// actionable sections (open-items, handoffs) are untouched.
+func TestDigestCompact(t *testing.T) {
+	events, _ := richSet(t)
+	proj := Fold(events)
+	full := Digest(proj, "widget")
+	compact := DigestCompact(proj, "widget")
+
+	if !strings.Contains(compact, "2 active decisions elided for size") {
+		t.Errorf("compact digest should announce the elision with the count:\n%s", compact)
+	}
+	if strings.Contains(compact, "decision B") {
+		t.Errorf("compact digest must not carry decision bodies:\n%s", compact)
+	}
+	wantPrefix := full[:strings.Index(full, "## decisions")]
+	if !strings.HasPrefix(compact, wantPrefix) {
+		t.Errorf("compact digest must be byte-identical to the full digest above the decisions section:\n--- full ---\n%s\n--- compact ---\n%s", full, compact)
+	}
+
+	// No active decisions → nothing to collapse; compact == full.
+	empty := Fold(nil)
+	if DigestCompact(empty, "widget") != Digest(empty, "widget") {
+		t.Errorf("compact of a decision-less projection should equal the full digest")
+	}
 }

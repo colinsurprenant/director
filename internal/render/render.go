@@ -17,9 +17,15 @@ import (
 // the same event set always renders byte-identically (§13 t4). repoKey titles the
 // digest so a multi-project injection stays unambiguous.
 //
-// v1 renders the COMPLETE active set (every active decision, every open item, the
-// latest handoff per workstream); it is not yet size-bounded. A bounded snapshot
-// (top-N with overflow, like status' Needs-you band) is the §15.5 fast-follow.
+// The digest is size-bounded per LINE, not per section (§15.5): every entry of
+// the COMPLETE active set is present, but each body is capped to a headline —
+// nothing is dropped, the full body is one deterministic hop away via
+// `director show <ulid>`. Caps are generous where the content is actionable
+// (open-items, the handoff baton) and tight where it is deferrable rationale
+// (decisions, whose durable home is the living docs, not the log body). This is
+// what keeps the SessionStart injection safely under the harness's inline
+// hook-output budget as a project's log grows (the un-capped digest was
+// observed at 36KB after one month of dogfood — demoted to a 2KB preview).
 //
 // Sections, in fixed order — actionable state first, so anything that
 // truncates the digest (the harness's inline hook-output budget, a human
@@ -32,6 +38,21 @@ import (
 // Empty sections still print their header with a "(none)" line so the absence of
 // work is itself a stable, diffable fact rather than a missing section.
 func Digest(proj Projection, repoKey string) string {
+	return digest(proj, repoKey, false)
+}
+
+// DigestCompact is the hook's deterministic degradation step: identical to
+// Digest except the decisions section collapses to a single count-plus-pointer
+// line. It exists for the case where even the line-capped digest pushes the
+// SessionStart injection over its byte budget — decisions are the one section
+// whose full set is deferrable (rationale, not open loops or the baton), and
+// the collapsed line itself tells the model where the elided content lives, so
+// the elision is never silent.
+func DigestCompact(proj Projection, repoKey string) string {
+	return digest(proj, repoKey, true)
+}
+
+func digest(proj Projection, repoKey string, collapseDecisions bool) string {
 	var b strings.Builder
 
 	fmt.Fprintf(&b, "# director render — %s\n", repoKey)
@@ -41,7 +62,7 @@ func Digest(proj Projection, repoKey string) string {
 		b.WriteString("(none)\n")
 	} else {
 		for _, o := range proj.OpenItems {
-			fmt.Fprintf(&b, "- %s %s%s\n", o.ID, escalateTag(o.Risk), oneLine(o.Body))
+			fmt.Fprintf(&b, "- %s %s%s\n", o.ID, escalateTag(o.Risk), headline(o.Body, openItemBodyRunes))
 		}
 	}
 
@@ -51,16 +72,19 @@ func Digest(proj Projection, repoKey string) string {
 	} else {
 		for _, ws := range sortedKeys(proj.LatestHandoff) {
 			h := proj.LatestHandoff[ws]
-			fmt.Fprintf(&b, "- %s [%s] %s\n", h.ID, ws, oneLine(h.Body))
+			fmt.Fprintf(&b, "- %s [%s] %s\n", h.ID, ws, headline(h.Body, handoffBodyRunes))
 		}
 	}
 
 	b.WriteString("\n## decisions\n")
-	if len(proj.Decisions) == 0 {
+	switch {
+	case len(proj.Decisions) == 0:
 		b.WriteString("(none)\n")
-	} else {
+	case collapseDecisions:
+		fmt.Fprintf(&b, "(%d active decisions elided for size — run `director render` for the index, `director show <ulid>` for a full body)\n", len(proj.Decisions))
+	default:
 		for _, d := range proj.Decisions {
-			fmt.Fprintf(&b, "- %s %s\n", d.ID, oneLine(d.Body))
+			fmt.Fprintf(&b, "- %s %s%s\n", d.ID, areaTag(d.Area), headline(d.Body, decisionHeadlineRunes))
 		}
 	}
 
@@ -146,4 +170,42 @@ func oneLine(s string) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.ReplaceAll(s, "\r", " ")
 	return strings.TrimSpace(s)
+}
+
+// Per-line digest caps (§15.5), in runes. Sized to context economy, not to the
+// harness's inline hook-output limit — that limit is undocumented and has been
+// observed to drift, so it must never be load-bearing. Generous where content
+// is actionable, tight where it is deferrable:
+//   - a decision line is an INDEX entry (ULID + area + headline); its full
+//     rationale lives one hop away in `director show`, and its durable home is
+//     the living docs anyway (CHARTER/ADRs), not the log body
+//   - an open-item must carry enough of the loop to act on without a pull
+//   - the handoff is the resume baton; cutting it defeats its purpose
+const (
+	decisionHeadlineRunes = 160
+	openItemBodyRunes     = 300
+	handoffBodyRunes      = 500
+)
+
+// headline collapses a body to one line and caps it at max runes, marking a cut
+// with "…" so a capped line is visibly a headline, never mistaken for the full
+// text. Rune-safe: a cap mid-UTF-8-sequence would corrupt the byte-identical
+// digest grammar.
+func headline(s string, max int) string {
+	s = oneLine(s)
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return strings.TrimSpace(string(runes[:max])) + "…"
+}
+
+// areaTag prefixes a decision's area onto its index line — the area is what
+// lets a session scan the index for the decisions relevant to the code it is
+// about to touch. Empty areas render nothing rather than an empty bracket.
+func areaTag(area string) string {
+	if area == "" {
+		return ""
+	}
+	return "[" + area + "] "
 }
