@@ -221,13 +221,16 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID string, codex bool) 
 		// the render output.
 		b.WriteString(digest)
 		if managed {
-			if nudge != "" {
-				b.WriteString("\n")
-				b.WriteString(nudge)
-			}
+			// Resume before nudge: within the tail, survival order still applies —
+			// the resume anchor is session-critical while the close-out nudge is
+			// advisory and grows a line per gone sibling.
 			if resume != "" {
 				b.WriteString("\n")
 				b.WriteString(resume)
+			}
+			if nudge != "" {
+				b.WriteString("\n")
+				b.WriteString(nudge)
 			}
 		}
 		return b.String()

@@ -518,6 +518,13 @@ func TestSessionStartCloseOutNudgeForGoneSibling(t *testing.T) {
 	gitIn(t, repo, "worktree", "remove", "--force", wtDir)
 	gitIn(t, repo, "branch", "-D", "feature")
 
+	// Give the MAIN workstream a handoff so this fixture carries both tail
+	// blocks (resume + nudge) and can lock their relative order.
+	mainWS := mustResolve(t, repo)
+	if _, err := event.Emit(store, mainWS.ID, event.EmitParams{Type: event.KindHandoff, Area: "x", Body: "doing X, next Y"}); err != nil {
+		t.Fatalf("seed main handoff: %v", err)
+	}
+
 	in2 := `{"session_id":"s-main","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
 	var out bytes.Buffer
 	if code := Dispatch(EventSessionStart, strings.NewReader(in2), &out, hub); code != 0 {
@@ -532,6 +539,11 @@ func TestSessionStartCloseOutNudgeForGoneSibling(t *testing.T) {
 	}
 	if !strings.Contains(got, "1 open item(s)") {
 		t.Errorf("nudge should carry the sibling's open count:\n%s", got)
+	}
+	// Within the tail, survival order still applies: the session-critical
+	// resume anchor must precede the advisory (and per-sibling growing) nudge.
+	if r, n := strings.Index(got, "## Resume point"), strings.Index(got, "## Close-out pending"); r < 0 || n < 0 || r > n {
+		t.Errorf("resume point must precede the close-out nudge (resume@%d, nudge@%d):\n%s", r, n, got)
 	}
 }
 
