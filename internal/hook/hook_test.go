@@ -296,8 +296,19 @@ func TestSessionStartInjectsGroundTruth(t *testing.T) {
 	if !strings.Contains(ctx, "▸ Director:") {
 		t.Errorf("adopted-repo injection missing the startup acknowledgment banner:\n%s", ctx)
 	}
+	// The banner must ride the HEAD (after the preamble, before the protocol):
+	// a harness persisted-output preview keeps only the first ~2KB, and the
+	// banner is useless for the first reply if it sits in the dropped tail.
+	if b, p := strings.Index(ctx, "## Acknowledge on entry"), strings.Index(ctx, "## Director protocol"); b < 0 || p < 0 || b > p {
+		t.Errorf("acknowledgment banner must precede the emit protocol (banner@%d, protocol@%d):\n%s", b, p, ctx)
+	}
 	if !strings.Contains(ctx, "Resume point") {
 		t.Errorf("injection missing the resume-point anchor for the current workstream:\n%s", ctx)
+	}
+	// The resume point references the digest above it, so it must FOLLOW the
+	// digest — it is the one banner-adjacent block that stays in the tail.
+	if r, d := strings.Index(ctx, "## Resume point"), strings.Index(ctx, "# director render"); r < 0 || d < 0 || r < d {
+		t.Errorf("resume point must follow the render digest it references (resume@%d, digest@%d):\n%s", r, d, ctx)
 	}
 	if !strings.Contains(ctx, "commitment to act") {
 		t.Errorf("injected protocol should clarify that emit RECORDS (not a commitment to act):\n%s", ctx)
@@ -340,6 +351,15 @@ func TestSessionStartProtocolScopedToAdopted(t *testing.T) {
 	}
 	if strings.Contains(got, "## Director protocol") {
 		t.Errorf("un-adopted repo must NOT get the emit protocol (would nag unrelated repos):\n%s", got)
+	}
+	// The banner and resume point are managed-gated for the same reason as the
+	// protocol; lock their absence too so a refactor can't move their writes
+	// outside the managed guard unnoticed.
+	if strings.Contains(got, "## Acknowledge on entry") {
+		t.Errorf("un-adopted repo must NOT get the acknowledgment banner:\n%s", got)
+	}
+	if strings.Contains(got, "## Resume point") {
+		t.Errorf("un-adopted repo must NOT get a resume point:\n%s", got)
 	}
 }
 
@@ -446,6 +466,11 @@ func TestSessionStartCodexCommandNames(t *testing.T) {
 	}
 	if strings.Contains(got, "/director:complete") || strings.Contains(got, "/director:handoff") {
 		t.Errorf("codex session must not be told CC command names:\n%s", got)
+	}
+	// This fixture is managed (seeded note) but has NO handoff for the
+	// workstream — the resume-point block must be absent, not empty-headed.
+	if strings.Contains(got, "## Resume point") {
+		t.Errorf("no handoff for this workstream, so no resume point should be injected:\n%s", got)
 	}
 
 	// The same start with a CC-shaped transcript path keeps the CC names.
