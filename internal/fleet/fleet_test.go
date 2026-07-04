@@ -143,6 +143,42 @@ func TestLifecycleDoneMissingRow(t *testing.T) {
 	}
 }
 
+// TestLifecycleTimestampsNormalizedToUTC locks the write-boundary guarantee: a
+// caller passing a zoned clock to Heartbeat/Done still produces UTC-stamped
+// rows and UTC-dated archive buckets, whatever zone the caller's clock is in.
+// (Register still trusts its caller's pre-formatted heartbeat string — that
+// gap is tracked as its own open-item.)
+func TestLifecycleTimestampsNormalizedToUTC(t *testing.T) {
+	hub := t.TempDir()
+	ws, uuid := "widget-main-abc123", "uuid-1"
+	// 23:00 June 8 at -05:00 is June 9 in UTC, so zone handling shows in both
+	// the stored offset and the archive date bucket.
+	zoned := time.Date(2026, 6, 8, 23, 0, 0, 0, time.FixedZone("UTC-5", -5*3600))
+
+	if err := Heartbeat(hub, ws, uuid, zoned); err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+	got := readRowOrFail(t, rowPath(hub, ws, uuid))
+	hb, err := time.Parse(heartbeatLayout, got.Heartbeat)
+	if err != nil {
+		t.Fatalf("parse heartbeat %q: %v", got.Heartbeat, err)
+	}
+	if _, offset := hb.Zone(); offset != 0 {
+		t.Errorf("heartbeat %q carries a zone offset, want UTC", got.Heartbeat)
+	}
+	if !hb.Equal(zoned) {
+		t.Errorf("normalization changed the instant: %v != %v", hb, zoned)
+	}
+
+	if err := Done(hub, ws, uuid, zoned); err != nil {
+		t.Fatalf("Done: %v", err)
+	}
+	archived := filepath.Join(hub, fleetDir, archiveDir, "2026-06-09", rowFile(ws, uuid))
+	if _, err := os.Stat(archived); err != nil {
+		t.Errorf("archive bucket should use the UTC date (2026-06-09): %v", err)
+	}
+}
+
 // TestLifecycleDoneWorkstreamArchivesAllRows: the cross-workstream close-out
 // archives EVERY live row of the target (a dead sibling's session uuids are
 // unknowable, and a partial archive leaves the ghost alive) while another

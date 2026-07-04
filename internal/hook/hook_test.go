@@ -705,6 +705,42 @@ func TestEmitGuardAllowsWhenEmitted(t *testing.T) {
 	}
 }
 
+// TestStopAlreadyArchivedRowIsQuietSuccess: a repeated Stop with no tool call
+// in between (the daily steady state — the previous Stop already archived the
+// row) must land in health/ as ok=true, never as failure spam. The first Stop
+// archives the live row; the second finds nothing and stays quiet.
+func TestStopAlreadyArchivedRowIsQuietSuccess(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	transcript := writeTranscript(t, assistantLine("Nothing notable this turn."))
+
+	ws, err := identity.Resolve(repo)
+	if err != nil {
+		t.Fatalf("identity.Resolve: %v", err)
+	}
+	// Same uuid as stopInput's session_id, so both Stops target this row.
+	if err := fleet.Heartbeat(hub, ws.ID, "s-real", time.Now()); err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+
+	in := stopInput(repo, transcript, false)
+	for i := 0; i < 2; i++ {
+		var out bytes.Buffer
+		if code := Dispatch(EventStop, strings.NewReader(in), &out, hub); code != 0 {
+			t.Fatalf("stop %d: exit code = %d, want 0", i+1, code)
+		}
+	}
+	health := readHealth(t, hub)
+	// Exactly once: the first Stop must find and archive the live row (no quiet
+	// line), only the second hits the benign no-row path.
+	if n := strings.Count(health, "fleet done: no live row"); n != 1 {
+		t.Fatalf("quiet no-live-row line count = %d, want 1; health log:\n%s", n, health)
+	}
+	if strings.Contains(health, "ok=false") {
+		t.Errorf("a benign repeated stop must not produce failure lines, got:\n%s", health)
+	}
+}
+
 // TestEmitGuardProseMentionBlocks verifies a turn that only TALKS about emitting
 // (prose mention, no actual tool call) is not treated as having emitted — a
 // decision-like turn that never ran `director emit` still blocks (L2 false-negative

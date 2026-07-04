@@ -3,6 +3,7 @@ package hook
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -138,9 +139,13 @@ func markFleetDone(in Input, hub string) {
 		return
 	}
 	if err := fleet.Done(hub, ws.ID, sessionUUID(in), time.Now()); err != nil {
-		// ErrRowNotFound is an expected, benign outcome (nothing to archive);
-		// log it at the same loud level so the timeline stays complete but it
-		// never blocks the stop.
+		// An already-gone row (archived by a previous Stop with no tool call
+		// since, or never registered) is the steady state for repeated stops —
+		// log it as quiet success so ok=false lines in health/ stay meaningful.
+		if errors.Is(err, fleet.ErrRowNotFound) {
+			logSuccess(hub, EventStop, in.SessionID, "fleet done: no live row (already archived or never registered)")
+			return
+		}
 		logFailure(hub, EventStop, in.SessionID, fmt.Sprintf("fleet done: %v", err))
 	}
 }
