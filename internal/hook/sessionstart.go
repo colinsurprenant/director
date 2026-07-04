@@ -27,7 +27,17 @@ import (
 // groundTruthPreamble is the explicit authoritativeness instruction (§4.4 /
 // §14.2). It MUST lead the injected block; the digest and charter below it are
 // only useful if the model trusts them instead of re-deriving.
-const groundTruthPreamble = "This is your authoritative current state; build on it, do not re-derive or re-read it."
+//
+// The truncation contract rides in the preamble because the head is the ONLY
+// position guaranteed to survive: when this block outgrows the harness's inline
+// hook-output budget, Claude Code silently persists it to a file and injects
+// just a short head preview (observed live 2026-07-03: a 36KB injection demoted
+// to a 2KB preview — push degraded to pull and the session worked memory-zero).
+// The contract turns that silent degradation into a loud, self-healing one; it
+// is the delivery backstop, while keeping the payload small is the real fix
+// (§15.5 bounded digest).
+const groundTruthPreamble = "This is your authoritative current state; build on it, do not re-derive or re-read it.\n" +
+	"DELIVERY CHECK (overrides the line above when it applies): if what you received is a truncated or persisted-output rendering of this block (a 'saved to' file path plus a short preview instead of the full text), the state did NOT reach you — Read that full file before doing anything else; the file, not the preview, is the authoritative block."
 
 // emitProtocol is the write-side habit, injected alongside the read-side Ground
 // Truth so it is always in context from turn one. It is PUSHED here rather than
@@ -36,11 +46,11 @@ const groundTruthPreamble = "This is your authoritative current state; build on 
 // (dogfood: 0 emits in ~2.5h of real work with the skill installed). It is injected
 // only for Director-managed repos (see buildGroundTruth) so it can't nag elsewhere.
 const emitProtocol = "## Director protocol — keep this current as you work\n" +
-	"You coordinate with other sessions only through the LOG above, written ONLY via the `director` CLI (never Edit/Write a log file). Emit as you work, not batched at the end — state you don't write during a turn is lost on compaction or a fresh start. Emitting RECORDS a fact; it is NOT a commitment to act and does NOT need the human's approval first — record the decision/loop the moment it exists, then ask or act if needed:\n" +
+	"You coordinate with other sessions only through the LOG (digested below), written ONLY via the `director` CLI (never Edit/Write a log file). Emit as you work, not batched at the end — state you don't write during a turn is lost on compaction or a fresh start. Emitting RECORDS a fact; it is NOT a commitment to act and does NOT need the human's approval first — record the decision/loop the moment it exists, then ask or act if needed:\n" +
 	"- a decision the moment you make one — `director emit --type decision --area <area> \"<what + why>\"`\n" +
 	"- an open-item the moment you defer a loop — `director emit --type open-item --area <area> --risk <low|escalate> \"<loop>\"`\n" +
 	"- a handoff at each natural boundary (sub-task done, switching focus, wrapping up) — `director emit --type handoff --area <area> \"current task · next · hypotheses\"`\n" +
-	"- when you FINISH an open-item, close it — `director resolve <ulid>` (use a ULID from the open-items above; resolve only when it is truly done — there is no reopen)\n" +
+	"- when you FINISH an open-item, close it — `director resolve <ulid>` (use a ULID from the open-items listed below; resolve only when it is truly done — there is no reopen)\n" +
 	"At a WORKSTREAM boundary, suggest the matching close-out command to the human — the two are not interchangeable:\n" +
 	"- work DONE and merged → suggest `/director:complete`, BEFORE the branch/worktree is deleted — it reviews this workstream's open-items with the human, resolves the finished ones, and archives the workstream\n" +
 	"- PAUSING work that will resume (session ending mid-task, switching focus, context filling up) → suggest `/director:handoff` — it flushes unrecorded state and writes a self-sufficient resume baton\n" +
@@ -122,9 +132,10 @@ func refreshFleet(hub string, ws identity.Workstream, uuid, cwd string) error {
 	return nil
 }
 
-// buildGroundTruth assembles the injected block: the Ground-Truth preamble, the
-// project CHARTER (graceful when absent), and the deterministic digest folded
-// from the LOG. The digest is the same one `director render` and
+// buildGroundTruth assembles the injected block: the Ground-Truth preamble
+// (with the truncation contract), the write-side protocol (managed repos only),
+// the project CHARTER (graceful when absent), and the deterministic digest
+// folded from the LOG. The digest is the same one `director render` and
 // `--verify` anchor on, so what the session is handed is exactly what the
 // cockpit shows — no drift between injected and authoritative state. sessionID
 // is only for health-logging a close-out-nudge failure (which is fail-open,
@@ -139,9 +150,24 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID string, codex bool) 
 	proj := render.Fold(events)
 	digest := render.Digest(proj, repoKey)
 
+	// Managed = a CHARTER exists or the LOG already has events. The write-side
+	// protocol and nudges are injected only then, so they never nag in an
+	// unrelated repo when the hooks are installed user-level.
+	managed := charterExists(hub, repoKey) || len(events) > 0
+
 	var b strings.Builder
 	b.WriteString(groundTruthPreamble)
 	b.WriteString("\n\n")
+
+	// Assembly order is survival order: any truncation (harness demotion, a
+	// human skimming) eats the tail first, so the blocks a session cannot
+	// work without ride highest — preamble+contract, then the write-side
+	// protocol, then identity (CHARTER), then the digest, whose own sections
+	// put deferrable decision rationale last.
+	if managed {
+		b.WriteString(codexCommandNames(emitProtocol, codex))
+		b.WriteString("\n")
+	}
 
 	b.WriteString("## CHARTER\n")
 	b.WriteString(charterText(hub, repoKey))
@@ -152,12 +178,7 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID string, codex bool) 
 	// frame — keeping the injected state byte-for-byte the render output.
 	b.WriteString(digest)
 
-	// Push the write-side protocol next to the read-side state, but only for a
-	// Director-managed repo — a CHARTER exists or the LOG already has events — so it
-	// never nags in an unrelated repo when the hooks are installed user-level.
-	if charterExists(hub, repoKey) || len(events) > 0 {
-		b.WriteString("\n")
-		b.WriteString(codexCommandNames(emitProtocol, codex))
+	if managed {
 		nudge, err := closeOutNudge(hub, repoKey, workstreamID, proj, time.Now().UTC())
 		if err != nil {
 			// Fail open: the nudge is advisory — a fleet read problem must never

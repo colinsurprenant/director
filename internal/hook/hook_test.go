@@ -2,6 +2,7 @@ package hook
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -223,6 +224,23 @@ func TestHealthDetailStaysOneLine(t *testing.T) {
 
 // --- SessionStart Ground Truth ---------------------------------------------
 
+// injectedContext unmarshals a hook control envelope and returns its
+// additionalContext payload, so multi-line constants (the preamble carries the
+// truncation contract on its second line) can be matched against the decoded
+// text rather than its JSON-escaped form.
+func injectedContext(t *testing.T, raw string) string {
+	t.Helper()
+	var env struct {
+		HookSpecificOutput struct {
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal([]byte(raw), &env); err != nil {
+		t.Fatalf("unmarshal hook output: %v\n%s", err, raw)
+	}
+	return env.HookSpecificOutput.AdditionalContext
+}
+
 // TestSessionStartInjectsGroundTruth verifies the injected additionalContext
 // carries the Ground-Truth framing plus the CHARTER and the render digest.
 func TestSessionStartInjectsGroundTruth(t *testing.T) {
@@ -253,8 +271,11 @@ func TestSessionStartInjectsGroundTruth(t *testing.T) {
 	}
 
 	got := out.String()
-	if !strings.Contains(got, groundTruthPreamble) {
-		t.Errorf("injection missing Ground-Truth framing:\n%s", got)
+	ctx := injectedContext(t, got)
+	// The preamble (with its truncation contract) must LEAD the block: the head
+	// is the only position that survives a harness persisted-output demotion.
+	if !strings.HasPrefix(ctx, groundTruthPreamble) {
+		t.Errorf("Ground-Truth preamble must lead the injected block:\n%s", ctx)
 	}
 	if !strings.Contains(got, "Goal: ship the widget") {
 		t.Errorf("injection missing CHARTER body:\n%s", got)
@@ -264,6 +285,11 @@ func TestSessionStartInjectsGroundTruth(t *testing.T) {
 	}
 	if !strings.Contains(got, "## Director protocol") {
 		t.Errorf("adopted-repo injection missing the write-side emit protocol:\n%s", got)
+	}
+	// Survival order: the protocol must precede the digest, so a truncated
+	// delivery costs digest tail (decision rationale), never the emit habit.
+	if p, d := strings.Index(ctx, "## Director protocol"), strings.Index(ctx, "# director render"); p > d {
+		t.Errorf("emit protocol must precede the render digest (protocol@%d, digest@%d):\n%s", p, d, ctx)
 	}
 	if !strings.Contains(got, "▸ Director:") {
 		t.Errorf("adopted-repo injection missing the startup acknowledgment banner:\n%s", got)
@@ -307,7 +333,7 @@ func TestSessionStartProtocolScopedToAdopted(t *testing.T) {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
 	got := out.String()
-	if !strings.Contains(got, groundTruthPreamble) {
+	if !strings.Contains(injectedContext(t, got), groundTruthPreamble) {
 		t.Errorf("un-adopted repo should still get the Ground-Truth state:\n%s", got)
 	}
 	if strings.Contains(got, "## Director protocol") {
@@ -326,7 +352,7 @@ func TestSessionStartCompactReinjects(t *testing.T) {
 	if code := Dispatch(EventSessionStart, strings.NewReader(in), &out, hub); code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
-	if !strings.Contains(out.String(), groundTruthPreamble) {
+	if !strings.Contains(injectedContext(t, out.String()), groundTruthPreamble) {
 		t.Errorf("compact start did not re-inject Ground Truth:\n%s", out.String())
 	}
 }
@@ -545,7 +571,7 @@ func TestSessionStartCloseOutNudgeFailsOpen(t *testing.T) {
 		t.Fatalf("exit code = %d, want 0 (hooks are fail-safe)", code)
 	}
 	got := out.String()
-	if !strings.Contains(got, groundTruthPreamble) || !strings.Contains(got, "## Director protocol") {
+	if !strings.Contains(injectedContext(t, got), groundTruthPreamble) || !strings.Contains(got, "## Director protocol") {
 		t.Fatalf("fleet failure must not cost the session its Ground Truth + protocol:\n%s", got)
 	}
 	if strings.Contains(got, "## Close-out pending") {

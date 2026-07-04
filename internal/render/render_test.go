@@ -69,10 +69,20 @@ func TestDigestThroughStore(t *testing.T) {
 // fully-populated skeleton — every section header present with "(none)".
 func TestDigestEmptyLogStable(t *testing.T) {
 	d := Digest(Fold(nil), "empty")
-	for _, header := range []string{"## decisions", "## open-items", "## handoffs"} {
-		if !strings.Contains(d, header) {
+	// Fixed section order is survival order: actionable state (open-set, baton)
+	// first, deferrable decision rationale last, so a truncated delivery of the
+	// injected digest costs rationale, never open loops.
+	last := -1
+	for _, header := range []string{"## open-items", "## handoffs", "## decisions"} {
+		at := strings.Index(d, header)
+		if at < 0 {
 			t.Errorf("empty digest missing header %q:\n%s", header, d)
+			continue
 		}
+		if at < last {
+			t.Errorf("digest section %q out of order (want open-items, handoffs, decisions):\n%s", header, d)
+		}
+		last = at
 	}
 	if strings.Count(d, "(none)") != 3 {
 		t.Errorf("empty digest expected three (none) sections, got:\n%s", d)
