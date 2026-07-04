@@ -98,8 +98,12 @@ a bounded **digest** of current state. That block is your **authoritative curren
   project state to "reconfirm" what you were just handed.
 - Re-deriving burns the exact context budget the digest was sized to save — and accelerates the
   next compaction. Perfect context that you ignore and rediscover is no better than no context.
+- The digest is an **INDEX**: every line is a capped headline, not the full text. The sanctioned
+  deeper read is `director show <ulid>` — one event in full, one deterministic hop from any
+  headline. Before touching an area, pull the full bodies of its listed decisions rather than
+  guessing past a headline.
 - Reach for the underlying log/docs only to go **deeper** than the digest on a specific question,
   or when escalation requires a fresh authoritative read (a render can be stale — but that is a
-  targeted scan, not a wholesale re-derivation of what you already hold).
+  targeted `show`/scan, not a wholesale re-derivation of what you already hold).
 
 Take the injected CHARTER + digest as true, start from there, and add to the LOG as you go.

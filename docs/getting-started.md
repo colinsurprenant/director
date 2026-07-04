@@ -180,7 +180,8 @@ Just start Claude Code (or Codex) in the adopted repo as usual. Director's `Sess
 
 - registers/refreshes the workstream's liveness row, and
 - injects the **CHARTER + a deterministic digest** of the LOG as the session's *authoritative current
-  state* ("Ground Truth").
+  state* ("Ground Truth"). The digest is an index of capped headlines — `director show <ulid>` prints
+  any entry in full.
 
 You don't run anything. The session is now coordinating. As it works, its `PostToolUse` hook keeps the
 liveness heartbeat fresh, and its `Stop` hook does end-of-session bookkeeping.
