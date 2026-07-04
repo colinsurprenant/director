@@ -21,10 +21,13 @@ import (
 // latest handoff per workstream); it is not yet size-bounded. A bounded snapshot
 // (top-N with overflow, like status' Needs-you band) is the §15.5 fast-follow.
 //
-// Sections, in fixed order:
-//   - active decisions (ULID order)
+// Sections, in fixed order — actionable state first, so anything that
+// truncates the digest (the harness's inline hook-output budget, a human
+// skimming) costs deferrable decision rationale, never the open loops or the
+// baton:
 //   - open-set, with risk:escalate marked (ULID order)
 //   - latest handoff per workstream (sorted by workstream key)
+//   - active decisions (ULID order)
 //
 // Empty sections still print their header with a "(none)" line so the absence of
 // work is itself a stable, diffable fact rather than a missing section.
@@ -32,15 +35,6 @@ func Digest(proj Projection, repoKey string) string {
 	var b strings.Builder
 
 	fmt.Fprintf(&b, "# director render — %s\n", repoKey)
-
-	b.WriteString("\n## decisions\n")
-	if len(proj.Decisions) == 0 {
-		b.WriteString("(none)\n")
-	} else {
-		for _, d := range proj.Decisions {
-			fmt.Fprintf(&b, "- %s %s\n", d.ID, oneLine(d.Body))
-		}
-	}
 
 	b.WriteString("\n## open-items\n")
 	if len(proj.OpenItems) == 0 {
@@ -58,6 +52,15 @@ func Digest(proj Projection, repoKey string) string {
 		for _, ws := range sortedKeys(proj.LatestHandoff) {
 			h := proj.LatestHandoff[ws]
 			fmt.Fprintf(&b, "- %s [%s] %s\n", h.ID, ws, oneLine(h.Body))
+		}
+	}
+
+	b.WriteString("\n## decisions\n")
+	if len(proj.Decisions) == 0 {
+		b.WriteString("(none)\n")
+	} else {
+		for _, d := range proj.Decisions {
+			fmt.Fprintf(&b, "- %s %s\n", d.ID, oneLine(d.Body))
 		}
 	}
 
