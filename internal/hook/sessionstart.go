@@ -142,6 +142,11 @@ func refreshFleet(hub string, ws identity.Workstream, uuid, cwd string) error {
 // count+pointer line — never the open loops or the baton) and the overflow is
 // health-logged so growth is loud long before any harness threshold bites. The
 // preamble's DELIVERY CHECK contract remains the backstop of last resort.
+//
+// Measured on the DECODED payload — what actually enters the model's context.
+// The JSON envelope on the wire runs ~30% larger (escaping of <>, quotes, and
+// newlines); account for that before ever comparing this constant to a
+// wire-size threshold.
 const injectionBudgetBytes = 16 * 1024
 
 // buildGroundTruth assembles the injected block: the Ground-Truth preamble

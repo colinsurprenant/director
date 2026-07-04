@@ -120,6 +120,8 @@ projections:
   status      one-line-per-workstream fleet cockpit
   open-items  a workstream's unresolved open-items (ULID + body), for /complete
               (default: current workstream; --workstream <id> targets a sibling)
+  show        one event in full by ULID — the pull path behind the digest's
+              capped headlines (--project <repo-key> targets another project)
 
 fleet lifecycle (hook-emitted):
   register    create/refresh this workstream's fleet row
@@ -164,6 +166,8 @@ director resolve <ulid>
 | `status` | human | the one-line-per-workstream fleet cockpit: handle · liveness · heartbeat recency · the **Needs-you** band (open `escalate` items). |
 
 `brief` and `render` share the same byte-identical fold — the human reads the same picture a fresh session reads. A fourth, narrower projection, `open-items`, lists a workstream's unresolved open-items (ULID + body); it exists to feed `resolve` and `/director:complete`. It defaults to the current workstream; `--workstream <id>` retargets it at a sibling — the close-out path for a workstream whose session is already gone.
+
+The digest is deliberately an *index*: every line is capped to a headline so the injection stays small as a project's log grows, and nothing is lost — `show <ulid>` prints any single event in full (body verbatim, as recorded), one deterministic hop from any headline. When even the capped digest would overrun the injection budget, the decisions section collapses to a count-plus-pointer line and the overflow lands in `health/` as a grooming signal; the open-set and the handoff baton are never cut.
 
 ### Fleet lifecycle
 

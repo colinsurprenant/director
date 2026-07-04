@@ -215,7 +215,8 @@ handoff. It's fully deterministic: you read the same picture a fresh session rea
 When an item in the Needs-you band is yours to decide, make the call in the session, then close the loop:
 
 ```bash
-director resolve <ulid>   # the ULID from emit/render/open-items; rejects invented/closed ids
+director resolve <ulid>   # the ULID from emit/render/open-items/show; rejects invented/closed ids
+director show <ulid>      # read any event in full first — digest lines are capped headlines
 ```
 
 ---
