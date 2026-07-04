@@ -25,13 +25,14 @@ Each tagged release publishes prebuilt binaries for macOS and Linux (amd64 and a
 `director_<tag>_<os>_<arch>.tar.gz`, plus a `checksums.txt`, on the
 [releases page](https://github.com/colinsurprenant/director/releases). Download the tarball for your
 platform, verify it, and put the binary on your `PATH`. For example, on an Apple Silicon Mac
-(substitute the [latest tag](https://github.com/colinsurprenant/director/releases/latest) for `v1.4.0`):
+(adjust `darwin_arm64` for your platform):
 
 ```bash
-curl -LO https://github.com/colinsurprenant/director/releases/download/v1.4.0/director_v1.4.0_darwin_arm64.tar.gz
-curl -LO https://github.com/colinsurprenant/director/releases/download/v1.4.0/checksums.txt
+tag=$(curl -fsSL https://api.github.com/repos/colinsurprenant/director/releases/latest | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
+curl -LO "https://github.com/colinsurprenant/director/releases/download/${tag}/director_${tag}_darwin_arm64.tar.gz"
+curl -LO "https://github.com/colinsurprenant/director/releases/download/${tag}/checksums.txt"
 shasum -a 256 --check --ignore-missing checksums.txt   # on Linux: sha256sum --check --ignore-missing
-tar -xzf director_v1.4.0_darwin_arm64.tar.gz
+tar -xzf "director_${tag}_darwin_arm64.tar.gz"
 sudo install director /usr/local/bin/director          # or copy anywhere on PATH
 ```
 
