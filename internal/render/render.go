@@ -193,6 +193,11 @@ const (
 // digest grammar.
 func headline(s string, max int) string {
 	s = oneLine(s)
+	if len(s) <= max {
+		// Byte length ≤ max implies rune count ≤ max — the common under-cap
+		// case returns without the []rune allocation.
+		return s
+	}
 	runes := []rune(s)
 	if len(runes) <= max {
 		return s

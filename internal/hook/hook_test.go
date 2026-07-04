@@ -294,22 +294,22 @@ func TestSessionStartInjectsGroundTruth(t *testing.T) {
 		t.Errorf("emit protocol must precede the render digest (protocol@%d, digest@%d):\n%s", p, d, ctx)
 	}
 	if !strings.Contains(ctx, "▸ Director:") {
-		t.Errorf("adopted-repo injection missing the startup acknowledgment banner:\n%s", got)
+		t.Errorf("adopted-repo injection missing the startup acknowledgment banner:\n%s", ctx)
 	}
 	if !strings.Contains(ctx, "Resume point") {
-		t.Errorf("injection missing the resume-point anchor for the current workstream:\n%s", got)
+		t.Errorf("injection missing the resume-point anchor for the current workstream:\n%s", ctx)
 	}
 	if !strings.Contains(ctx, "commitment to act") {
-		t.Errorf("injected protocol should clarify that emit RECORDS (not a commitment to act):\n%s", got)
+		t.Errorf("injected protocol should clarify that emit RECORDS (not a commitment to act):\n%s", ctx)
 	}
 	if !strings.Contains(ctx, "director resolve") {
-		t.Errorf("injected protocol should tell the model to resolve finished open-items:\n%s", got)
+		t.Errorf("injected protocol should tell the model to resolve finished open-items:\n%s", ctx)
 	}
 	if !strings.Contains(ctx, "/director:complete") || !strings.Contains(ctx, "/director:handoff") {
-		t.Errorf("injected protocol should name BOTH close-out commands at the workstream-boundary triggers:\n%s", got)
+		t.Errorf("injected protocol should name BOTH close-out commands at the workstream-boundary triggers:\n%s", ctx)
 	}
 	if !strings.Contains(ctx, "Never hand off a finished workstream") {
-		t.Errorf("injected protocol should warn that done+merged takes /director:complete, not a handoff:\n%s", got)
+		t.Errorf("injected protocol should warn that done+merged takes /director:complete, not a handoff:\n%s", ctx)
 	}
 	if !strings.Contains(got, `"hookEventName":"SessionStart"`) {
 		t.Errorf("injection missing SessionStart control envelope:\n%s", got)
