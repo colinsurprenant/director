@@ -152,9 +152,12 @@ const injectionBudgetBytes = 16 * 1024
 // buildGroundTruth assembles the injected block: the Ground-Truth preamble
 // (with the truncation contract), the write-side protocol (managed repos only),
 // the project CHARTER (graceful when absent), and the deterministic digest
-// folded from the LOG. The digest is the same one `director render` and
-// `--verify` anchor on, so what the session is handed is exactly what the
-// cockpit shows — no drift between injected and authoritative state. sessionID
+// folded from the LOG. Under budget — the normal case — the digest is
+// byte-for-byte the `director render` / `--verify` output, so what the session
+// is handed is exactly what the cockpit shows. Over injectionBudgetBytes it is
+// the DigestCompact variant instead (decisions collapsed to a count+pointer
+// line): still deterministic, but deliberately NOT the render output — the
+// divergence is announced in the digest itself and health-logged. sessionID
 // is only for health-logging a close-out-nudge failure (which is fail-open,
 // never blocking the injection). codex switches the protocol/nudge command
 // names to Codex's skill-mention namespace (see codexCommandNames).
