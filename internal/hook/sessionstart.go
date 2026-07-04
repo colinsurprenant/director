@@ -51,6 +51,7 @@ const emitProtocol = "## Director protocol — keep this current as you work\n" 
 	"- an open-item the moment you defer a loop — `director emit --type open-item --area <area> --risk <low|escalate> \"<loop>\"`\n" +
 	"- a handoff at each natural boundary (sub-task done, switching focus, wrapping up) — `director emit --type handoff --area <area> \"current task · next · hypotheses\"`\n" +
 	"- when you FINISH an open-item, close it — `director resolve <ulid>` (use a ULID from the open-items listed below; resolve only when it is truly done — there is no reopen)\n" +
+	"The digest below is an INDEX: entries are capped headlines, not full text. `director show <ulid>` prints any event in full — before touching an area, pull the full bodies of its listed decisions rather than guessing past a headline.\n" +
 	"At a WORKSTREAM boundary, suggest the matching close-out command to the human — the two are not interchangeable:\n" +
 	"- work DONE and merged → suggest `/director:complete`, BEFORE the branch/worktree is deleted — it reviews this workstream's open-items with the human, resolves the finished ones, and archives the workstream\n" +
 	"- PAUSING work that will resume (session ending mid-task, switching focus, context filling up) → suggest `/director:handoff` — it flushes unrecorded state and writes a self-sufficient resume baton\n" +
@@ -132,6 +133,17 @@ func refreshFleet(hub string, ws identity.Workstream, uuid, cwd string) error {
 	return nil
 }
 
+// injectionBudgetBytes is the target size for the whole Ground-Truth injection.
+// It is sized to CONTEXT ECONOMY — what a session start should reasonably cost —
+// not to the harness's inline hook-output limit: that limit is undocumented and
+// has been observed to drift (docs said 50K; a 36KB payload was demoted to a 2KB
+// preview on 2026-07-03), so it must never be load-bearing. Over budget, the
+// digest degrades deterministically (DigestCompact: decisions collapse to a
+// count+pointer line — never the open loops or the baton) and the overflow is
+// health-logged so growth is loud long before any harness threshold bites. The
+// preamble's DELIVERY CHECK contract remains the backstop of last resort.
+const injectionBudgetBytes = 16 * 1024
+
 // buildGroundTruth assembles the injected block: the Ground-Truth preamble
 // (with the truncation contract), the write-side protocol (managed repos only),
 // the project CHARTER (graceful when absent), and the deterministic digest
@@ -148,51 +160,78 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID string, codex bool) 
 		return "", fmt.Errorf("read log: %w", err)
 	}
 	proj := render.Fold(events)
-	digest := render.Digest(proj, repoKey)
 
 	// Managed = a CHARTER exists or the LOG already has events. The write-side
 	// protocol and nudges are injected only then, so they never nag in an
 	// unrelated repo when the hooks are installed user-level.
 	managed := charterExists(hub, repoKey) || len(events) > 0
 
-	var b strings.Builder
-	b.WriteString(groundTruthPreamble)
-	b.WriteString("\n\n")
+	// Compute the managed-only blocks once, outside the assembler: closeOutNudge
+	// reads the fleet and health-logs its own failure, so a budget re-assembly
+	// must not run it twice.
+	var protocol, nudge, banner string
+	if managed {
+		protocol = codexCommandNames(emitProtocol, codex)
+		n, err := closeOutNudge(hub, repoKey, workstreamID, proj, time.Now().UTC())
+		if err != nil {
+			// Fail open: the nudge is advisory — a fleet read problem must never
+			// cost the session its Ground Truth. Log it and inject without.
+			logFailure(hub, EventSessionStart, sessionID, fmt.Sprintf("close-out nudge: %v", err))
+		} else if n != "" {
+			nudge = codexCommandNames(n, codex)
+		}
+		banner = startupBanner(workstreamID, proj)
+	}
 
 	// Assembly order is survival order: any truncation (harness demotion, a
 	// human skimming) eats the tail first, so the blocks a session cannot
 	// work without ride highest — preamble+contract, then the write-side
 	// protocol, then identity (CHARTER), then the digest, whose own sections
 	// put deferrable decision rationale last.
-	if managed {
-		b.WriteString(codexCommandNames(emitProtocol, codex))
-		b.WriteString("\n")
-	}
-
-	b.WriteString("## CHARTER\n")
-	b.WriteString(charterText(hub, repoKey))
-	b.WriteString("\n")
-
-	// The digest already carries its own "# director render — <key>" heading and
-	// fixed-order sections, so it is appended verbatim under the Ground-Truth
-	// frame — keeping the injected state byte-for-byte the render output.
-	b.WriteString(digest)
-
-	if managed {
-		nudge, err := closeOutNudge(hub, repoKey, workstreamID, proj, time.Now().UTC())
-		if err != nil {
-			// Fail open: the nudge is advisory — a fleet read problem must never
-			// cost the session its Ground Truth. Log it and inject without.
-			logFailure(hub, EventSessionStart, sessionID, fmt.Sprintf("close-out nudge: %v", err))
-		} else if nudge != "" {
+	assemble := func(digest string) string {
+		var b strings.Builder
+		b.WriteString(groundTruthPreamble)
+		b.WriteString("\n\n")
+		if managed {
+			b.WriteString(protocol)
 			b.WriteString("\n")
-			b.WriteString(codexCommandNames(nudge, codex))
 		}
+		b.WriteString("## CHARTER\n")
+		b.WriteString(charterText(hub, repoKey))
 		b.WriteString("\n")
-		b.WriteString(startupBanner(workstreamID, proj))
+		// The digest already carries its own "# director render — <key>" heading
+		// and fixed-order sections, so it is appended verbatim under the
+		// Ground-Truth frame — in the normal (under-budget) case, byte-for-byte
+		// the render output.
+		b.WriteString(digest)
+		if managed {
+			if nudge != "" {
+				b.WriteString("\n")
+				b.WriteString(nudge)
+			}
+			b.WriteString("\n")
+			b.WriteString(banner)
+		}
+		return b.String()
 	}
 
-	return b.String(), nil
+	ctx := assemble(render.Digest(proj, repoKey))
+	if len(ctx) > injectionBudgetBytes {
+		// Deterministic degradation: collapse the decisions section (the one
+		// deferrable section) and say so loudly in health/ — over-budget growth
+		// is a grooming signal (§15.5 / L2 promotion), not a silent state.
+		full := len(ctx)
+		ctx = assemble(render.DigestCompact(proj, repoKey))
+		detail := fmt.Sprintf("injection budget: full payload %dB > %dB — decisions collapsed to count+pointer (now %dB); groom the log (resolve/supersede/promote)", full, injectionBudgetBytes, len(ctx))
+		if len(ctx) > injectionBudgetBytes {
+			// Still over on open-items + handoffs alone: never eat the actionable
+			// sections — inject as-is and make the overflow visible.
+			detail += " — STILL over budget on actionable sections alone; the open-set needs grooming"
+		}
+		logFailure(hub, EventSessionStart, sessionID, detail)
+	}
+
+	return ctx, nil
 }
 
 // isCodexTranscript reports whether a hook payload's transcript_path identifies

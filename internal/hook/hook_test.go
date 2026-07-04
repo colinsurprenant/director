@@ -277,36 +277,38 @@ func TestSessionStartInjectsGroundTruth(t *testing.T) {
 	if !strings.HasPrefix(ctx, groundTruthPreamble) {
 		t.Errorf("Ground-Truth preamble must lead the injected block:\n%s", ctx)
 	}
-	if !strings.Contains(got, "Goal: ship the widget") {
-		t.Errorf("injection missing CHARTER body:\n%s", got)
+	if !strings.Contains(ctx, "Goal: ship the widget") {
+		t.Errorf("injection missing CHARTER body:\n%s", ctx)
 	}
-	if !strings.Contains(got, "director render") {
-		t.Errorf("injection missing render digest:\n%s", got)
+	if !strings.Contains(ctx, "director render") {
+		t.Errorf("injection missing render digest:\n%s", ctx)
 	}
-	if !strings.Contains(got, "## Director protocol") {
-		t.Errorf("adopted-repo injection missing the write-side emit protocol:\n%s", got)
+	if !strings.Contains(ctx, "## Director protocol") {
+		t.Errorf("adopted-repo injection missing the write-side emit protocol:\n%s", ctx)
 	}
 	// Survival order: the protocol must precede the digest, so a truncated
 	// delivery costs digest tail (decision rationale), never the emit habit.
-	if p, d := strings.Index(ctx, "## Director protocol"), strings.Index(ctx, "# director render"); p > d {
+	// A missing marker fails HERE (not just in a sibling Contains) so the
+	// ordering assertion can't pass vacuously.
+	if p, d := strings.Index(ctx, "## Director protocol"), strings.Index(ctx, "# director render"); p < 0 || d < 0 || p > d {
 		t.Errorf("emit protocol must precede the render digest (protocol@%d, digest@%d):\n%s", p, d, ctx)
 	}
-	if !strings.Contains(got, "▸ Director:") {
+	if !strings.Contains(ctx, "▸ Director:") {
 		t.Errorf("adopted-repo injection missing the startup acknowledgment banner:\n%s", got)
 	}
-	if !strings.Contains(got, "Resume point") {
+	if !strings.Contains(ctx, "Resume point") {
 		t.Errorf("injection missing the resume-point anchor for the current workstream:\n%s", got)
 	}
-	if !strings.Contains(got, "commitment to act") {
+	if !strings.Contains(ctx, "commitment to act") {
 		t.Errorf("injected protocol should clarify that emit RECORDS (not a commitment to act):\n%s", got)
 	}
-	if !strings.Contains(got, "director resolve") {
+	if !strings.Contains(ctx, "director resolve") {
 		t.Errorf("injected protocol should tell the model to resolve finished open-items:\n%s", got)
 	}
-	if !strings.Contains(got, "/director:complete") || !strings.Contains(got, "/director:handoff") {
+	if !strings.Contains(ctx, "/director:complete") || !strings.Contains(ctx, "/director:handoff") {
 		t.Errorf("injected protocol should name BOTH close-out commands at the workstream-boundary triggers:\n%s", got)
 	}
-	if !strings.Contains(got, "Never hand off a finished workstream") {
+	if !strings.Contains(ctx, "Never hand off a finished workstream") {
 		t.Errorf("injected protocol should warn that done+merged takes /director:complete, not a handoff:\n%s", got)
 	}
 	if !strings.Contains(got, `"hookEventName":"SessionStart"`) {
@@ -571,8 +573,8 @@ func TestSessionStartCloseOutNudgeFailsOpen(t *testing.T) {
 		t.Fatalf("exit code = %d, want 0 (hooks are fail-safe)", code)
 	}
 	got := out.String()
-	if !strings.Contains(injectedContext(t, got), groundTruthPreamble) || !strings.Contains(got, "## Director protocol") {
-		t.Fatalf("fleet failure must not cost the session its Ground Truth + protocol:\n%s", got)
+	if ctx := injectedContext(t, got); !strings.Contains(ctx, groundTruthPreamble) || !strings.Contains(ctx, "## Director protocol") {
+		t.Fatalf("fleet failure must not cost the session its Ground Truth + protocol:\n%s", ctx)
 	}
 	if strings.Contains(got, "## Close-out pending") {
 		t.Errorf("broken fleet surface should skip the nudge, not fabricate one:\n%s", got)
@@ -1251,4 +1253,50 @@ func stopInput(cwd, transcript string, stopHookActive bool) string {
 	return `{"session_id":"s-real","cwd":` + jsonString(cwd) +
 		`,"transcript_path":` + jsonString(transcript) +
 		`,"hook_event_name":"Stop","stop_hook_active":` + active + `}`
+}
+
+// TestSessionStartBudgetDegradesDeterministically locks the §15.5 self-measure:
+// a log whose line-capped digest still pushes the payload over the injection
+// budget degrades to DigestCompact — decisions collapse to a count+pointer line,
+// open-items and handoffs survive untouched — and the overflow lands in health/
+// as a grooming signal. The harness's own demotion threshold must never be the
+// first thing that notices growth.
+func TestSessionStartBudgetDegradesDeterministically(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+
+	store := event.NewStore(hub, ws.RepoKey)
+	body := strings.Repeat("rationale ", 30) // ~300 chars, capped to a ~160-rune headline
+	for i := 0; i < 120; i++ {               // ~120 index lines ≈ 22KB > 16KB budget
+		if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindDecision, Area: "hooks", Body: body}); err != nil {
+			t.Fatalf("seed decision %d: %v", i, err)
+		}
+	}
+	if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindOpenItem, Area: "sync", Body: "the open loop must survive degradation"}); err != nil {
+		t.Fatalf("seed open-item: %v", err)
+	}
+
+	in := `{"session_id":"s-real","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	var out bytes.Buffer
+	if code := Dispatch(EventSessionStart, strings.NewReader(in), &out, hub); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	ctx := injectedContext(t, out.String())
+
+	if !strings.Contains(ctx, "120 active decisions elided for size") {
+		t.Errorf("over-budget injection should collapse decisions with the count:\n%.2000s", ctx)
+	}
+	if strings.Contains(ctx, "rationale rationale") {
+		t.Errorf("collapsed injection must not carry decision bodies")
+	}
+	if !strings.Contains(ctx, "the open loop must survive degradation") {
+		t.Errorf("degradation must never eat the open-set:\n%.2000s", ctx)
+	}
+	if len(ctx) > injectionBudgetBytes {
+		t.Errorf("degraded payload still over budget: %dB > %dB", len(ctx), injectionBudgetBytes)
+	}
+	if health := readHealth(t, hub); !strings.Contains(health, "injection budget") {
+		t.Errorf("budget overflow should be health-logged as a grooming signal, got:\n%s", health)
+	}
 }
