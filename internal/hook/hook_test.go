@@ -1296,7 +1296,14 @@ func TestSessionStartBudgetDegradesDeterministically(t *testing.T) {
 	if len(ctx) > injectionBudgetBytes {
 		t.Errorf("degraded payload still over budget: %dB > %dB", len(ctx), injectionBudgetBytes)
 	}
-	if health := readHealth(t, hub); !strings.Contains(health, "injection budget") {
+	health := readHealth(t, hub)
+	if !strings.Contains(health, "injection budget") {
 		t.Errorf("budget overflow should be health-logged as a grooming signal, got:\n%s", health)
+	}
+	// Pin WHICH branch ran: the compact fallback must suffice here — the
+	// last-resort "actionable sections alone are over" sentinel firing would
+	// mean the fixture (or the degradation) is not what this test believes.
+	if strings.Contains(health, "STILL over budget") {
+		t.Errorf("fixture should overflow on decisions only, not on actionable sections:\n%s", health)
 	}
 }

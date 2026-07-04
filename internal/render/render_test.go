@@ -187,6 +187,26 @@ func TestDigestLineCaps(t *testing.T) {
 	if !strings.Contains(short, "- ") || strings.Contains(short, "…") {
 		t.Errorf("under-cap body must render whole, without a cut marker:\n%s", short)
 	}
+
+	// Each section gets ITS OWN cap — a transposition of the constants (e.g.
+	// handoffs capped at the open-item bound) must fail here, not pass silently.
+	filler := strings.Repeat("x", 1200) // over every cap; space-free so the cut is never trimmed shorter
+	capped := Digest(Fold([]event.Event{
+		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Body: filler},
+		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindHandoff, Workstream: "ws1", Body: filler},
+	}), "widget")
+	for _, l := range strings.Split(capped, "\n") {
+		if !strings.HasPrefix(l, "- ") {
+			continue
+		}
+		runes, isHandoff := len([]rune(l)), strings.Contains(l, "[ws1]")
+		switch {
+		case isHandoff && runes != 2+26+1+len("[ws1] ")+handoffBodyRunes+1:
+			t.Errorf("handoff line not cut at handoffBodyRunes (%d runes):\n%s", runes, l)
+		case !isHandoff && runes != 2+26+1+openItemBodyRunes+1:
+			t.Errorf("open-item line not cut at openItemBodyRunes (%d runes):\n%s", runes, l)
+		}
+	}
 }
 
 // TestDigestCompact locks the deterministic degradation step: identical to the
@@ -204,7 +224,11 @@ func TestDigestCompact(t *testing.T) {
 	if strings.Contains(compact, "decision B") {
 		t.Errorf("compact digest must not carry decision bodies:\n%s", compact)
 	}
-	wantPrefix := full[:strings.Index(full, "## decisions")]
+	idx := strings.Index(full, "## decisions")
+	if idx < 0 {
+		t.Fatalf("full digest missing the decisions heading:\n%s", full)
+	}
+	wantPrefix := full[:idx]
 	if !strings.HasPrefix(compact, wantPrefix) {
 		t.Errorf("compact digest must be byte-identical to the full digest above the decisions section:\n--- full ---\n%s\n--- compact ---\n%s", full, compact)
 	}

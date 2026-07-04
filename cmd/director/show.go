@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/colinsurprenant/director/internal/event"
+	"github.com/colinsurprenant/director/internal/id"
 )
 
 // runShow prints one event's full record by ULID — the read affordance the
@@ -31,7 +32,14 @@ func runShow(args []string) int {
 		fmt.Fprintln(os.Stderr, "usage: director show [--project <repo-key>] <ulid>")
 		return 2
 	}
-	target := fs.Arg(0)
+	// Same input contract as resolve (internal/event/write.go): strict-parse and
+	// canonicalize the ULID, so a lowercase id matches and a malformed one is a
+	// usage error (exit 2) — not a misleading "no event" miss.
+	target, err := id.Parse(fs.Arg(0))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "show: invalid ulid %q: %v\n", fs.Arg(0), err)
+		return 2
+	}
 
 	hub, repoKey, err := projectTarget(project)
 	if err != nil {
@@ -57,7 +65,9 @@ func runShow(args []string) int {
 
 // formatEvent renders one event in full: a headline line mirroring the digest
 // grammar (so the two are visually relatable), the remaining metadata, then the
-// untruncated body verbatim.
+// untruncated body verbatim. It prints the event AS RECORDED — lifecycle state
+// (closed, superseded) lives in the fold, not here, so a resolved open-item
+// still shows [status:open]; the digest is where current state lives.
 func formatEvent(ev event.Event) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s %s", ev.ID, ev.Type)

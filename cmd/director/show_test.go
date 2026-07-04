@@ -8,15 +8,20 @@ import (
 	"github.com/colinsurprenant/director/internal/id"
 )
 
-// TestShowExitCodes locks show's dispatch contract: found → 0, unknown ULID → 1
-// (an invented id must fail loudly, same discipline as resolve), usage and
-// path-traversal --project values → 2 before any path is built.
+// TestShowExitCodes locks show's dispatch contract: found → 0 (lowercase ids
+// canonicalize, matching resolve's input contract), a valid-but-absent ULID → 1
+// (a lookup miss), and malformed ids / usage / path-traversal --project values
+// → 2 before any path is built.
 func TestShowExitCodes(t *testing.T) {
 	hub := t.TempDir()
 	t.Setenv("DIRECTOR_HUB", hub)
 
 	store := event.NewStore(hub, "widget")
 	ulid, err := id.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	absent, err := id.New() // valid ULID, never appended
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +39,9 @@ func TestShowExitCodes(t *testing.T) {
 		want int
 	}{
 		{"found event", []string{"show", "--project", "widget", ulid}, 0},
-		{"unknown ulid", []string{"show", "--project", "widget", "01INVENTEDULIDXXXXXXXXXXXX"}, 1},
+		{"lowercase ulid canonicalizes", []string{"show", "--project", "widget", strings.ToLower(ulid)}, 0},
+		{"valid but absent ulid", []string{"show", "--project", "widget", absent}, 1},
+		{"malformed ulid", []string{"show", "--project", "widget", "01INVENTEDULIDXXXXXXXXXXXX"}, 2},
 		{"missing ulid arg", []string{"show", "--project", "widget"}, 2},
 		{"two ulid args", []string{"show", "--project", "widget", ulid, ulid}, 2},
 		{"traversal project", []string{"show", "--project", "../../tmp/evil", ulid}, 2},
