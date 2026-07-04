@@ -177,7 +177,7 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID string, codex bool) 
 	// Compute the managed-only blocks once, outside the assembler: closeOutNudge
 	// reads the fleet and health-logs its own failure, so a budget re-assembly
 	// must not run it twice.
-	var protocol, nudge, banner string
+	var protocol, nudge, banner, resume string
 	if managed {
 		protocol = codexCommandNames(emitProtocol, codex)
 		n, err := closeOutNudge(hub, repoKey, workstreamID, proj, time.Now().UTC())
@@ -189,18 +189,26 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID string, codex bool) 
 			nudge = codexCommandNames(n, codex)
 		}
 		banner = startupBanner(workstreamID, proj)
+		resume = resumePoint(workstreamID, proj)
 	}
 
 	// Assembly order is survival order: any truncation (harness demotion, a
 	// human skimming) eats the tail first, so the blocks a session cannot
-	// work without ride highest — preamble+contract, then the write-side
-	// protocol, then identity (CHARTER), then the digest, whose own sections
-	// put deferrable decision rationale last.
+	// work without ride highest — preamble+contract, then the acknowledgment
+	// banner (needed for the FIRST LINE of the first reply, so it must sit in
+	// the head a persisted-output preview keeps — tail placement made the
+	// banner conditional on the model completing the file read, observed live
+	// 2026-07-04), then the write-side protocol, then identity (CHARTER), then
+	// the digest, whose own sections put deferrable decision rationale last.
+	// The resume-point anchor rides after the digest because it points INTO it
+	// ("the handoff labeled [...] above").
 	assemble := func(digest string) string {
 		var b strings.Builder
 		b.WriteString(groundTruthPreamble)
 		b.WriteString("\n\n")
 		if managed {
+			b.WriteString(banner)
+			b.WriteString("\n")
 			b.WriteString(protocol)
 			b.WriteString("\n")
 		}
@@ -217,8 +225,10 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID string, codex bool) 
 				b.WriteString("\n")
 				b.WriteString(nudge)
 			}
-			b.WriteString("\n")
-			b.WriteString(banner)
+			if resume != "" {
+				b.WriteString("\n")
+				b.WriteString(resume)
+			}
 		}
 		return b.String()
 	}
@@ -327,6 +337,9 @@ func closeOutNudge(hub, repoKey, currentWS string, proj render.Projection, now t
 // the first line of its first reply — a visible signal that the session rehydrated,
 // since the injection is otherwise silent. The line is pre-computed here (workstream
 // + open-item counts) so the model relays it rather than re-deriving the counts.
+// It is placed immediately after the preamble so a harness persisted-output
+// preview (head-anchored, ~2KB observed) still carries it: the banner must be
+// printable BEFORE the full-file read the DELIVERY CHECK may demand.
 func startupBanner(workstreamID string, proj render.Projection) string {
 	needYou := 0
 	for _, o := range proj.OpenItems {
@@ -335,14 +348,19 @@ func startupBanner(workstreamID string, proj render.Projection) string {
 		}
 	}
 	banner := fmt.Sprintf("▸ Director: %s · %d open-item(s), %d need-you", workstreamID, len(proj.OpenItems), needYou)
-	out := "## Acknowledge on entry\nBegin your VERY FIRST reply to the human with this line verbatim (then answer normally), so they can see Director rehydrated:\n" + banner + "\n"
-	// Name THIS workstream's own latest handoff as the resume anchor. Several
-	// workstreams can share one repo log, so the digest's handoffs section lists one
-	// per workstream — without this, the model must guess which is its continuation.
-	if _, ok := proj.LatestHandoff[workstreamID]; ok {
-		out += "Resume point: the handoff labeled [" + workstreamID + "] above is YOUR last position — resume from it; the other handoffs are sibling workstreams' positions, for awareness only.\n"
+	return "## Acknowledge on entry\nBegin your VERY FIRST reply to the human with this line verbatim (then answer normally), so they can see Director rehydrated:\n" + banner + "\n"
+}
+
+// resumePoint names THIS workstream's own latest handoff as the resume anchor.
+// Several workstreams can share one repo log, so the digest's handoffs section
+// lists one per workstream — without this, the model must guess which is its
+// continuation. Kept separate from startupBanner (which rides the payload head)
+// because it references the digest above it and so must follow it.
+func resumePoint(workstreamID string, proj render.Projection) string {
+	if _, ok := proj.LatestHandoff[workstreamID]; !ok {
+		return ""
 	}
-	return out
+	return "## Resume point\nThe handoff labeled [" + workstreamID + "] in the digest above is YOUR last position — resume from it; the other handoffs are sibling workstreams' positions, for awareness only.\n"
 }
 
 // charterExists reports whether the repo has been adopted — a non-empty CHARTER.md
