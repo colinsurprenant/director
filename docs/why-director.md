@@ -23,7 +23,7 @@ A standalone Go CLI (single static binary, no daemon, no database, no cloud) tha
 
 The log is NDJSON: plain, greppable, git-trackable text. If Director disappeared tomorrow, your coordination history would still be readable with `cat`.
 
-The shortest honest description: **an engineering daybook your agents actually keep.** Engineers have known for decades that an append-only, timestamped, never-rewritten journal beats a curated wiki for recovering context. Director mechanizes that practice for a portfolio of agent sessions, and adds the one thing a daybook can't do: deterministic projections that answer "what's open, everywhere, right now."
+The shortest honest description: **a coordination ledger your agents actually keep.** Engineers have known for decades that an append-only, timestamped, never-rewritten journal (the engineering daybook) beats a curated wiki for recovering context. Director mechanizes that practice for a portfolio of agent sessions, and adds the two things a daybook can't do: lifecycle (a loop stays open until consciously resolved; a decision is superseded, never lost) and deterministic projections that answer "what's open, everywhere, right now."
 
 ## A portfolio, not a swarm
 

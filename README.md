@@ -3,15 +3,17 @@
 [![ci](https://github.com/colinsurprenant/director/actions/workflows/ci.yml/badge.svg)](https://github.com/colinsurprenant/director/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/colinsurprenant/director?display_name=tag)](https://github.com/colinsurprenant/director/releases/latest)
 
-**An engineering daybook your agents actually keep.**
+**A coordination ledger for your coding-agent work: decisions, open loops, handoffs — durable across sessions, repos, and weeks.**
 
-You work with a coding agent (Claude Code, OpenAI Codex, or both) across several projects, in blocks: days or weeks deep in one, an afternoon in another, back to the first, sometimes a few parallel worktree sessions in a burst. Native agent memory remembers *facts*. What nothing carries across those boundaries is the **coordination narrative**: what was decided and why, which loops were deliberately deferred, where the baton was parked when the block ended, and what still needs *you*. So the human becomes the message bus, re-explaining last month's decision to this morning's session.
+Memory tools answer *"what does the agent know?"* Director answers *"what is the state of the work?"*: what was decided and why, which loops were deliberately deferred, where the baton was parked when the block ended, and what still needs *you*. Facts accumulate; loops open and close. Nothing in a memory store ever *closes* — that lifecycle is the difference.
 
-Director moves you from **message bus** to **reviewer**. It is a standalone Go CLI built around a shared, durable, **append-only event log** per repo:
+Three weeks after you park a project, a new session starts already knowing all of this: injected at session start as ground truth, not recalled by similarity.
+
+You work with a coding agent (Claude Code, OpenAI Codex, or both) across several projects, in blocks: days or weeks deep in one, an afternoon in another, back to the first, sometimes a few parallel worktree sessions in a burst. The state of the work is exactly what nothing else carries across those boundaries, so the human becomes the message bus, re-explaining last month's decision to this morning's session. Director moves you from **message bus** to **reviewer**. It is a standalone Go CLI built around a shared, durable, **append-only event log** per repo:
 
 - Sessions **`emit`** typed events as they work (`decision` · `open-item` · `handoff` · `note`) and **`resolve`** open loops when they truly close.
 - Deterministic folds project the log into **`render`** (the machine digest), **`brief`** (the human re-orientation view), and **`status`** (the one-line-per-workstream cockpit).
-- A SessionStart hook **injects** the CHARTER + digest into every new session as ground truth, so re-entering a project after three weeks starts from your parked handoff instead of from git archaeology.
+- A SessionStart hook **injects** the CHARTER + digest into every new session as ground truth, so a cold re-entry starts from your parked handoff instead of from git archaeology.
 - The log is **model-agnostic**: the next session can be you tomorrow, you after a compaction, or a stronger model you escalate a stuck problem to, with the tried-and-failed hypotheses traveling along. Escalate with context, not with amnesia.
 
 The LOG (plus the deliberately-edited living docs) is the only system of record; sessions and every rendered view are disposable caches reconstructible from it. Director wires natively into **Claude Code and OpenAI Codex** — same hooks, same log, same boundary commands, either agent alone or both side by side. A single static binary, stdlib-first, one vetted build-time dependency (`github.com/oklog/ulid/v2`). No daemon, no database, no cloud: the log is plain NDJSON you could read with `cat`.
