@@ -70,9 +70,19 @@ Codex's hook contract mirrors Claude Code's, so the **same shims serve both agen
 
 Everything below uses the Claude Code command names (`/director:adopt` etc.); on Codex, read each as its `$director-*` skill twin — same command, same behavior.
 
+### Wire into Gemini / Antigravity
+
+```bash
+director install --gemini    # or: director install --antigravity
+```
+
+This installs Director into Gemini's global customization config (`~/.gemini/config`):
+* Appends rules to `~/.gemini/config/AGENTS.md` directing the model to track decisions, handoffs, and open items.
+* Installs the `director` skill under `~/.gemini/config/skills/director/SKILL.md`.
+
 ### Environment variables
 
-Install paths and runtime knobs, common to both agents unless a default says otherwise:
+Install paths and runtime knobs, common to all agents unless a default says otherwise:
 
 | Variable | Default | Selects |
 |---|---|---|
@@ -80,6 +90,7 @@ Install paths and runtime knobs, common to both agents unless a default says oth
 | `DIRECTOR_COMMANDS_DIR` | `~/.claude/commands/director` | where `install` writes the `/director:*` slash commands |
 | `DIRECTOR_CODEX_HOOKS_PATH` | `~/.codex/hooks.json` | the Codex hooks file `install --codex` merges into |
 | `DIRECTOR_CODEX_SKILLS_DIR` | `~/.agents/skills` | where `install --codex` writes the `$director-*` agent skills |
+| `DIRECTOR_GEMINI_CONFIG_DIR` | `~/.gemini/config` | the Gemini/Antigravity customization root directory `install --gemini` targets |
 | `DIRECTOR_HUB` | `~/.director` | the central hub that holds all cross-repo coordination state |
 | `DIRECTOR_BIN` | (PATH) | which `director` binary the shims invoke (defaults to `director` on `PATH`) |
 | `DIRECTOR_HANDOFF_NUDGE_TOKENS` | (unset) | the context-fill handoff nudge (Claude Code-only for now): an absolute token threshold at which sessions are nudged toward `/director:handoff`; unset or `0` disables it. Fires once per crossing and re-arms only after context falls below half the threshold (a compaction or a context clear) |
