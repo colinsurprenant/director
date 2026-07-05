@@ -5,7 +5,7 @@
 
 **A coordination ledger for your coding-agent work: decisions, open loops, handoffs — durable across sessions, repos, and weeks.**
 
-Memory tools answer *"what does the agent know?"* Director answers *"what is the state of the work?"*: what was decided and why, which loops were deliberately deferred, where the baton was parked when the block ended, and what still needs *you*. Facts accumulate; loops open and close. Nothing in a memory store ever *closes* — that lifecycle is the difference.
+Memory tools answer *"what does the agent know?"* Director answers *"what is the state of the work?"*: what was decided and why, which loops were deliberately deferred, where the work stopped when the block ended, and what still needs *you*. Facts accumulate; loops open and close. Nothing in a memory store ever *closes* — that lifecycle is the difference.
 
 Three weeks after you park a project, a new session starts already knowing all of this: injected at session start as ground truth, not recalled by similarity.
 
@@ -169,7 +169,7 @@ director resolve <ulid>
 
 `brief` and `render` share the same byte-identical fold — the human reads the same picture a fresh session reads. A fourth, narrower projection, `open-items`, lists a workstream's unresolved open-items (ULID + body); it exists to feed `resolve` and `/director:complete`. It defaults to the current workstream; `--workstream <id>` retargets it at a sibling — the close-out path for a workstream whose session is already gone.
 
-The digest is deliberately an *index*: every line is capped to a headline so the injection stays small as a project's log grows, and nothing is lost — `show <ulid>` prints any single event in full (body verbatim, as recorded), one deterministic hop from any headline. When even the capped digest would overrun the injection budget, the decisions section collapses to a count-plus-pointer line and the overflow lands in `health/` as a grooming signal; the open-set and the handoff baton are never cut.
+The digest is deliberately an *index*: every line is capped to a headline so the injection stays small as a project's log grows, and nothing is lost — `show <ulid>` prints any single event in full (body verbatim, as recorded), one deterministic hop from any headline. When even the capped digest would overrun the injection budget, the decisions section collapses to a count-plus-pointer line and the overflow lands in `health/` as a grooming signal; the open-set and the latest handoff are never cut.
 
 ### Fleet lifecycle
 

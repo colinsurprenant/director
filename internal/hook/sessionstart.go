@@ -54,8 +54,8 @@ const emitProtocol = "## Director protocol — keep this current as you work\n" 
 	"The digest below is an INDEX: entries are capped headlines, not full text. `director show <ulid>` prints any event in full — before touching an area, pull the full bodies of its listed decisions rather than guessing past a headline.\n" +
 	"At a WORKSTREAM boundary, suggest the matching close-out command to the human — the two are not interchangeable:\n" +
 	"- work DONE and merged → suggest `/director:complete`, BEFORE the branch/worktree is deleted — it reviews this workstream's open-items with the human, resolves the finished ones, and archives the workstream\n" +
-	"- PAUSING work that will resume (session ending mid-task, switching focus, context filling up) → suggest `/director:handoff` — it flushes unrecorded state and writes a self-sufficient resume baton\n" +
-	"Never hand off a finished workstream: a handoff there plants a phantom baton that keeps a dead workstream surfacing as resumable — done+merged always takes `/director:complete`.\n" +
+	"- PAUSING work that will resume (session ending mid-task, switching focus, context filling up) → suggest `/director:handoff` — it flushes unrecorded state and writes a self-sufficient resume point\n" +
+	"Never hand off a finished workstream: a handoff there plants a phantom resume point that keeps a dead workstream surfacing as resumable — done+merged always takes `/director:complete`.\n" +
 	"This is load-bearing — treat it as a standing instruction, not a suggestion.\n"
 
 // handleSessionStart derives identity, refreshes the fleet row, and writes the
@@ -139,7 +139,7 @@ func refreshFleet(hub string, ws identity.Workstream, uuid, cwd string) error {
 // has been observed to drift (docs said 50K; a 36KB payload was demoted to a 2KB
 // preview on 2026-07-03), so it must never be load-bearing. Over budget, the
 // digest degrades deterministically (DigestCompact: decisions collapse to a
-// count+pointer line — never the open loops or the baton) and the overflow is
+// count+pointer line — never the open loops or the latest handoff) and the overflow is
 // health-logged so growth is loud long before any harness threshold bites. The
 // preamble's DELIVERY CHECK contract remains the backstop of last resort.
 //

@@ -82,7 +82,7 @@ func TestDigestThroughStore(t *testing.T) {
 // fully-populated skeleton — every section header present with "(none)".
 func TestDigestEmptyLogStable(t *testing.T) {
 	d := Digest(Fold(nil), "empty")
-	// Fixed section order is survival order: actionable state (open-set, baton)
+	// Fixed section order is survival order: actionable state (open-set, latest handoff)
 	// first, deferrable decision rationale last, so a truncated delivery of the
 	// injected digest costs rationale, never open loops.
 	last := -1

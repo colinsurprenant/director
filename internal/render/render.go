@@ -21,7 +21,7 @@ import (
 // the COMPLETE active set is present, but each body is capped to a headline —
 // nothing is dropped, the full body is one deterministic hop away via
 // `director show <ulid>`. Caps are generous where the content is actionable
-// (open-items, the handoff baton) and tight where it is deferrable rationale
+// (open-items, the latest handoff) and tight where it is deferrable rationale
 // (decisions, whose durable home is the living docs, not the log body). This is
 // what keeps the SessionStart injection safely under the harness's inline
 // hook-output budget as a project's log grows (the un-capped digest was
@@ -30,7 +30,7 @@ import (
 // Sections, in fixed order — actionable state first, so anything that
 // truncates the digest (the harness's inline hook-output budget, a human
 // skimming) costs deferrable decision rationale, never the open loops or the
-// baton:
+// latest handoff:
 //   - open-set, with risk:escalate marked (ULID order)
 //   - latest handoff per workstream (sorted by workstream key)
 //   - active decisions (ULID order)
@@ -45,7 +45,7 @@ func Digest(proj Projection, repoKey string) string {
 // Digest except the decisions section collapses to a single count-plus-pointer
 // line. It exists for the case where even the line-capped digest pushes the
 // SessionStart injection over its byte budget — decisions are the one section
-// whose full set is deferrable (rationale, not open loops or the baton), and
+// whose full set is deferrable (rationale, not open loops or the latest handoff), and
 // the collapsed line itself tells the model where the elided content lives, so
 // the elision is never silent.
 func DigestCompact(proj Projection, repoKey string) string {
@@ -180,7 +180,7 @@ func oneLine(s string) string {
 //     rationale lives one hop away in `director show`, and its durable home is
 //     the living docs anyway (CHARTER/ADRs), not the log body
 //   - an open-item must carry enough of the loop to act on without a pull
-//   - the handoff is the resume baton; cutting it defeats its purpose
+//   - the handoff is the resume point; cutting it defeats its purpose
 const (
 	decisionHeadlineRunes = 160
 	openItemBodyRunes     = 300

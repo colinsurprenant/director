@@ -5,7 +5,7 @@ in another, back to the first, sometimes a burst of parallel worktree sessions. 
 portfolio coordinated without you being the message bus. Sessions write durable coordination state
 (decisions, open loops, handoffs) to a shared append-only LOG; every new session starts from that record
 instead of from git archaeology, so re-entering a project you haven't touched in weeks picks up exactly
-where the last block parked the baton. You read deterministic projections (`status`, `brief`) and step in
+where the last block left off. You read deterministic projections (`status`, `brief`) and step in
 only where a human is actually needed.
 
 This guide walks the first run end to end, written in Claude Code terms with the Codex differences
@@ -74,7 +74,7 @@ installed Director hooks into /Users/you/.claude/settings.json
 - It merges three hooks into `~/.claude/settings.json` (`SessionStart`, `PostToolUse`, `Stop`), each tagged
   `"_managedBy":"director"` so they coexist with GSD and any hand-rolled hooks. Re-running changes nothing.
 - It materializes the three slash commands: `/director:adopt` (informed adoption — see section 3),
-  `/director:handoff` (pause a workstream, park the baton) and `/director:complete` (close out a finished,
+  `/director:handoff` (pause a workstream, record the resume point) and `/director:complete` (close out a finished,
   merged workstream). More on the boundary pair in section 5.
 
 Verify it took:
@@ -244,7 +244,7 @@ At block boundaries, two slash commands (installed by `director install`) mark w
 
 - **`/director:handoff`** when pausing work you will resume. It flushes pending decisions and open items
   and emits a self-sufficient handoff: a checkpoint written to your future self, so the next block (even
-  weeks later) rehydrates from the parked baton instead of re-deriving state.
+  weeks later) rehydrates from the parked handoff instead of re-deriving state.
 - **`/director:complete`** when a workstream is done and merged. It closes out the workstream's open loops
   with your confirmation and archives its fleet row. Nothing auto-resolves; close-out is human-confirmed.
   It also takes a workstream id — `/director:complete <id>` — to close out a *dead sibling*: a worktree

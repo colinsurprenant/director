@@ -2,7 +2,7 @@
 description: Close out a finished, merged workstream — resolve what it completed, hand genuine follow-ups to the repo backlog, and archive its fleet row(s). Targets this workstream by default, or a named dead sibling (branch gone). Use when the task is DONE and the branch is merged/gone; to pause work you will resume, use /director:handoff instead.
 ---
 
-You are running the TERMINAL close-out for a workstream: its task is finished and its branch is merged (or gone). This is not a pause — a finished workstream has no next action, so you must NOT write a handoff (that would leave a phantom baton that keeps showing the workstream as resumable). Work through these steps in order.
+You are running the TERMINAL close-out for a workstream: its task is finished and its branch is merged (or gone). This is not a pause — a finished workstream has no next action, so you must NOT write a handoff (that would leave a phantom resume point that keeps showing the workstream as resumable). Work through these steps in order.
 
 **Target.** The default target is THIS workstream. If I named a workstream id (or a session-start "Close-out pending" nudge named one), that SIBLING is the target instead: its session is gone, so you close it out from here. Every step below says how the sibling case differs; run all `director` commands from inside this repo either way.
 

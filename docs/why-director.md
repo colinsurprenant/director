@@ -8,7 +8,7 @@
 
 You work with coding agents across several projects. Not all at once, but in **blocks**: a few days or weeks deep in one project, an afternoon in another, back to the first. Some blocks overlap; occasionally you run two or three sessions in parallel worktrees. Over weeks, that adds up to a real fleet of workstreams, most of them dormant at any given moment, all of them still *yours*.
 
-Every session starts amnesiac about exactly the layer that matters across those boundaries. Native agent memory has gotten good at *facts*: what the project is, how the build works, your preferences. What nothing carries is the **coordination narrative**: what was decided and why, which loops were deliberately deferred, where the baton was parked when the block ended, and what still needs *you*. So the human becomes the message bus, re-explaining last month's decision to this morning's session, re-discovering their own open loops by grepping git history, relaying context by hand between a worktree session and the main one.
+Every session starts amnesiac about exactly the layer that matters across those boundaries. Native agent memory has gotten good at *facts*: what the project is, how the build works, your preferences. What nothing carries is the **coordination narrative**: what was decided and why, which loops were deliberately deferred, where the work stopped when the block ended, and what still needs *you*. So the human becomes the message bus, re-explaining last month's decision to this morning's session, re-discovering their own open loops by grepping git history, relaying context by hand between a worktree session and the main one.
 
 Director exists to move you from **message bus** to **reviewer**.
 
@@ -19,7 +19,7 @@ A standalone Go CLI (single static binary, no daemon, no database, no cloud) tha
 - Sessions **emit** typed events as they work, using exactly four kinds (`decision`, `open-item`, `handoff`, `note`), and **resolve** open-items when they are truly closed.
 - Deterministic, non-LLM folds project the log into three views: `render` (the machine digest), `brief` (the human re-orientation view), and `status` (the one-line-per-workstream cockpit with a *Needs-you* band).
 - A SessionStart hook **injects** the project CHARTER plus the folded digest into every new session as authoritative ground truth. Push, not pull: a protocol the model must remember to invoke is a protocol that never fires.
-- Boundary commands mark workstream lifecycle: `/director:handoff` when pausing (parks the baton), `/director:complete` when a workstream is done and merged (human-confirmed close-out of its open loops).
+- Boundary commands mark workstream lifecycle: `/director:handoff` when pausing (records the resume point), `/director:complete` when a workstream is done and merged (human-confirmed close-out of its open loops).
 
 The log is NDJSON: plain, greppable, git-trackable text. If Director disappeared tomorrow, your coordination history would still be readable with `cat`.
 
@@ -31,7 +31,7 @@ Most multi-agent tooling assumes the swarm: many simultaneous sessions on one re
 
 That shapes the design:
 
-- **Dormant is a first-class state.** A workstream untouched for three weeks with its baton parked in a handoff isn't stale data to clean up. It's a project between blocks, waiting for re-entry, and `status` and `brief` treat it that way.
+- **Dormant is a first-class state.** A workstream untouched for three weeks with its resume point recorded in a handoff isn't stale data to clean up. It's a project between blocks, waiting for re-entry, and `status` and `brief` treat it that way.
 - **Block boundaries are handoffs to your future self.** The `/director:handoff` you write when leaving a project is the rehydration your next block starts from, injected automatically instead of re-derived from git archaeology.
 - **Re-entry is the payoff.** Opening a session on a repo you haven't touched since last month, and having it already know what was decided, what's open, and what's next: that's the moment Director is built for. And it's the same mechanism at every scale: the next session after a `/clear` and a cold re-entry three weeks later rehydrate from the same parked checkpoint.
 - **The next session doesn't have to be the same model.** A handoff is model-agnostic: an agent that hasn't cracked the problem parks its checkpoint, failed hypotheses included, and a stronger model picks up at the frontier instead of re-deriving the dead ends. Escalate with context, not with amnesia. Native memory follows a vendor's model; the log is neutral ground.
@@ -79,7 +79,7 @@ The design test: **if a session dying loses real information, that's a liability
 Honest answers to the five-minute evaluation questions.
 
 **vs. memory tools (Claude Code auto-memory, claude-mem, mem0, and the rest).**
-Different question. Memory tools answer *"what does the agent know?"*: recall across sequential sessions, and the good ones do it automatically and well. Director answers *"what is in flight?"*: what was decided, what's still open, where the baton is, and what needs the human, across a portfolio, with lifecycle semantics (an open-item is *open until resolved*, not a note that fades). Run both; they don't overlap. Native per-project memory is a private notebook; Director is the shared ledger.
+Different question. Memory tools answer *"what does the agent know?"*: recall across sequential sessions, and the good ones do it automatically and well. Director answers *"what is in flight?"*: what was decided, what's still open, where the work stands, and what needs the human, across a portfolio, with lifecycle semantics (an open-item is *open until resolved*, not a note that fades). Run both; they don't overlap. Native per-project memory is a private notebook; Director is the shared ledger.
 
 **vs. beads (and issue trackers as agent memory).**
 Closest neighbor, different shape. Beads is *task-shaped*: a git-backed dependency graph of work items, and excellent at that. Director is *event-shaped*: **the narrative between tasks**. The decision that reframed the task, the loop deferred while doing it, the handoff parked when the block ended. A decision is not a task; forcing it into an issue tracker strips its "why" of ordering and provenance. They compose rather than compete: track your work in beads, carry your narrative in Director. Director is also portfolio-wide by construction (one hub, many repos, one cockpit), where a tracker's world is one repo's graph.
