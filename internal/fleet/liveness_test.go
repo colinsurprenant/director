@@ -24,8 +24,7 @@ func registerAt(t *testing.T, hub, ws, uuid, handle string, hb time.Time) {
 		Workstream: ws,
 		UUID:       uuid,
 		Handle:     handle,
-		Heartbeat:  hb.Format(heartbeatLayout),
-	}); err != nil {
+	}, hb); err != nil {
 		t.Fatalf("Register(%s/%s): %v", ws, uuid, err)
 	}
 }
