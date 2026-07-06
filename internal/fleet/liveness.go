@@ -71,7 +71,7 @@ func List(hub string, now time.Time, idleAfter, dormantAfter time.Duration, bran
 	dir := filepath.Join(hub, fleetDir)
 	files, err := os.ReadDir(dir)
 	if err != nil {
-		if dirTrulyAbsent(dir) {
+		if dirTrulyAbsent(dir, err) {
 			return nil, 0, nil
 		}
 		return nil, 0, fmt.Errorf("fleet: read fleet dir: %w", err)

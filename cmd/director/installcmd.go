@@ -4,9 +4,14 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime"
 
 	"github.com/colinsurprenant/director/internal/install"
 )
+
+// installGOOS is runtime.GOOS behind a var so the native-Windows install guard
+// is testable from any platform.
+var installGOOS = runtime.GOOS
 
 // runInstall merges Director's `_managedBy`-tagged hook entries into the target
 // agent's hooks file (idempotent; never touches other plugins' hooks — §5.4) AND
@@ -17,6 +22,19 @@ func runInstall(args []string) int {
 	path, codex, code := installTargetFlags("install", args)
 	if path == "" {
 		return code
+	}
+
+	// The shims install writes are bash scripts, which neither Claude Code nor
+	// Codex can execute on native Windows — installing would plant hooks that
+	// can never fire (or worse, pop an editor at session start). Refuse before
+	// touching anything; the guard sits after flag parsing so --help still
+	// works. Uninstall stays available as a cleanup path.
+	if installGOOS == "windows" {
+		fmt.Fprintln(os.Stderr, "install: native Windows is not supported yet — the hook shims are bash scripts, which Claude Code on Windows cannot execute.")
+		fmt.Fprintln(os.Stderr, "  Use WSL with the Linux binary for the full ambient layer (hooks included).")
+		fmt.Fprintln(os.Stderr, "  The manual CLI verbs (emit, render, status, brief, show, resolve) all work natively without install.")
+		fmt.Fprintln(os.Stderr, "  Details: https://github.com/colinsurprenant/director/blob/main/docs/getting-started.md")
+		return 1
 	}
 
 	if codex {

@@ -8,7 +8,28 @@ permissions:
   contents: write
 
 jobs:
+  # The windows twin of ci.yml's windows job, run at tag time: windows binaries
+  # are published below, so a release must never ship what windows tests didn't
+  # pass. main is normally already windows-green via PR CI, but nothing else
+  # enforces that on the tagged commit itself.
+  windows-gate:
+    name: "windows gate (build · test -race)"
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test -race
+        run: go test ./... -race
+
   release:
+    needs: windows-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

@@ -1,7 +1,9 @@
 package install
 
 import (
+	"bytes"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -281,6 +283,27 @@ func TestInstallWritesAndUninstallRemovesShims(t *testing.T) {
 	for _, name := range shims {
 		if _, err := os.Stat(filepath.Join(hooksDir, name)); !os.IsNotExist(err) {
 			t.Errorf("Uninstall left shim %s in place", name)
+		}
+	}
+}
+
+// TestEmbeddedShimsAreLF pins the invariant .gitattributes enforces at the git
+// layer: the shims go:embed'ed into every binary are bash scripts, and a single
+// \r baked in at build time breaks them at run time. The write-vs-embedded
+// comparison above cannot catch this (both sides would carry the same CRLF), so
+// the byte check has to be explicit.
+func TestEmbeddedShimsAreLF(t *testing.T) {
+	entries, err := fs.ReadDir(shimFS, "shims")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		data, err := shimFS.ReadFile("shims/" + e.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.ContainsRune(data, '\r') {
+			t.Errorf("embedded shim %s contains CR bytes — it would break bash when installed", e.Name())
 		}
 	}
 }
