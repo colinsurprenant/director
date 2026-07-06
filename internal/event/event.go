@@ -26,7 +26,9 @@ const MaxBodyBytes = 64 * 1024
 // MaxPromotedToBytes caps the promote-marker's doc address for the same reason
 // MaxBodyBytes caps the body: promoted_to is the only other free-text field
 // without a structural bound, and an oversized value would produce a log line
-// the scanner rejects. 4 KiB comfortably fits any repo path or URL.
+// the scanner rejects. 4 KiB comfortably fits any repo path or URL. Field caps
+// alone do NOT bound the line — refs are deliberately unbounded — so
+// Store.Append enforces the reader's line limit as the final guard.
 const MaxPromotedToBytes = 4 * 1024
 
 // Kind is one of the four canonical model-emitted semantic kinds (§17).
