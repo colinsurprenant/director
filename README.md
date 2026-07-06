@@ -12,7 +12,7 @@ Three weeks after you park a project, a new session starts already knowing all o
 You work with a coding agent (Claude Code, OpenAI Codex, or both) across several projects, in blocks: days or weeks deep in one, an afternoon in another, back to the first, sometimes a few parallel worktree sessions in a burst. The state of the work is exactly what nothing else carries across those boundaries, so the human becomes the message bus, re-explaining last month's decision to this morning's session. Director moves you from **message bus** to **reviewer**. It is a standalone Go CLI built around a shared, durable, **append-only event log** per repo:
 
 - Sessions **`emit`** typed events as they work (`decision` · `open-item` · `handoff` · `note`) and **`resolve`** open loops when they truly close.
-- Deterministic folds project the log into **`render`** (the machine digest), **`brief`** (the human re-orientation view), and **`status`** (the one-line-per-workstream cockpit).
+- A deterministic fold collapses the log into **`render`** (the machine digest), **`brief`** (the human re-orientation view), and **`status`** (the one-line-per-workstream cockpit).
 - A SessionStart hook **injects** the CHARTER + digest into every new session as ground truth, so a cold re-entry starts from your parked handoff instead of from git archaeology.
 - The log is **model-agnostic**: the next session can be you tomorrow, you after a compaction, or a stronger model you escalate a stuck problem to, with the tried-and-failed hypotheses traveling along. Escalate with context, not with amnesia.
 

@@ -17,7 +17,7 @@ Director exists to move you from **message bus** to **reviewer**.
 A standalone Go CLI (single static binary, no daemon, no database, no cloud) that gives your sessions a shared, durable, **append-only event log** per repo, plus **deterministic projections** over it:
 
 - Sessions **emit** typed events as they work, using exactly four kinds (`decision`, `open-item`, `handoff`, `note`), and **resolve** open-items when they are truly closed.
-- Deterministic, non-LLM folds project the log into three views: `render` (the machine digest), `brief` (the human re-orientation view), and `status` (the one-line-per-workstream cockpit with a *Needs-you* band).
+- A deterministic, non-LLM fold collapses the log into three views: `render` (the machine digest), `brief` (the human re-orientation view), and `status` (the one-line-per-workstream cockpit with a *Needs-you* band).
 - A SessionStart hook **injects** the project CHARTER plus the folded digest into every new session as authoritative ground truth. Push, not pull: a protocol the model must remember to invoke is a protocol that never fires.
 - Boundary commands mark workstream lifecycle: `/director:handoff` when pausing (records the resume point), `/director:complete` when a workstream is done and merged (human-confirmed close-out of its open loops).
 
