@@ -47,6 +47,12 @@ func TestSchemaValidate(t *testing.T) {
 		{"handoff", func(e *Event) { e.Type = KindHandoff }, false},
 		{"note", func(e *Event) { e.Type = KindNote }, false},
 		{"close-marker", func(e *Event) { e.Type = KindOpenItem; e.Status = StatusClosed; e.Refs = []string{tgt} }, false},
+		{"promote-marker", func(e *Event) {
+			e.Type = KindDecision
+			e.Status = StatusPromoted
+			e.Refs = []string{tgt}
+			e.PromotedTo = "docs/why-director.md"
+		}, false},
 		{"body at cap", func(e *Event) { e.Body = strings.Repeat("x", MaxBodyBytes) }, false},
 
 		// Rejections.
@@ -60,6 +66,30 @@ func TestSchemaValidate(t *testing.T) {
 		{"invalid status value", func(e *Event) { e.Type = KindOpenItem; e.Status = "done" }, true},
 		{"malformed ref", func(e *Event) { e.Type = KindOpenItem; e.Status = StatusClosed; e.Refs = []string{"not-a-ulid"} }, true},
 		{"closed open-item without refs", func(e *Event) { e.Type = KindOpenItem; e.Status = StatusClosed }, true},
+		{"promoted status on open-item", func(e *Event) { e.Type = KindOpenItem; e.Status = StatusPromoted }, true},
+		{"promoted status on note", func(e *Event) { e.Type = KindNote; e.Status = StatusPromoted }, true},
+		{"promote-marker without refs", func(e *Event) { e.Type = KindDecision; e.Status = StatusPromoted; e.PromotedTo = "docs/x.md" }, true},
+		{"promote-marker without promoted_to", func(e *Event) { e.Type = KindDecision; e.Status = StatusPromoted; e.Refs = []string{tgt} }, true},
+		{"promoted_to on plain decision", func(e *Event) { e.Type = KindDecision; e.PromotedTo = "docs/x.md" }, true},
+		{"promoted_to on note", func(e *Event) { e.PromotedTo = "docs/x.md" }, true},
+		{"promoted_to at cap", func(e *Event) {
+			e.Type = KindDecision
+			e.Status = StatusPromoted
+			e.Refs = []string{tgt}
+			e.PromotedTo = strings.Repeat("x", MaxPromotedToBytes)
+		}, false},
+		{"promoted_to over cap", func(e *Event) {
+			e.Type = KindDecision
+			e.Status = StatusPromoted
+			e.Refs = []string{tgt}
+			e.PromotedTo = strings.Repeat("x", MaxPromotedToBytes+1)
+		}, true},
+		{"promoted_to with control character", func(e *Event) {
+			e.Type = KindDecision
+			e.Status = StatusPromoted
+			e.Refs = []string{tgt}
+			e.PromotedTo = "docs/x.md\nrefs: 01FAKE"
+		}, true},
 		{"malformed id", func(e *Event) { e.ID = "not-a-ulid" }, true},
 		{"empty workstream", func(e *Event) { e.Workstream = "" }, true},
 		{"wrong schema version", func(e *Event) { e.SchemaVersion = 2 }, true},
@@ -145,5 +175,47 @@ func TestSchemaCloseMarkerShape(t *testing.T) {
 	}
 	if _, present := m["body"]; present {
 		t.Fatalf("empty body should be omitted from the line, got %v", m["body"])
+	}
+	if _, present := m["promoted_to"]; present {
+		t.Fatalf("empty promoted_to should be omitted from the line, got %v", m["promoted_to"])
+	}
+}
+
+// TestSchemaPromoteMarkerShape pins the wire format of the promote-marker and
+// its round-trip, mirroring the close-marker pin: promoted_to survives
+// marshal→unmarshal and is omitted everywhere it is empty.
+func TestSchemaPromoteMarkerShape(t *testing.T) {
+	tgt := mustID(t)
+	e := base(t)
+	e.Type = KindDecision
+	e.Status = StatusPromoted
+	e.Refs = []string{tgt}
+	e.PromotedTo = "docs/why-director.md"
+	e.Body = "promoted → docs/why-director.md (1 decision)"
+	if err := e.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+
+	line, err := Marshal(e)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(line, &m); err != nil {
+		t.Fatalf("unmarshal to map: %v", err)
+	}
+	if m["type"] != string(KindDecision) || m["status"] != string(StatusPromoted) {
+		t.Fatalf("promote-marker type/status = %v/%v, want decision/promoted", m["type"], m["status"])
+	}
+	if m["promoted_to"] != "docs/why-director.md" {
+		t.Fatalf("promote-marker promoted_to = %v, want docs/why-director.md", m["promoted_to"])
+	}
+
+	got, err := Unmarshal(line)
+	if err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(e, got) {
+		t.Fatalf("round-trip mismatch:\n got %+v\nwant %+v", got, e)
 	}
 }

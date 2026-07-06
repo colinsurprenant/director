@@ -341,3 +341,32 @@ func TestDigestCompactCapsKeptBand(t *testing.T) {
 		}
 	}
 }
+
+// TestDigestPromotion pins the user-visible outcome of the promote ceremony at
+// the digest level (not just the fold): promoted decisions' headlines leave the
+// decisions section, the marker's doc-pointer line appears, and the pointer
+// address survives the headline cap for realistic doc paths and URLs.
+func TestDigestPromotion(t *testing.T) {
+	d1 := mint(t)
+	d2 := mint(t)
+	m := mint(t)
+	longDoc := "https://github.com/colinsurprenant/director/issues/4242"
+	events := []event.Event{
+		{ID: d1, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Body: "aged rationale ONE"},
+		{ID: d2, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Body: "current decision TWO"},
+		{ID: m, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1",
+			Status: event.StatusPromoted, PromotedTo: longDoc, Refs: []string{d1},
+			Body: "promoted → " + longDoc + " (1 decision)"},
+	}
+
+	got := Digest(Fold(events), "widget")
+	if strings.Contains(got, "aged rationale ONE") {
+		t.Errorf("promoted decision's headline still in digest:\n%s", got)
+	}
+	if !strings.Contains(got, "current decision TWO") {
+		t.Errorf("unpromoted decision missing from digest:\n%s", got)
+	}
+	if !strings.Contains(got, "promoted → "+longDoc) {
+		t.Errorf("doc pointer (full address) missing from digest:\n%s", got)
+	}
+}

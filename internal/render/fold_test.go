@@ -140,3 +140,107 @@ func containsID(events []event.Event, target string) bool {
 	}
 	return false
 }
+
+// TestFoldPromotion locks the promote-marker semantics: the promoted decisions
+// leave the active set via the existing supersession rule, the marker itself
+// stays active as the doc pointer, and the result is permutation-independent —
+// which is also the degradation contract for pre-promote binaries (they see the
+// marker as a plain superseding decision and fold the identical active set).
+func TestFoldPromotion(t *testing.T) {
+	d1 := mint(t)
+	d2 := mint(t)
+	d3 := mint(t)
+	m := mint(t)
+	events := []event.Event{
+		{ID: d1, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Body: "aged decision 1"},
+		{ID: d2, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Body: "aged decision 2"},
+		{ID: d3, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Body: "current decision"},
+		{ID: m, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1",
+			Status: event.StatusPromoted, PromotedTo: "docs/why-director.md", Refs: []string{d1, d2},
+			Body: "promoted → docs/why-director.md (2 decisions)"},
+	}
+
+	proj := Fold(events)
+	if containsID(proj.Decisions, d1) || containsID(proj.Decisions, d2) {
+		t.Errorf("promoted decisions still active: %v", proj.Decisions)
+	}
+	if !containsID(proj.Decisions, d3) {
+		t.Error("unrelated decision dropped by promotion")
+	}
+	if !containsID(proj.Decisions, m) {
+		t.Error("promote-marker missing from active set — the doc pointer is gone")
+	}
+	if len(proj.Decisions) != 2 {
+		t.Errorf("active decisions = %d, want 2 (current + marker)", len(proj.Decisions))
+	}
+
+	// Permutation independence: reversed input folds to the identical projection.
+	reversed := make([]event.Event, len(events))
+	for i, ev := range events {
+		reversed[len(events)-1-i] = ev
+	}
+	if !reflect.DeepEqual(Fold(reversed), proj) {
+		t.Error("promotion fold is order-dependent")
+	}
+}
+
+// TestFoldPromoteMarkerSuperseded pins the regroom path: when a later decision
+// supersedes the promote-marker itself (e.g., consolidating pointers), the
+// marker leaves the active set but its targets STAY dropped — supersession is
+// monotone, nothing un-supersedes.
+func TestFoldPromoteMarkerSuperseded(t *testing.T) {
+	d1 := mint(t)
+	m := mint(t)
+	regroom := mint(t)
+	events := []event.Event{
+		{ID: d1, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Body: "aged decision"},
+		{ID: m, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1",
+			Status: event.StatusPromoted, PromotedTo: "docs/old.md", Refs: []string{d1},
+			Body: "promoted → docs/old.md (1 decision)"},
+		{ID: regroom, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1",
+			Refs: []string{m}, Body: "pointers consolidated into docs/new.md"},
+	}
+
+	proj := Fold(events)
+	if containsID(proj.Decisions, d1) {
+		t.Error("promoted decision returned to the active set after its marker was superseded")
+	}
+	if containsID(proj.Decisions, m) {
+		t.Error("superseded promote-marker still active")
+	}
+	if !containsID(proj.Decisions, regroom) {
+		t.Error("regroom decision missing from active set")
+	}
+	if len(proj.Decisions) != 1 {
+		t.Errorf("active decisions = %d, want 1 (regroom only)", len(proj.Decisions))
+	}
+}
+
+// TestFoldDuplicatePromoteMarkers documents the concurrent-promote outcome the
+// write path cannot prevent (validate-then-append is single-process): two
+// markers naming the same target coexist as set union — the target is dropped
+// once, both pointers stay active, and the fold is deterministic. Nothing lost.
+func TestFoldDuplicatePromoteMarkers(t *testing.T) {
+	d1 := mint(t)
+	m1 := mint(t)
+	m2 := mint(t)
+	events := []event.Event{
+		{ID: d1, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Body: "aged decision"},
+		{ID: m1, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1",
+			Status: event.StatusPromoted, PromotedTo: "docs/a.md", Refs: []string{d1}, Body: "promoted → docs/a.md (1 decision)"},
+		{ID: m2, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws2",
+			Status: event.StatusPromoted, PromotedTo: "docs/b.md", Refs: []string{d1}, Body: "promoted → docs/b.md (1 decision)"},
+	}
+
+	proj := Fold(events)
+	if containsID(proj.Decisions, d1) {
+		t.Error("doubly-promoted decision still active")
+	}
+	if !containsID(proj.Decisions, m1) || !containsID(proj.Decisions, m2) {
+		t.Errorf("both markers should stay active (set union), got %v", proj.Decisions)
+	}
+	reversed := []event.Event{events[2], events[1], events[0]}
+	if !reflect.DeepEqual(Fold(reversed), proj) {
+		t.Error("duplicate-marker fold is order-dependent")
+	}
+}

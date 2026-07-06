@@ -35,8 +35,13 @@ type Projection struct {
 //     unless some close-marker (open-item + closed) names it in Refs (§17). The
 //     closed-id set is computed first so the rule never depends on whether the
 //     marker is seen before or after its target.
-//   - decisions: any id appearing in a later decision's Refs is superseded; the
-//     active set is the decisions whose own id is in no decision's Refs (§5.3).
+//   - decisions: any id appearing in another decision's Refs is superseded (the
+//     rule is order-free set membership, not recency — supersession is monotone);
+//     the active set is the decisions whose own id is in no decision's Refs (§5.3).
+//     Promote-markers (decision + status promoted) ride this same rule: their
+//     Refs drop the promoted decisions from the active set, and the marker
+//     itself stays active as the doc pointer — promotion IS supersession to the
+//     fold, which is also how pre-promote binaries degrade (identical active set).
 //   - latest handoff: iterating ULID-ascending, the highest-ULID handoff per
 //     workstream wins — the session's most recent position (§16).
 //

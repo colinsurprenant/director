@@ -89,6 +89,15 @@ This appends a close-marker (an `open-item`-typed marker with `status: closed`).
   already-closed items are refused). If you don't have the exact id in front of you, run
   `director status` (or `render`/`brief`) to surface it, then copy it.
 
+### Promoting decisions — human-directed only
+
+`director promote <ulid>... --to <doc>` folds aged-but-durable decision rationale into a
+slow-layer doc: the promoted decisions leave the digest and a one-line doc pointer stays.
+Promotion is a curation act; **the human decides what graduates** to the slow layer. Run it only
+at the human's direction, after the rationale has actually been written into the target doc,
+never on your own initiative. The same ULID discipline applies: copy CLI-surfaced ids —
+`promote` rejects invented, non-decision, already-promoted, and superseded targets.
+
 ## 4. Treat injected state as authoritative (Ground Truth)
 
 At session start (including after an autocompaction) Director injects the project **CHARTER** plus
