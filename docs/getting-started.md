@@ -55,12 +55,14 @@ version (e.g. `director v1.4.0`); a `go build` from a git clone prints the versi
 the checkout (a tag or pseudo-version, `+dirty` if modified); `director dev` appears only when no
 VCS metadata is available.
 
-**Windows note.** The recommended setup is [WSL](https://learn.microsoft.com/windows/wsl/) with the
-Linux binary: install and hooks work there exactly as on Linux. On native Windows the CLI itself
-works (build and tests run in CI on `windows-latest`), but skip `director install`: the hook shims
-are bash scripts, which Claude Code on native Windows cannot execute, so the ambient layer
-(session-start injection, heartbeats, boundary nudges) is not wired there yet. You can still use
-the manual verbs (`emit`, `render`, `status`, `brief`, `show`, `resolve`) from PowerShell.
+**Windows note.** This guide, including the `director install` step above, assumes a unix-like
+environment: macOS, Linux, or Windows via [WSL](https://learn.microsoft.com/windows/wsl/), which is
+the recommended Windows setup — with the Linux binary, install and hooks work there exactly as on
+Linux. On native Windows the CLI itself works (build and tests run in CI on `windows-latest`), but
+skip `director install`: the hook shims are bash scripts, which Claude Code on native Windows
+cannot execute, so the ambient layer (session-start injection, heartbeats, boundary nudges) is not
+wired there yet. You can still use the manual verbs (`emit`, `render`, `status`, `brief`, `show`,
+`resolve`) from PowerShell.
 
 ### Wire the hooks
 
