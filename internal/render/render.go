@@ -38,21 +38,50 @@ import (
 // Empty sections still print their header with a "(none)" line so the absence of
 // work is itself a stable, diffable fact rather than a missing section.
 func Digest(proj Projection, repoKey string) string {
-	return digest(proj, repoKey, false)
+	return digest(proj, repoKey, len(proj.Decisions))
 }
 
-// DigestCompact is the hook's deterministic degradation step: identical to
-// Digest except the decisions section collapses to a single count-plus-pointer
-// line. It exists for the case where even the line-capped digest pushes the
-// SessionStart injection over its byte budget — decisions are the one section
-// whose full set is deferrable (rationale, not open loops or the latest handoff), and
-// the collapsed line itself tells the model where the elided content lives, so
-// the elision is never silent.
-func DigestCompact(proj Projection, repoKey string) string {
-	return digest(proj, repoKey, true)
+// DigestCompact is the hook's FIRST deterministic degradation step: identical
+// to Digest except only the NEWEST decisions survive individually — those whose
+// id is above sinceID (this workstream's latest handoff: anything decided after
+// the session's last recorded position is by definition unseen by it), capped
+// at recentDecisionsKept — while the older tail collapses to a count-plus-pointer
+// line. The newest decisions are precisely the ones a rehydrating session is
+// most likely to be missing (a sibling's course correction landed the splash
+// deferral reversal in exactly this band, and the all-or-nothing collapse hid
+// it — incident note 01KWW146C7), so they are the last decision content to go.
+// sinceID == "" (a workstream with no handoff yet) keeps the newest
+// recentDecisionsKept outright. Decisions are ULID-ascending, so "above sinceID"
+// is always a trailing suffix and the kept set is always "the newest N".
+func DigestCompact(proj Projection, repoKey, sinceID string) string {
+	kept := 0
+	for _, d := range proj.Decisions {
+		if d.ID > sinceID {
+			kept++
+		}
+	}
+	if kept > recentDecisionsKept {
+		kept = recentDecisionsKept
+	}
+	return digest(proj, repoKey, kept)
 }
 
-func digest(proj Projection, repoKey string, collapseDecisions bool) string {
+// DigestCollapsed is the LAST degradation step: every decision collapses to the
+// count-plus-pointer line. It exists for the case where even DigestCompact's
+// kept-newest band pushes the SessionStart injection over its byte budget —
+// decisions are the one section whose set is deferrable (rationale, not open
+// loops or the latest handoff), and the collapsed line itself tells the model
+// where the elided content lives, so the elision is never silent.
+func DigestCollapsed(proj Projection, repoKey string) string {
+	return digest(proj, repoKey, 0)
+}
+
+// digest renders the sections, keeping the newest keepDecisions decisions as
+// individual index lines and collapsing any older remainder to the
+// count-plus-pointer elision line. Digest passes the full count (no elision);
+// DigestCollapsed passes 0 (everything elided); DigestCompact passes the
+// recency-anchored band between them.
+func digest(proj Projection, repoKey string, keepDecisions int) string {
 	var b strings.Builder
 
 	fmt.Fprintf(&b, "# director render — %s\n", repoKey)
@@ -76,14 +105,22 @@ func digest(proj Projection, repoKey string, collapseDecisions bool) string {
 		}
 	}
 
+	// Defensive clamp so an over-count caller degrades to the full section
+	// rather than slicing out of range.
+	if keepDecisions > len(proj.Decisions) {
+		keepDecisions = len(proj.Decisions)
+	}
 	b.WriteString("\n## decisions\n")
 	switch {
 	case len(proj.Decisions) == 0:
 		b.WriteString("(none)\n")
-	case collapseDecisions:
+	case keepDecisions == 0:
 		fmt.Fprintf(&b, "(%d active decisions elided for size — run `director render` for the index, `director show <ulid>` for a full body)\n", len(proj.Decisions))
 	default:
-		for _, d := range proj.Decisions {
+		if elided := len(proj.Decisions) - keepDecisions; elided > 0 {
+			fmt.Fprintf(&b, "(%d older decision(s) elided for size — the newest %d follow; run `director render` for the full index, `director show <ulid>` for a full body)\n", elided, keepDecisions)
+		}
+		for _, d := range proj.Decisions[len(proj.Decisions)-keepDecisions:] {
 			fmt.Fprintf(&b, "- %s %s%s\n", d.ID, areaTag(d.Area), headline(d.Body, decisionHeadlineRunes))
 		}
 	}
@@ -186,6 +223,12 @@ const (
 	openItemBodyRunes     = 300
 	handoffBodyRunes      = 500
 )
+
+// recentDecisionsKept bounds DigestCompact's kept-newest band. A decision index
+// line runs ≤ ~200B (ULID + area + capped headline), so the band re-adds at most
+// ~2KB to an over-budget payload — small against the 16KB injection budget, and
+// the hook still has DigestCollapsed as the next rung when even that overflows.
+const recentDecisionsKept = 10
 
 // headline collapses a body to one line and caps it at max runes, marking a cut
 // with "…" so a capped line is visibly a headline, never mistaken for the full
