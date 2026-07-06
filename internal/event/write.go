@@ -163,9 +163,11 @@ func Resolve(store *Store, workstreamID, target string) (Event, error) {
 // name the promoted decisions and whose PromotedTo names the doc the rationale
 // now lives in. The fold's existing supersession rule drops the targets from
 // the active set; the marker itself stays active as the doc pointer. Validation
-// is Resolve-parity: every target must be an active, un-promoted, un-superseded
-// original decision, and the whole batch is validated before anything is
-// appended (one bad target rejects the marker, writes nothing). Like Resolve,
+// is Resolve-parity: every target must be a known original decision, not
+// superseded by an ordinary decision, and not already claimed by a LIVE
+// promote-marker (a target whose marker was itself superseded is deliberately
+// re-promotable — the recovery path). The whole batch is validated before
+// anything is appended (one bad target rejects the marker, writes nothing). Like Resolve,
 // the validate-then-append window is single-process: a concurrent writer can
 // land a duplicate or superseding event in between. That is accepted by design
 // — the fold is a monotone set union, so duplicate markers coexist harmlessly
@@ -299,13 +301,16 @@ func checkPortableAddress(doc string) error {
 			return reject("not a single-line address (control character)")
 		}
 	}
+	if len(doc) > MaxPromotedToBytes {
+		return fmt.Errorf("%w: destination is %d bytes, exceeds the %d-byte cap", ErrInvalidDoc, len(doc), MaxPromotedToBytes)
+	}
 	switch {
 	case strings.HasPrefix(doc, "/"):
 		return reject("an absolute path")
 	case strings.HasPrefix(doc, "~"):
 		return reject("a home-relative path")
-	case strings.HasPrefix(doc, `\\`):
-		return reject("a UNC path")
+	case strings.HasPrefix(doc, `\`):
+		return reject("a rooted or UNC path")
 	case len(doc) >= 3 && isASCIILetter(doc[0]) && doc[1] == ':' && (doc[2] == '/' || doc[2] == '\\'):
 		return reject("a drive-letter path")
 	case strings.HasPrefix(strings.ToLower(doc), "file:"):

@@ -35,7 +35,7 @@ This is also the compatibility story: `Validate` runs only on the write path, so
 
 ## Validation (resolve-parity)
 
-Every target must be an active, original decision the CLI surfaced. Rejected with distinct sentinels, whole-batch-atomic (one bad target writes nothing):
+Every target must be a known original decision the CLI surfaced, not superseded by an ordinary decision, and not already claimed by a live promote-marker. Rejected with distinct sentinels, whole-batch-atomic (one bad target writes nothing):
 
 | Rejection | Meaning | Remedy |
 |---|---|---|

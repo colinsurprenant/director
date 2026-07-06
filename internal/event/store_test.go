@@ -266,3 +266,91 @@ func TestAppendRejectsOversizedLine(t *testing.T) {
 		t.Fatalf("refused append still wrote %d events, want 0", len(got))
 	}
 }
+
+// TestAppendLineLimitBoundary pins the exact writer/reader boundary: a framed
+// line (JSON + '\n') of exactly maxLineBytes is the largest the scanner can
+// tokenize mid-file — the buffer must hold the JSON AND its newline to find the
+// token — so Append accepts exactly that and refuses one byte more. This is the
+// contract TestAppendRejectsOversizedLine asserts at scale, pinned at the edge.
+func TestAppendLineLimitBoundary(t *testing.T) {
+	build := func(t *testing.T, framedLen int) Event {
+		t.Helper()
+		ref := mustID(t)
+		ev := Event{
+			ID: mustID(t), SchemaVersion: SchemaVersion, Type: KindDecision,
+			Workstream: "ws1", Body: "",
+		}
+		// Grow via refs to within a body's reach of the target, then land the
+		// exact framed length with the body (1 byte per 'x', no JSON escaping).
+		probe, err := Marshal(ev)
+		if err != nil {
+			t.Fatalf("Marshal probe: %v", err)
+		}
+		perRef := len(ref) + len(`"",`)
+		refsBudget := framedLen - len(probe) - MaxBodyBytes/2
+		nRefs := refsBudget/perRef + 1
+		ev.Refs = make([]string, nRefs)
+		for i := range ev.Refs {
+			ev.Refs[i] = ref
+		}
+		withRefs, err := Marshal(ev)
+		if err != nil {
+			t.Fatalf("Marshal with refs: %v", err)
+		}
+		// Body is omitempty, so adding it costs field scaffolding beyond the
+		// payload bytes — measure the overhead instead of assuming it.
+		ev.Body = "x"
+		withOne, err := Marshal(ev)
+		if err != nil {
+			t.Fatalf("Marshal with 1-byte body: %v", err)
+		}
+		overhead := len(withOne) - len(withRefs) - 1
+		pad := framedLen - 1 - len(withRefs) - overhead // -1 for the '\n' Append adds
+		if pad < 1 || pad > MaxBodyBytes {
+			t.Fatalf("test arithmetic off: pad = %d", pad)
+		}
+		ev.Body = strings.Repeat("x", pad)
+		framed, err := Marshal(ev)
+		if err != nil {
+			t.Fatalf("Marshal padded: %v", err)
+		}
+		if got := len(framed) + 1; got != framedLen {
+			t.Fatalf("built framed length %d, want %d", got, framedLen)
+		}
+		if err := ev.Validate(); err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+		return ev
+	}
+
+	t.Run("exactly at the limit round-trips", func(t *testing.T) {
+		store := NewStore(t.TempDir(), "boundary-ok-repo")
+		ev := build(t, maxLineBytes)
+		if err := store.Append(ev); err != nil {
+			t.Fatalf("Append(at limit) = %v, want success", err)
+		}
+		// A second, ordinary event proves the scanner tokenizes PAST the
+		// max-size line mid-file, not just up to it.
+		if err := store.Append(newEvent(t, "after the big one")); err != nil {
+			t.Fatalf("Append(follow-up) = %v", err)
+		}
+		got, err := store.ReadAll()
+		if err != nil {
+			t.Fatalf("ReadAll: %v", err)
+		}
+		if len(got) != 2 || got[0].ID != ev.ID {
+			t.Fatalf("read %d events, want 2 with the big line first", len(got))
+		}
+	})
+
+	t.Run("one byte over is refused", func(t *testing.T) {
+		store := NewStore(t.TempDir(), "boundary-over-repo")
+		ev := build(t, maxLineBytes+1)
+		if err := store.Append(ev); err == nil {
+			t.Fatal("Append(one over) = nil error, want refusal")
+		}
+		if got, _ := store.ReadAll(); len(got) != 0 {
+			t.Fatalf("refused append wrote %d events, want 0", len(got))
+		}
+	})
+}
