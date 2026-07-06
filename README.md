@@ -66,7 +66,7 @@ The design in four ideas — the full argument, including honest comparisons, is
 
 Prebuilt binaries for macOS, Linux, and Windows (amd64/arm64) are published on the [releases page](https://github.com/colinsurprenant/director/releases); [`docs/getting-started.md`](docs/getting-started.md) covers install-from-release.
 
-> **On Windows?** Use [WSL](https://learn.microsoft.com/windows/wsl/) with the Linux binary: everything works there, hooks included. Native Windows is CLI-only for now (the binary is built and CI-tested, so `emit`/`render`/`status`/`brief` work from PowerShell, but the hook shims are bash, so the ambient layer — session-start injection, heartbeats, boundary nudges — is not yet wired natively).
+> **On Windows?** Use [WSL](https://learn.microsoft.com/windows/wsl/) with the Linux binary: everything works there, hooks included. Native Windows is CLI-only for now: the binary is built and CI-tested, and every manual verb (`emit`, `render`, `status`, `brief`, `show`, `resolve`, …) works from PowerShell, but the hook shims are bash, so the ambient layer — session-start injection, heartbeats, boundary nudges — is not yet wired natively.
 
 Or build the binary and put it on your `PATH`:
 
