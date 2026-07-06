@@ -64,10 +64,10 @@ type Liveness struct {
 func List(hub string, now time.Time, idleAfter, dormantAfter time.Duration, branchAlive func(Row) bool) (entries []Liveness, skipped int, err error) {
 	dir := filepath.Join(hub, fleetDir)
 	files, err := os.ReadDir(dir)
-	if os.IsNotExist(err) {
-		return nil, 0, nil
-	}
 	if err != nil {
+		if dirTrulyAbsent(dir) {
+			return nil, 0, nil
+		}
 		return nil, 0, fmt.Errorf("fleet: read fleet dir: %w", err)
 	}
 

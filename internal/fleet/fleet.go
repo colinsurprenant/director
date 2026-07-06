@@ -158,10 +158,10 @@ func DoneWorkstream(hub, workstream string, now time.Time) (int, error) {
 	}
 	dir := filepath.Join(hub, fleetDir)
 	files, err := os.ReadDir(dir)
-	if os.IsNotExist(err) {
-		return 0, ErrRowNotFound
-	}
 	if err != nil {
+		if dirTrulyAbsent(dir) {
+			return 0, ErrRowNotFound
+		}
 		return 0, fmt.Errorf("fleet: read fleet dir: %w", err)
 	}
 	archived := 0
@@ -244,6 +244,19 @@ func readRow(path string) (Row, error) {
 		return Row{}, fmt.Errorf("fleet: parse row %s: %w", path, err)
 	}
 	return row, nil
+}
+
+// dirTrulyAbsent reports whether dir does not exist at all — the only case a
+// caller may treat a ReadDir failure as an empty result. Classifying the
+// ReadDir error with os.IsNotExist alone is not portable: on Windows, ReadDir
+// on a path that exists as a regular FILE also classifies as not-exist
+// (ERROR_PATH_NOT_FOUND), which would silently read a broken surface as an
+// empty one (§9: silence reads as healthy); unix returns ENOTDIR there and
+// fails loud. The follow-up Stat makes both platforms agree: only genuine
+// absence is absence.
+func dirTrulyAbsent(dir string) bool {
+	_, err := os.Stat(dir)
+	return os.IsNotExist(err)
 }
 
 // slug collapses s into one filesystem-safe path segment, keeping [A-Za-z0-9._]
