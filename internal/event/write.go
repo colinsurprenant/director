@@ -312,9 +312,12 @@ func checkPortableAddress(doc string) error {
 		return reject("a home-relative path")
 	case strings.HasPrefix(doc, `\`):
 		return reject("a rooted or UNC path")
-	// Any single letter + colon is a Windows drive reference (rooted C:\x or
-	// drive-relative C:foo — both machine-specific); URL schemes are ≥2 letters,
-	// so this cannot collide with https:, mailto:, etc.
+	// Any single letter + colon is treated as a Windows drive reference (rooted
+	// C:\x or drive-relative C:foo — both machine-specific). RFC 3986 does
+	// permit single-letter URL schemes, but none is registered in practice, and
+	// a drive letter is indistinguishable from one — so single-letter schemes
+	// are deliberately sacrificed. Real schemes (https:, mailto:) are ≥2
+	// letters and unaffected.
 	case len(doc) >= 2 && isASCIILetter(doc[0]) && doc[1] == ':':
 		return reject("a drive-letter path")
 	case strings.HasPrefix(strings.ToLower(doc), "file:"):
