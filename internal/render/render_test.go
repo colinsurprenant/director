@@ -281,6 +281,13 @@ func TestDigestCompactKeepsNewestSinceAnchor(t *testing.T) {
 		t.Errorf("an anchor above every decision should degrade to the full collapse")
 	}
 
+	// The boundary is STRICT: an anchor exactly equal to the newest decision's
+	// own id keeps nothing — "newer" means after the anchor, never at it. A
+	// regression to >= would slip past every other case in this suite.
+	if DigestCompact(proj, "widget", ids.supersedeA) != DigestCollapsed(proj, "widget") {
+		t.Errorf("an anchor equal to the newest decision id must not keep that decision")
+	}
+
 	// No anchor (workstream without a handoff): everything is unseen, so with
 	// fewer decisions than the cap the compact digest equals the full one.
 	if DigestCompact(proj, "widget", "") != Digest(proj, "widget") {

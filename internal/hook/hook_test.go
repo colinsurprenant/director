@@ -1408,6 +1408,13 @@ func TestSessionStartBudgetCollapsesAllWhenKeptBandOverflows(t *testing.T) {
 	// Bulk the ACTIONABLE section close to the budget so rung 1's ~2KB kept
 	// band (10 × ~200B lines) still overflows while rung 2 fits: ~40 open-items
 	// × ~300-char bodies ≈ 13KB of open-set + ~2.5KB fixed blocks.
+	//
+	// Measured margins (2026-07-06): full ≈ 20.8KB, rung 1 ≈ 17.9KB (~1.5KB
+	// over, as required), rung 2 ≈ 15.9KB — only ~512B of headroom under the
+	// 16,384B budget. If this test starts failing with "STILL over budget"
+	// after a fixed block (emitProtocol, preamble, banner) grows, the FIXTURE
+	// has drifted out of its window — re-tune the open-item count downward;
+	// don't suspect the ladder.
 	openBody := strings.Repeat("open loop ", 29) // ~290 chars, under the 300-rune cap
 	for i := 0; i < 40; i++ {
 		if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindOpenItem, Area: "sync", Body: openBody}); err != nil {
@@ -1498,5 +1505,42 @@ func TestSessionStartConcurrentSessionNote(t *testing.T) {
 	b, c, p := strings.Index(ctxB, "## Acknowledge on entry"), strings.Index(ctxB, "## Concurrent sessions"), strings.Index(ctxB, "## Director protocol")
 	if b < 0 || c < 0 || p < 0 || !(b < c && c < p) {
 		t.Errorf("concurrency note must sit between banner and protocol (banner@%d, note@%d, protocol@%d):\n%.2000s", b, c, p, ctxB)
+	}
+}
+
+// TestSessionStartConcurrentNoteForThrowaway locks the uuid-exclusion path for a
+// session that never registers a row: a throwaway (no session_id — a subagent)
+// falls back to the manual uuid for exclusion, which matches no row, so a real
+// session's fresh row still counts as a sibling and the note appears. Deliberate:
+// the throwaway inherits the same working tree, so the interleave warning is
+// true for it too. (Corollary, accepted: a hand-run CLI registration under the
+// manual uuid would be excluded here — the fallback ids collide by design.)
+func TestSessionStartConcurrentNoteForThrowaway(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "") // pin the manual fallback, whatever ran the suite
+
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+
+	store := event.NewStore(hub, ws.RepoKey)
+	if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindNote, Area: "x", Body: "managed"}); err != nil {
+		t.Fatalf("seed note: %v", err)
+	}
+
+	// A real session registers its row first.
+	inA := `{"session_id":"s-real","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	if code := Dispatch(EventSessionStart, strings.NewReader(inA), &bytes.Buffer{}, hub); code != 0 {
+		t.Fatalf("real session start exit = %d", code)
+	}
+
+	// The throwaway starts on the same checkout: no session_id in the payload.
+	inB := `{"cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	var outB bytes.Buffer
+	if code := Dispatch(EventSessionStart, strings.NewReader(inB), &outB, hub); code != 0 {
+		t.Fatalf("throwaway session start exit = %d", code)
+	}
+	ctxB := injectedContext(t, outB.String())
+	if !strings.Contains(ctxB, "· ⚠ 1 concurrent session(s) on this checkout") {
+		t.Errorf("throwaway should see the real session as a sibling:\n%.2000s", ctxB)
 	}
 }

@@ -148,9 +148,12 @@ func List(hub string, now time.Time, idleAfter, dormantAfter time.Duration, bran
 // collapsed entries can't provide: the SessionStart hook uses it to count the
 // OTHER sessions live on this checkout (excluding its own uuid), so the signal
 // stays precise even for a session that never registered a row (a throwaway's
-// uuid simply matches nothing). Corrupt rows and unparseable heartbeats are
-// skipped with List's leniency — a concurrency hint must never fail a session
-// start. A missing fleet dir yields an empty result, not an error.
+// uuid simply matches nothing). A row's lifetime bounds what "live" can mean
+// here: Stop archives it at each allowed turn end, so a fresh row is a session
+// mid-turn or a recent ungraceful death — never a sibling idling at its prompt.
+// Corrupt rows and unparseable heartbeats are skipped with List's leniency — a
+// concurrency hint must never fail a session start. A missing fleet dir yields
+// an empty result, not an error.
 func LiveSessions(hub, workstream string, now time.Time, within time.Duration) ([]string, error) {
 	dir := filepath.Join(hub, fleetDir)
 	files, err := os.ReadDir(dir)
