@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -27,7 +28,11 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	binPath = filepath.Join(tmp, "director")
+	bin := "director"
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
+	binPath = filepath.Join(tmp, bin)
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

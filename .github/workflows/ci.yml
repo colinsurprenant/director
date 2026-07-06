@@ -36,3 +36,23 @@ jobs:
 
       - name: go test -race
         run: go test ./... -race
+
+  # Windows portability check: build + full test suite under Windows filesystem
+  # semantics (no unix permission bits, rename-over-open restrictions, CRLF git
+  # defaults). vet/gofmt run once on the ubuntu gate; duplicating them here adds
+  # nothing platform-specific.
+  windows:
+    name: "windows (build · test -race)"
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test -race
+        run: go test ./... -race

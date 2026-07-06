@@ -21,9 +21,9 @@ Get the `director` binary onto your `PATH` by any of the three paths below, then
 
 ### From a release (recommended)
 
-Each tagged release publishes prebuilt binaries for macOS and Linux (amd64 and arm64) as
-`director_<tag>_<os>_<arch>.tar.gz`, plus a `checksums.txt`, on the
-[releases page](https://github.com/colinsurprenant/director/releases). Download the tarball for your
+Each tagged release publishes prebuilt binaries for macOS, Linux, and Windows (amd64 and arm64) as
+`director_<tag>_<os>_<arch>.tar.gz` (`.zip` for Windows), plus a `checksums.txt`, on the
+[releases page](https://github.com/colinsurprenant/director/releases). Download the archive for your
 platform, verify it, and put the binary on your `PATH`. For example, on an Apple Silicon Mac
 (adjust `darwin_arm64` for your platform):
 
@@ -54,6 +54,13 @@ Confirm the binary resolves with `director version`. A release or `go install` b
 version (e.g. `director v1.4.0`); a `go build` from a git clone prints the version Go derives from
 the checkout (a tag or pseudo-version, `+dirty` if modified); `director dev` appears only when no
 VCS metadata is available.
+
+**Windows note.** The recommended setup is [WSL](https://learn.microsoft.com/windows/wsl/) with the
+Linux binary: install and hooks work there exactly as on Linux. On native Windows the CLI itself
+works (build and tests run in CI on `windows-latest`), but skip `director install`: the hook shims
+are bash scripts, which Claude Code on native Windows cannot execute, so the ambient layer
+(session-start injection, heartbeats, boundary nudges) is not wired there yet. You can still use
+the manual verbs (`emit`, `render`, `status`, `brief`, `show`, `resolve`) from PowerShell.
 
 ### Wire the hooks
 
