@@ -182,6 +182,24 @@ func TestLivenessCountsActiveSessions(t *testing.T) {
 	}
 }
 
+// TestLivenessActiveSessionsZeroWhenAllStale: leftovers from ungraceful exits
+// (rows never archived) age out of the concurrency signal even though the rows
+// still exist — Sessions counts them, ActiveSessions must read 0, never 2.
+func TestLivenessActiveSessionsZeroWhenAllStale(t *testing.T) {
+	hub := t.TempDir()
+	now := fixedTime
+	registerAt(t, hub, "ws-stale", "u-a", "@a", now.Add(-10*time.Minute))
+	registerAt(t, hub, "ws-stale", "u-b", "@b", now.Add(-20*time.Minute))
+
+	got := onlyEntry(t, hub, now, alive)
+	if got.Sessions != 2 {
+		t.Errorf("sessions = %d, want 2", got.Sessions)
+	}
+	if got.ActiveSessions != 0 {
+		t.Errorf("active sessions = %d, want 0 (stale leftovers must not signal concurrency)", got.ActiveSessions)
+	}
+}
+
 // TestLiveSessions locks the per-row view behind the SessionStart concurrency
 // hint: only rows of the asked workstream with a heartbeat younger than the
 // window, uuids sorted, corrupt rows skipped, missing fleet dir empty-not-error.
@@ -194,6 +212,12 @@ func TestLiveSessions(t *testing.T) {
 	registerAt(t, hub, "ws-other", "u-o", "@o", now.Add(-1*time.Minute))
 	// A corrupt row must be skipped, never fail the listing.
 	if err := os.WriteFile(filepath.Join(hub, "fleet", "corrupt.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// So must a well-formed row whose heartbeat doesn't parse — the other
+	// lenient-skip branch.
+	if err := os.WriteFile(filepath.Join(hub, "fleet", "badhb.json"),
+		[]byte(`{"workstream":"ws-shared","uuid":"u-badhb","heartbeat":"not-a-time"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

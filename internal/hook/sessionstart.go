@@ -188,10 +188,16 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID, uuid string, codex 
 		} else if n != "" {
 			nudge = codexCommandNames(n, codex)
 		}
-		// Sibling sessions live on this same workstream (same checkout) RIGHT NOW.
-		// "Live" is heartbeat younger than the idle TTL — the same definition the
-		// cockpit derives active from. Fail open like the nudge: a fleet read
-		// problem costs the hint, never the Ground Truth.
+		// Sibling sessions live on this same workstream (same checkout). "Live"
+		// is a row with a heartbeat younger than the idle TTL — but note what a
+		// row's lifetime actually is: PostToolUse heartbeats materialize it and
+		// every allowed Stop archives it (stop.go), so a live row means a sibling
+		// is MID-TURN right now, or died ungracefully within the TTL. A sibling
+		// sitting at its prompt between turns has no row and is NOT detected —
+		// the signal is honest but narrow; widening it is a row-lifecycle design
+		// question (archive on session end rather than per-turn Stop), not a
+		// window-tuning one. Fail open like the nudge: a fleet read problem
+		// costs the hint, never the Ground Truth.
 		siblings := 0
 		if uuids, err := fleet.LiveSessions(hub, workstreamID, time.Now().UTC(), render.IdleAfter); err != nil {
 			logFailure(hub, EventSessionStart, sessionID, fmt.Sprintf("concurrent-session check: %v", err))
