@@ -54,6 +54,15 @@ func Digest(proj Projection, repoKey string) string {
 // recentDecisionsKept outright. Decisions are ULID-ascending, so "above sinceID"
 // is always a trailing suffix and the kept set is always "the newest N".
 func DigestCompact(proj Projection, repoKey, sinceID string) string {
+	return digest(proj, repoKey, KeptDecisions(proj, sinceID))
+}
+
+// KeptDecisions reports how many decisions DigestCompact would keep for
+// sinceID — the count-and-cap in one place, so a caller choosing between
+// degradation rungs (the SessionStart hook) sees exactly what the compact
+// digest will do: 0 means DigestCompact degenerates to DigestCollapsed, and
+// the caller should take (and log) that rung directly.
+func KeptDecisions(proj Projection, sinceID string) int {
 	kept := 0
 	for _, d := range proj.Decisions {
 		if d.ID > sinceID {
@@ -63,7 +72,7 @@ func DigestCompact(proj Projection, repoKey, sinceID string) string {
 	if kept > recentDecisionsKept {
 		kept = recentDecisionsKept
 	}
-	return digest(proj, repoKey, kept)
+	return kept
 }
 
 // DigestCollapsed is the LAST degradation step: every decision collapses to the

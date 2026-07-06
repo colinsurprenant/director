@@ -1383,8 +1383,8 @@ func TestSessionStartBudgetDegradesDeterministically(t *testing.T) {
 		t.Errorf("degraded payload still over budget: %dB > %dB", len(ctx), injectionBudgetBytes)
 	}
 	health := readHealth(t, hub)
-	if !strings.Contains(health, "older decisions collapsed to count+pointer, newest kept") {
-		t.Errorf("budget overflow should be health-logged naming the first rung, got:\n%s", health)
+	if !strings.Contains(health, "older decisions collapsed to count+pointer, newest 1 kept") {
+		t.Errorf("budget overflow should be health-logged naming the first rung with its kept count, got:\n%s", health)
 	}
 	// Pin WHICH rung ran: the kept-newest band must suffice here — rung 2 (ALL
 	// collapsed) or the last-resort "actionable sections alone are over"
@@ -1392,6 +1392,51 @@ func TestSessionStartBudgetDegradesDeterministically(t *testing.T) {
 	// test believes.
 	if strings.Contains(health, "ALL decisions collapsed") || strings.Contains(health, "STILL over budget") {
 		t.Errorf("fixture should land on the first rung only:\n%s", health)
+	}
+}
+
+// TestSessionStartBudgetSkipsEmptyKeptBand: when the workstream's latest
+// handoff postdates every decision (the common shape — the handoff comes last),
+// rung 1 would keep nothing and degenerate byte-for-byte to the full collapse.
+// The hook must take (and health-log) rung 2 directly — never claim a kept
+// band that is empty (Copilot review on PR #21).
+func TestSessionStartBudgetSkipsEmptyKeptBand(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+
+	store := event.NewStore(hub, ws.RepoKey)
+	body := strings.Repeat("rationale ", 30)
+	for i := 0; i < 120; i++ {
+		if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindDecision, Area: "hooks", Body: body}); err != nil {
+			t.Fatalf("seed decision %d: %v", i, err)
+		}
+	}
+	// The handoff lands AFTER every decision: the anchor is above them all, so
+	// zero decisions are post-resume-point news.
+	if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindHandoff, Area: "hooks", Body: "resume point"}); err != nil {
+		t.Fatalf("seed handoff: %v", err)
+	}
+
+	in := `{"session_id":"s-real","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	var out bytes.Buffer
+	if code := Dispatch(EventSessionStart, strings.NewReader(in), &out, hub); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	ctx := injectedContext(t, out.String())
+
+	if !strings.Contains(ctx, "(120 active decisions elided for size") {
+		t.Errorf("empty kept band should inject the full-collapse line:\n%.2000s", ctx)
+	}
+	if len(ctx) > injectionBudgetBytes {
+		t.Errorf("collapsed payload still over budget: %dB > %dB", len(ctx), injectionBudgetBytes)
+	}
+	health := readHealth(t, hub)
+	if !strings.Contains(health, "ALL decisions collapsed to count+pointer") {
+		t.Errorf("empty kept band should be health-logged as rung 2, got:\n%s", health)
+	}
+	if strings.Contains(health, "kept") {
+		t.Errorf("health must not claim a kept band when nothing was kept:\n%s", health)
 	}
 }
 

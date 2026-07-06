@@ -288,6 +288,15 @@ func TestDigestCompactKeepsNewestSinceAnchor(t *testing.T) {
 		t.Errorf("an anchor equal to the newest decision id must not keep that decision")
 	}
 
+	// KeptDecisions is the rung-selection view of the same rule — it must agree
+	// with what DigestCompact renders, since the hook trusts it to pick a rung.
+	if got := KeptDecisions(proj, ids.handoffWS1b); got != 1 {
+		t.Errorf("KeptDecisions(anchor between the two) = %d, want 1", got)
+	}
+	if got := KeptDecisions(proj, newest); got != 0 {
+		t.Errorf("KeptDecisions(anchor above all) = %d, want 0", got)
+	}
+
 	// No anchor (workstream without a handoff): everything is unseen, so with
 	// fewer decisions than the cap the compact digest equals the full one.
 	if DigestCompact(proj, "widget", "") != Digest(proj, "widget") {
