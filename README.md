@@ -144,6 +144,8 @@ Re-running `/director:adopt` on an adopted repo is the refresh path: the proposa
 write path (model-emitted):
   emit        append a semantic event (decision|open-item|handoff|note)
   resolve     close an open-item by its ULID
+  promote     fold decisions' rationale into a slow-layer doc
+              (promote <ulid>... --to <doc>; a doc pointer stays in the digest)
 
 projections:
   render      deterministic machine digest (+ --verify, manifest)
@@ -188,6 +190,18 @@ director resolve <ulid>
 
 `resolve` appends a close-marker for an open-item. The `<ulid>` **must** be one the CLI surfaced (from `emit`, `render`, or `open-items`) — `resolve` validates the target and rejects invented ids, non-open-items, and already-closed items.
 
+### promote — fold aged rationale into the docs
+
+```bash
+director promote <ulid> [<ulid>...] --to <doc>
+```
+
+`promote` is the grooming ceremony that keeps the digest tracking **current work, not project age**. Once a batch of aged-but-durable decisions' rationale has been written into a living doc (an ADR, an architecture overview), `promote` appends one **promote-marker**: a `decision` with `status: promoted`, `refs` naming the promoted decisions, and `promoted_to` carrying the doc path. The fold drops the promoted decisions from the active projection; the marker stays as a one-line doc pointer, and `director show <ulid>` still serves every original in full. Nothing is lost, the rationale just changed address (and since Director is single-human by design, promotion into the slow layer is also the cross-human interface).
+
+Validation is `resolve`-parity: every target must be an active decision the CLI surfaced. Invented ids, non-decisions, already-promoted and superseded targets are refused, and one bad target rejects the whole batch (nothing is written). A mispointed promotion is recoverable: supersede the bad marker with an ordinary decision (`emit --refs <marker-ulid>`), then re-promote to the correct address — only *live* markers hold the already-promoted claim.
+
+`--to` takes a **durable address**, not necessarily a file: a repo-relative path (`docs/adr/0007-cursor-pagination.md`) or a stable URL (a GitHub issue where the rationale now lives). Machine-specific paths (absolute, `~/…`) are refused — the log is a portable file and its pointers must travel. Two conventions, nudged not gated: prefer the repo doc (it's version-controlled and travels with the repo; a URL can die, though the original rationale stays one `show` away), and have the receiving doc cite the promoted ULIDs, so a reader can drill back from the ADR into the full decision chain, superseded alternatives included. Director records the address; it never dials it — no issue is created, no doc is checked, the write-the-doc-then-promote ordering is yours.
+
 ### The three projections
 
 | Command | Audience | What it is |
@@ -198,7 +212,7 @@ director resolve <ulid>
 
 `brief` and `render` share the same byte-identical fold — the human reads the same picture a fresh session reads. A fourth, narrower projection, `open-items`, lists a workstream's unresolved open-items (ULID + body); it exists to feed `resolve` and `/director:complete`. It defaults to the current workstream; `--workstream <id>` retargets it at a sibling — the close-out path for a workstream whose session is already gone.
 
-The digest is deliberately an *index*: every line is capped to a headline so the injection stays small as a project's log grows, and nothing is lost — `show <ulid>` prints any single event in full (body verbatim, as recorded), one deterministic hop from any headline. When even the capped digest would overrun the injection budget, the decisions section collapses to a count-plus-pointer line and the overflow lands in `health/` as a grooming signal; the open-set and the latest handoff are never cut.
+The digest is deliberately an *index*: every line is capped to a headline so the injection stays small as a project's log grows, and nothing is lost — `show <ulid>` prints any single event in full (body verbatim, as recorded), one deterministic hop from any headline. When even the capped digest would overrun the injection budget, the decisions section collapses to a count-plus-pointer line and the overflow lands in `health/` as a grooming signal; the open-set and the latest handoff are never cut. The grooming verbs that keep that headroom are `resolve` (compacts the open-set), supersession via `--refs`, and `promote` (compacts the decision set into the docs).
 
 ### Fleet lifecycle
 
@@ -210,7 +224,7 @@ There are exactly four model-emitted semantic kinds. Pick by what the fact *is*:
 
 | Kind | Use it for | Lifecycle |
 |---|---|---|
-| `decision` | a choice + what it affects | carries `--risk low\|escalate` |
+| `decision` | a choice + what it affects | active → superseded (a later decision's `--refs`) or promoted (via `promote`); carries `--risk low\|escalate` |
 | `open-item` | an open loop / follow-up / deferred item — the canonical home for "documented, not dropped" | open → closed (via `resolve`) |
 | `handoff` | a positional snapshot: current task · next action · hypotheses | — |
 | `note` | FYI / context for a parallel or future session | — |

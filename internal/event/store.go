@@ -74,6 +74,14 @@ func (s *Store) Append(ev Event) error {
 	framed = append(framed, line...)
 	framed = append(framed, '\n')
 
+	// Defense in depth: never write a line the reader would reject. Field caps
+	// (MaxBodyBytes, MaxPromotedToBytes) make this unreachable for prose, but
+	// refs are unbounded, and one oversized line bricks every projection over
+	// this log — refusing here turns a poisoned log into a loud writer error.
+	if len(framed) > maxLineBytes {
+		return fmt.Errorf("store: refusing to append event %s: %d-byte line exceeds the reader's %d-byte limit", ev.ID, len(framed), maxLineBytes)
+	}
+
 	dir := filepath.Dir(s.Path())
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("store: create project dir %s: %w", dir, err)

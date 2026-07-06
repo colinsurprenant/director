@@ -17,11 +17,17 @@ const SchemaVersion = 1
 
 // MaxBodyBytes caps the model-authored body so a single event's marshaled NDJSON
 // line can never exceed the read path's scanner limit (store.maxLineBytes, 1 MiB).
-// The body is the only unbounded, free-text field; 64 KiB is generous for prose
-// while leaving ample headroom for JSON escaping (worst case ~6×) plus the rest of
-// the event, so the writer can never emit a line ReadAll/Tail would reject as
-// too-long — which would otherwise brick every projection over that repo's log.
+// 64 KiB is generous for prose while leaving ample headroom for JSON escaping
+// (worst case ~6×) plus the rest of the event, so the writer can never emit a
+// line ReadAll/Tail would reject as too-long — which would otherwise brick every
+// projection over that repo's log.
 const MaxBodyBytes = 64 * 1024
+
+// MaxPromotedToBytes caps the promote-marker's doc address for the same reason
+// MaxBodyBytes caps the body: promoted_to is the only other free-text field
+// without a structural bound, and an oversized value would produce a log line
+// the scanner rejects. 4 KiB comfortably fits any repo path or URL.
+const MaxPromotedToBytes = 4 * 1024
 
 // Kind is one of the four canonical model-emitted semantic kinds (§17).
 // `blocker` is absorbed into open-item+risk:escalate; `done` is fleet-liveness
@@ -43,13 +49,16 @@ const (
 	RiskEscalate Risk = "escalate"
 )
 
-// Status is the open-item lifecycle; closing is a new marker entry, never an
-// in-place edit (§17 close-marker format).
+// Status is the lifecycle field. open/closed is the open-item lifecycle (§17
+// close-marker format); promoted marks a promote-marker — a decision whose Refs
+// name decisions whose rationale moved into a slow-layer doc (PromotedTo). Both
+// lifecycles advance by appending a new marker entry, never an in-place edit.
 type Status string
 
 const (
-	StatusOpen   Status = "open"
-	StatusClosed Status = "closed"
+	StatusOpen     Status = "open"
+	StatusClosed   Status = "closed"
+	StatusPromoted Status = "promoted"
 )
 
 // Event is one LOG entry. The JSON tags are the on-disk NDJSON line (§15.2);
@@ -64,6 +73,7 @@ type Event struct {
 	Risk          Risk     `json:"risk,omitempty"`
 	Status        Status   `json:"status,omitempty"`
 	AddressedTo   string   `json:"addressed_to,omitempty"`
+	PromotedTo    string   `json:"promoted_to,omitempty"` // promote-markers only: the doc the rationale moved into
 	Refs          []string `json:"refs,omitempty"`
 	TS            string   `json:"ts,omitempty"` // display-only; ULID is the ordering key (§10)
 	Body          string   `json:"body,omitempty"`
@@ -104,13 +114,18 @@ func (e Event) Validate() error {
 		}
 	}
 
-	// status applies only to open-items.
+	// open/closed is the open-item lifecycle; promoted marks a decision as a
+	// promote-marker. Any other kind/status pairing is rejected.
 	if e.Status != "" {
-		if e.Type != KindOpenItem {
-			return fmt.Errorf("event: status not allowed on type %q", e.Type)
-		}
 		switch e.Status {
 		case StatusOpen, StatusClosed:
+			if e.Type != KindOpenItem {
+				return fmt.Errorf("event: status %q not allowed on type %q", e.Status, e.Type)
+			}
+		case StatusPromoted:
+			if e.Type != KindDecision {
+				return fmt.Errorf("event: status %q not allowed on type %q", e.Status, e.Type)
+			}
 		default:
 			return fmt.Errorf("event: invalid status %q", e.Status)
 		}
@@ -125,6 +140,31 @@ func (e Event) Validate() error {
 	// A close-marker must point at the open-item it closes (§17).
 	if e.Type == KindOpenItem && e.Status == StatusClosed && len(e.Refs) == 0 {
 		return fmt.Errorf("event: closed open-item marker requires refs to the target")
+	}
+
+	// A promote-marker must point at the decisions it promotes and name the doc
+	// their rationale moved into; promoted_to means nothing anywhere else.
+	isPromoteMarker := e.Type == KindDecision && e.Status == StatusPromoted
+	if isPromoteMarker {
+		if len(e.Refs) == 0 {
+			return fmt.Errorf("event: promote-marker requires refs to the promoted decisions")
+		}
+		if e.PromotedTo == "" {
+			return fmt.Errorf("event: promote-marker requires promoted_to")
+		}
+		if len(e.PromotedTo) > MaxPromotedToBytes {
+			return fmt.Errorf("event: promoted_to is %d bytes, exceeds the %d-byte cap", len(e.PromotedTo), MaxPromotedToBytes)
+		}
+		// promoted_to is rendered as a metadata line by `show` and promised
+		// machine-legible; a control character would let the field spoof
+		// adjacent output lines.
+		for _, r := range e.PromotedTo {
+			if r < 0x20 || r == 0x7f {
+				return fmt.Errorf("event: promoted_to contains control characters")
+			}
+		}
+	} else if e.PromotedTo != "" {
+		return fmt.Errorf("event: promoted_to only allowed on a promote-marker (decision + status promoted)")
 	}
 
 	return nil

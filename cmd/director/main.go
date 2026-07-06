@@ -66,6 +66,8 @@ func run(args []string) int {
 		return runEmit(rest)
 	case "resolve":
 		return runResolve(rest)
+	case "promote":
+		return runPromote(rest)
 	case "register": // fleet lifecycle (hook-emitted)
 		return runRegister(rest)
 	case "heartbeat":
@@ -110,6 +112,8 @@ usage: director <command> [flags] [args]
 write path (model-emitted):
   emit        append a semantic event (decision|open-item|handoff|note)
   resolve     close an open-item by its ULID
+  promote     fold decisions' rationale into a slow-layer doc:
+              promote <ulid>... --to <doc> (a doc pointer stays in the digest)
 
 projections:
   render      deterministic machine digest (+ --verify, manifest)

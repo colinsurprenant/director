@@ -235,3 +235,34 @@ func TestAppendBodySizeBound(t *testing.T) {
 		t.Fatalf("over-cap body must not be written: log has %d events, want 1", len(got))
 	}
 }
+
+// TestAppendRejectsOversizedLine pins the writer/reader contract: a line the
+// scanner would reject (> maxLineBytes) is refused at Append instead of being
+// written — one oversized line would otherwise brick every projection over the
+// log. Field caps make this unreachable via prose; unbounded refs are the vector.
+func TestAppendRejectsOversizedLine(t *testing.T) {
+	store := NewStore(t.TempDir(), "oversized-repo")
+	one := mustID(t)
+	refs := make([]string, 45000) // ~1.2 MB of refs on one line
+	for i := range refs {
+		refs[i] = one
+	}
+	ev := Event{
+		ID: mustID(t), SchemaVersion: SchemaVersion, Type: KindDecision,
+		Workstream: "ws1", Refs: refs, Body: "oversized",
+	}
+	if err := ev.Validate(); err != nil {
+		t.Fatalf("Validate: %v (the event itself is structurally valid; only the line is too long)", err)
+	}
+
+	if err := store.Append(ev); err == nil {
+		t.Fatal("Append(oversized) = nil error, want refusal")
+	}
+	got, err := store.ReadAll()
+	if err != nil {
+		t.Fatalf("ReadAll after refused append: %v — the log must stay readable", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("refused append still wrote %d events, want 0", len(got))
+	}
+}
