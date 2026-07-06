@@ -157,10 +157,10 @@ func List(hub string, now time.Time, idleAfter, dormantAfter time.Duration, bran
 func LiveSessions(hub, workstream string, now time.Time, within time.Duration) ([]string, error) {
 	dir := filepath.Join(hub, fleetDir)
 	files, err := os.ReadDir(dir)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
 	if err != nil {
+		if dirTrulyAbsent(dir, err) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("fleet: read fleet dir: %w", err)
 	}
 	var uuids []string
