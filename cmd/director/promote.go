@@ -17,7 +17,8 @@ import (
 //
 // The documented shape is `director promote <ulid>... --to <doc>`, flag after
 // the positionals, which stdlib flag parsing can't see — so the args are
-// scanned by hand (one flag, both `--to <doc>` and `--to=<doc>`, any position).
+// scanned by hand (one flag, accepted as --to/-to with a separate or =-joined
+// value, any position).
 func runPromote(args []string) int {
 	usageErr := func(msg string) int {
 		if msg != "" {

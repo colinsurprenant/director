@@ -4,7 +4,8 @@ package event
 // sanctioned way new lines reach the LOG (§5.3). Emit mints the id, stamps the
 // schema and timestamp, and appends a fresh event; Resolve appends a close-marker
 // after validating the target is a real, still-open open-item (§15.6); Promote
-// appends a promote-marker after validating every target is an active decision.
+// appends a promote-marker after validating every target is a known original
+// decision not superseded and not already claimed by a live promote-marker.
 // All take an already-resolved workstream id: identity derivation lives in the
 // CLI, not here.
 
@@ -311,7 +312,10 @@ func checkPortableAddress(doc string) error {
 		return reject("a home-relative path")
 	case strings.HasPrefix(doc, `\`):
 		return reject("a rooted or UNC path")
-	case len(doc) >= 3 && isASCIILetter(doc[0]) && doc[1] == ':' && (doc[2] == '/' || doc[2] == '\\'):
+	// Any single letter + colon is a Windows drive reference (rooted C:\x or
+	// drive-relative C:foo — both machine-specific); URL schemes are ≥2 letters,
+	// so this cannot collide with https:, mailto:, etc.
+	case len(doc) >= 2 && isASCIILetter(doc[0]) && doc[1] == ':':
 		return reject("a drive-letter path")
 	case strings.HasPrefix(strings.ToLower(doc), "file:"):
 		return reject("a machine-local URL")
