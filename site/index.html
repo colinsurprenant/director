@@ -239,6 +239,11 @@
     Nothing in a memory store ever <strong>closes</strong>. That lifecycle is the difference.
     Run both: they don’t overlap.
   </p>
+  <p class="lede reveal d3">
+    Without it, <strong>you are the message bus</strong>: every session’s context lives in your
+    head, and you re-type it on demand. With Director, your agents keep the ledger as they work,
+    and every new session starts from it. You never write a status update. <strong>You review.</strong>
+  </p>
   <div class="install reveal d4">
     <div class="cmd">
       <span class="p">$</span>
@@ -258,7 +263,7 @@
     <div class="term">
       <div class="term-bar" aria-hidden="true">
         <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-        <span class="term-title">claude — session start</span>
+        <span class="term-title">claude</span>
       </div>
       <pre><code><span class="cm">$</span> claude
 <span class="ok">▸ Director: director-main-aaa5961e · 3 open-item(s), 1 need-you</span>
@@ -278,9 +283,14 @@
 <span class="hd">## decisions</span>
 <span class="id">01KWT2N210…</span> <span class="cyan">decision</span>   [charter] single-human by design: sessions plural, machines
             plural, humans not
-<span class="id">01KWT2NQJJ…</span> <span class="cyan">decision</span>   [product] the write side is frozen; all growth is read models</code></pre>
+<span class="id">01KWT2NQJJ…</span> <span class="cyan">decision</span>   [product] the write side is frozen; all growth is read models
+
+<span class="cm"># later, as the session works</span>
+<span class="cm">$</span> director emit --type decision --area api \
+    "cursor pagination, not offset; offset breaks under concurrent deletes"
+<span class="id">01KWTF2G8Q4NV0X6J9W1BCD3RM</span></code></pre>
     </div>
-    <figcaption class="term-cap">the digest a session starts from: folded from the log, injected as ground truth</figcaption>
+    <figcaption class="term-cap">one loop: sessions start from the folded digest, and record events as they work</figcaption>
   </figure>
 </div>
 
