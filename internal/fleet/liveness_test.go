@@ -331,4 +331,9 @@ func TestListFleetPathAsFileErrors(t *testing.T) {
 	if _, _, err := List(hub, fixedTime, idleTTL, dormantTTL, alive); err == nil {
 		t.Fatal("List on a fleet path that is a regular file must error, not read as an empty fleet")
 	}
+	// LiveSessions shares the surface and the contract: its caller fails open
+	// into health/, which a silent empty result would bypass.
+	if _, err := LiveSessions(hub, "any", fixedTime, idleTTL); err == nil {
+		t.Fatal("LiveSessions on a fleet path that is a regular file must error, not read as empty")
+	}
 }
