@@ -316,3 +316,19 @@ func TestLivenessSkipsCorruptRow(t *testing.T) {
 		t.Errorf("skipped = %d, want 2 (the two corrupt rows)", skipped)
 	}
 }
+
+// TestListFleetPathAsFileErrors: a <hub>/fleet that exists as a regular FILE is
+// a broken surface, not an empty fleet — List must error so the failure can land
+// in health/ instead of silently blinding the cockpit. Pinned as its own test
+// because the not-exist classification of ReadDir's error differs across
+// platforms (unix ENOTDIR vs Windows ERROR_PATH_NOT_FOUND): only a genuinely
+// absent dir may read as empty.
+func TestListFleetPathAsFileErrors(t *testing.T) {
+	hub := t.TempDir()
+	if err := os.WriteFile(filepath.Join(hub, fleetDir), []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := List(hub, fixedTime, idleTTL, dormantTTL, alive); err == nil {
+		t.Fatal("List on a fleet path that is a regular file must error, not read as an empty fleet")
+	}
+}
