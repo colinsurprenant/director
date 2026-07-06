@@ -85,6 +85,16 @@
   }
   .lede strong { color: var(--ink); font-weight: 600; }
   .lede em { color: var(--ink); }
+  .qa { margin-top: 1.8rem; display: grid; gap: .45rem; }
+  .qa p { display: grid; grid-template-columns: 11.5rem 1fr; gap: .75rem; align-items: baseline; }
+  .q-label { font-family: var(--mono); font-size: .72rem; color: var(--ink-faint); letter-spacing: .02em; }
+  .q-dim { font-size: 1.15rem; font-style: italic; color: var(--ink-dim); }
+  .q-hot { font-size: 1.15rem; font-style: italic; color: var(--ink); font-weight: 600; }
+  .q-dim em, .q-hot em { text-decoration: underline; text-decoration-color: rgba(232,230,223,.35); text-underline-offset: .2em; }
+  .q-hot em { text-decoration-color: var(--accent); }
+  .facts { margin-top: 1.1rem; font-family: var(--mono); font-size: .74rem; color: var(--ink-dim); }
+  .facts .sep { color: var(--accent); }
+  .facts .f { white-space: nowrap; }
 
   /* ------- install row ------- */
   .install { margin-top: 2.2rem; display: flex; flex-wrap: wrap; gap: .75rem; align-items: stretch; }
@@ -222,6 +232,7 @@
     header { padding-top: 3rem; }
     .grid { grid-template-columns: 1fr; }
     .vs > div { grid-template-columns: 1fr; gap: .35rem; }
+    .qa p { grid-template-columns: 1fr; gap: .1rem; }
     .term pre { font-size: .68rem; }
   }
 </style>
@@ -232,15 +243,14 @@
   <p class="ack reveal d1">▸ Director: director-main-aaa5961e · <span class="meta">3 open-item(s), 1 need-you</span><span class="caret" aria-hidden="true"></span></p>
   <h1 class="reveal d2">A coordination ledger for your coding-agent work.</h1>
   <p class="sub reveal d2">Decisions, open loops, handoffs: durable across sessions, repos, and weeks.</p>
+  <div class="qa reveal d3">
+    <p><span class="q-label">Memory tools answer</span> <span class="q-dim">“what does the agent <em>know</em>?”</span></p>
+    <p><span class="q-label">Director answers</span> <span class="q-hot">“what is the state of the <em>work</em>?”</span></p>
+  </div>
+  <p class="facts reveal d3"><span class="f">what was decided, and why</span> <span class="sep">·</span> <span class="f">which loops are still open</span> <span class="sep">·</span> <span class="f">where the work stopped</span> <span class="sep">·</span> <span class="f">what still needs you</span></p>
   <p class="lede reveal d3">
-    Memory tools answer <em>“what does the agent know?”</em> Director answers
-    <em>“what is the state of the work?”</em>: what was decided and why, which loops were
-    deliberately deferred, where the work stopped, and what still needs <strong>you</strong>.
-    Nothing in a memory store ever <strong>closes</strong>. That lifecycle is the difference.
-    Run both: they don’t overlap.
-  </p>
-  <p class="lede reveal d3">
-    Your agents keep the ledger as they work. You never write a status update. <strong>You review.</strong>
+    Nothing in a memory store ever <strong>closes</strong>. Your agents keep the ledger as they
+    work; you never write a status update. <strong>You review.</strong>
   </p>
   <div class="install reveal d4">
     <div class="cmd">
