@@ -1,0 +1,4 @@
+# The hook shims are embedded into the binary via go:embed and executed by
+# bash; a CRLF checkout (Windows default autocrlf=true) would bake \r into
+# every built binary's shims and break them. Force LF regardless of platform.
+*.sh text eol=lf

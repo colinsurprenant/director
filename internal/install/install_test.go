@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -256,7 +257,9 @@ func TestInstallWritesAndUninstallRemovesShims(t *testing.T) {
 		if err != nil {
 			t.Fatalf("shim %s not written by Install: %v", name, err)
 		}
-		if info.Mode().Perm()&0o111 == 0 {
+		// Windows has no execute bit (Go reports a synthetic 0666/0444), so the
+		// executable assertion is only meaningful on unix.
+		if runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
 			t.Errorf("shim %s is not executable (mode %v)", name, info.Mode())
 		}
 		got, err := os.ReadFile(dest)
@@ -303,7 +306,9 @@ func TestInstallWritesAndUninstallRemovesCommands(t *testing.T) {
 		if err != nil {
 			t.Fatalf("command %s not written by Install: %v", name, err)
 		}
-		if info.Mode().Perm() != 0o644 {
+		// Same unix-only caveat as the shim assertion: Windows reports synthetic
+		// permission bits, so the exact-mode check only holds on unix.
+		if runtime.GOOS != "windows" && info.Mode().Perm() != 0o644 {
 			t.Errorf("command %s mode = %v, want 0644", name, info.Mode().Perm())
 		}
 		got, err := os.ReadFile(dest)
