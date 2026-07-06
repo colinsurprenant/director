@@ -250,10 +250,11 @@
   <div class="cases reveal d3">
     <div>
       <span class="tag cyan">decision</span>
-      <p>“Let’s batch these writes in the worker.” You tried that two sessions ago: it deadlocked,
-      you moved on. Nobody writes an ADR for a dead end; the only record died with the transcript,
-      and the session is about to try it again. A decision here outlives its session: injected as
-      <em>settled</em>, superseded only on purpose.</p>
+      <p>“Deliver the protocol as a skill, that’s the idiomatic way.” We tried that, building
+      Director with Director: in 2.5 hours of real work the session invoked it <em>zero times</em>
+      (skills are pull; an always-on protocol never gets pulled). Nobody writes an ADR for a dead
+      end. It’s a decision event in our own log, injected as settled into every session since,
+      and no session has re-proposed it.</p>
     </div>
     <div>
       <span class="tag amber">open-item</span>
@@ -304,7 +305,8 @@
 <span class="hd">## decisions</span>
 <span class="id">01KWT2N210…</span> <span class="cyan">decision</span>   [charter] single-human by design: sessions plural, machines
             plural, humans not
-<span class="id">01KWT2NQJJ…</span> <span class="cyan">decision</span>   [product] the write side is frozen; all growth is read models
+<span class="id">01KW0PCV9G…</span> <span class="cyan">decision</span>   [hook] deliver the protocol via SessionStart injection (push), NOT
+            a skill (pull): the skill emitted 0 events in 2.5h of real work
 
 <span class="cm"># later, as the session works</span>
 <span class="cm">$</span> director emit --type decision --area api \
