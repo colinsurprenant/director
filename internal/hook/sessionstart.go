@@ -398,8 +398,11 @@ func startupBanner(workstreamID string, proj render.Projection, siblings int) st
 		}
 	}
 	banner := fmt.Sprintf("▸ Director: %s · %d open-item(s), %d need-you", workstreamID, len(proj.OpenItems), needYou)
+	// "other" is load-bearing: the banner counts SIBLINGS (self excluded), while
+	// the cockpit's ×N counts every fresh row — the same collision reads "1
+	// other" here and "×2" there, and the wording must make both frames legible.
 	if siblings > 0 {
-		banner += fmt.Sprintf(" · ⚠ %d concurrent session(s) on this checkout", siblings)
+		banner += fmt.Sprintf(" · ⚠ %d other live session(s) on this checkout", siblings)
 	}
 	return "## Acknowledge on entry\nBegin your VERY FIRST reply to the human with this line verbatim (then answer normally), so they can see Director rehydrated:\n" + banner + "\n"
 }

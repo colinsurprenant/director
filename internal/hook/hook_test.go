@@ -1480,7 +1480,7 @@ func TestSessionStartConcurrentSessionNote(t *testing.T) {
 		t.Fatalf("first session start exit = %d", code)
 	}
 	ctxA := injectedContext(t, outA.String())
-	if strings.Contains(ctxA, "concurrent session(s)") || strings.Contains(ctxA, "## Concurrent sessions") {
+	if strings.Contains(ctxA, "other live session(s)") || strings.Contains(ctxA, "## Concurrent sessions") {
 		t.Errorf("a lone session must not get the concurrency signal:\n%.2000s", ctxA)
 	}
 
@@ -1491,7 +1491,7 @@ func TestSessionStartConcurrentSessionNote(t *testing.T) {
 		t.Fatalf("second session start exit = %d", code)
 	}
 	ctxB := injectedContext(t, outB.String())
-	if !strings.Contains(ctxB, "· ⚠ 1 concurrent session(s) on this checkout") {
+	if !strings.Contains(ctxB, "· ⚠ 1 other live session(s) on this checkout") {
 		t.Errorf("second session's banner should carry the ⚠ concurrency marker:\n%.2000s", ctxB)
 	}
 	if !strings.Contains(ctxB, "## Concurrent sessions on this checkout") {
@@ -1540,7 +1540,7 @@ func TestSessionStartConcurrentNoteForThrowaway(t *testing.T) {
 		t.Fatalf("throwaway session start exit = %d", code)
 	}
 	ctxB := injectedContext(t, outB.String())
-	if !strings.Contains(ctxB, "· ⚠ 1 concurrent session(s) on this checkout") {
+	if !strings.Contains(ctxB, "· ⚠ 1 other live session(s) on this checkout") {
 		t.Errorf("throwaway should see the real session as a sibling:\n%.2000s", ctxB)
 	}
 }
