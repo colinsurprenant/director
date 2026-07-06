@@ -159,7 +159,7 @@ func DoneWorkstream(hub, workstream string, now time.Time) (int, error) {
 	dir := filepath.Join(hub, fleetDir)
 	files, err := os.ReadDir(dir)
 	if err != nil {
-		if dirTrulyAbsent(dir) {
+		if dirTrulyAbsent(dir, err) {
 			return 0, ErrRowNotFound
 		}
 		return 0, fmt.Errorf("fleet: read fleet dir: %w", err)
@@ -246,16 +246,21 @@ func readRow(path string) (Row, error) {
 	return row, nil
 }
 
-// dirTrulyAbsent reports whether dir does not exist at all — the only case a
-// caller may treat a ReadDir failure as an empty result. Classifying the
-// ReadDir error with os.IsNotExist alone is not portable: on Windows, ReadDir
-// on a path that exists as a regular FILE also classifies as not-exist
-// (ERROR_PATH_NOT_FOUND), which would silently read a broken surface as an
-// empty one (§9: silence reads as healthy); unix returns ENOTDIR there and
-// fails loud. The follow-up Stat makes both platforms agree: only genuine
-// absence is absence.
-func dirTrulyAbsent(dir string) bool {
-	_, err := os.Stat(dir)
+// dirTrulyAbsent reports whether a failed ReadDir(dir) means dir does not
+// exist at all — the only case a caller may treat the failure as an empty
+// result. Classifying readErr with os.IsNotExist alone is not portable: on
+// Windows, ReadDir on a path that exists as a regular FILE also classifies as
+// not-exist (ERROR_PATH_NOT_FOUND), which would silently read a broken surface
+// as an empty one (§9: silence reads as healthy); unix returns ENOTDIR there
+// and fails loud. So a not-exist readErr is only a precondition (anything else
+// is a real failure regardless of what a re-check would say), and the Lstat
+// re-check makes both platforms agree — Lstat, not Stat, so a dangling symlink
+// at dir counts as a broken surface, not an absent one.
+func dirTrulyAbsent(dir string, readErr error) bool {
+	if !os.IsNotExist(readErr) {
+		return false
+	}
+	_, err := os.Lstat(dir)
 	return os.IsNotExist(err)
 }
 
