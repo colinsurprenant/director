@@ -279,6 +279,25 @@ func TestLifecycleDoneWorkstreamNoRows(t *testing.T) {
 	}
 }
 
+// TestDoneWorkstreamFleetPathAsFileErrors: the DoneWorkstream twin of
+// TestListFleetPathAsFileErrors — a <hub>/fleet that exists as a regular FILE
+// must surface as a real error, not ErrRowNotFound, so a broken surface is
+// never mistaken for "nothing to archive" (portable classification via
+// dirTrulyAbsent; unix ENOTDIR vs Windows ERROR_PATH_NOT_FOUND).
+func TestDoneWorkstreamFleetPathAsFileErrors(t *testing.T) {
+	hub := t.TempDir()
+	if err := os.WriteFile(filepath.Join(hub, fleetDir), []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := DoneWorkstream(hub, "any", fixedTime)
+	if err == nil {
+		t.Fatal("DoneWorkstream on a fleet path that is a regular file must error")
+	}
+	if errors.Is(err, ErrRowNotFound) {
+		t.Fatalf("broken fleet surface misclassified as ErrRowNotFound: %v", err)
+	}
+}
+
 // TestLifecycleConcurrentUUIDsDoNotClobber is the core §15.4 guarantee: two
 // sessions on the SAME workstream write two DISTINCT row files.
 func TestLifecycleConcurrentUUIDsDoNotClobber(t *testing.T) {
