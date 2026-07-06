@@ -5,7 +5,7 @@
 
 **A coordination ledger for your coding-agent work: decisions, open loops, handoffs — durable across sessions, repos, and weeks.**
 
-Memory tools answer *"what does the agent know?"* Director answers *"what is the state of the work?"*: what was decided and why, which loops were deliberately deferred, where the work stopped when the block ended, and what still needs *you*. Facts accumulate; loops open and close. Nothing in a memory store ever *closes* — that lifecycle is the difference.
+Memory tools answer *"what does the agent know?"* Director answers *"what is the state of the work?"*: what was decided and why, which loops were deliberately deferred, where the work stopped when the block ended, and what still needs *you*. Facts accumulate; loops open and close. Nothing in a memory store ever *closes* — that lifecycle is the difference. Run both: they don't overlap.
 
 Three weeks after you park a project, a new session starts already knowing all of this: injected at session start as ground truth, not recalled by similarity.
 
