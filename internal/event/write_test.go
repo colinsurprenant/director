@@ -3,6 +3,7 @@ package event
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -324,6 +325,8 @@ func TestPromoteRejectsMachineSpecificDoc(t *testing.T) {
 		{"windows drive backslash", `C:\Users\me\x.md`, false},
 		{"windows drive slash", "C:/Users/me/x.md", false},
 		{"UNC", `\\server\share\x.md`, false},
+		{"windows rooted single backslash", `\Users\me\x.md`, false},
+		{"over the promoted_to cap", "docs/" + strings.Repeat("x", MaxPromotedToBytes), false},
 		{"file URL", "file:///Users/me/x.md", false},
 		{"file URL uppercase", "FILE:///Users/me/x.md", false},
 		{"repo-escaping", "docs/../../etc/x.md", false},
