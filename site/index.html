@@ -85,6 +85,13 @@
   }
   .lede strong { color: var(--ink); font-weight: 600; }
   .lede em { color: var(--ink); }
+  .cases { margin-top: 1.7rem; max-width: 40rem; display: grid; gap: 1rem; }
+  .cases > div { display: grid; grid-template-columns: 5.75rem 1fr; gap: 1.1rem; align-items: start; }
+  .cases .tag { font-family: var(--mono); font-size: .72rem; padding-top: .25rem; }
+  .cases .tag.cyan { color: var(--cyan); }
+  .cases .tag.amber { color: var(--amber); }
+  .cases p { color: var(--ink-dim); font-size: .95rem; line-height: 1.6; }
+  .cases em { color: var(--ink); font-style: normal; font-weight: 600; }
 
   /* ------- install row ------- */
   .install { margin-top: 2.2rem; display: flex; flex-wrap: wrap; gap: .75rem; align-items: stretch; }
@@ -222,6 +229,7 @@
     header { padding-top: 3rem; }
     .grid { grid-template-columns: 1fr; }
     .vs > div { grid-template-columns: 1fr; gap: .35rem; }
+    .cases > div { grid-template-columns: 1fr; gap: .3rem; }
     .term pre { font-size: .68rem; }
   }
 </style>
@@ -239,10 +247,22 @@
     Nothing in a memory store ever <strong>closes</strong>. That lifecycle is the difference.
     Run both: they don’t overlap.
   </p>
+  <div class="cases reveal d3">
+    <div>
+      <span class="tag cyan">decision</span>
+      <p>A fresh session confidently proposes the approach you rejected three weeks ago. Recall
+      can resurface the discussion; nothing marks it settled. A ledger does: <em>decided</em>,
+      injected into every session, superseded only on purpose.</p>
+    </div>
+    <div>
+      <span class="tag amber">open-item</span>
+      <p>“I’ll handle the timezone edge case before merging.” The session compacted; the loop
+      died in scrollback. An open item stays visible until someone resolves it. Three weeks
+      later it is still there, still open.</p>
+    </div>
+  </div>
   <p class="lede reveal d3">
-    Without it, <strong>you are the message bus</strong>: every session’s context lives in your
-    head, and you re-type it on demand. With Director, your agents keep the ledger as they work,
-    and every new session starts from it. You never write a status update. <strong>You review.</strong>
+    Your agents keep the ledger as they work. You never write a status update. <strong>You review.</strong>
   </p>
   <div class="install reveal d4">
     <div class="cmd">
