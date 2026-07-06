@@ -279,9 +279,18 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID, uuid string, codex 
 		if h, ok := proj.LatestHandoff[workstreamID]; ok {
 			anchor = h.ID
 		}
-		ctx = assemble(render.DigestCompact(proj, repoKey, anchor))
-		detail := fmt.Sprintf("injection budget: full payload %dB > %dB — older decisions collapsed to count+pointer, newest kept (now %dB); groom the log (resolve/supersede/promote)", full, injectionBudgetBytes, len(ctx))
-		if len(ctx) > injectionBudgetBytes {
+		// Rung 1 only exists when it keeps something: with 0 post-anchor
+		// decisions DigestCompact degenerates to DigestCollapsed byte-for-byte,
+		// and logging it as "newest kept" would misname the rung on the very
+		// diagnostic surface the tests pin — skip straight to rung 2 instead of
+		// assembling the same digest twice.
+		var detail string
+		kept := render.KeptDecisions(proj, anchor)
+		if kept > 0 {
+			ctx = assemble(render.DigestCompact(proj, repoKey, anchor))
+			detail = fmt.Sprintf("injection budget: full payload %dB > %dB — older decisions collapsed to count+pointer, newest %d kept (now %dB); groom the log (resolve/supersede/promote)", full, injectionBudgetBytes, kept, len(ctx))
+		}
+		if kept == 0 || len(ctx) > injectionBudgetBytes {
 			// Rung 2: every decision collapses.
 			ctx = assemble(render.DigestCollapsed(proj, repoKey))
 			detail = fmt.Sprintf("injection budget: full payload %dB > %dB — ALL decisions collapsed to count+pointer (now %dB); groom the log (resolve/supersede/promote)", full, injectionBudgetBytes, len(ctx))
