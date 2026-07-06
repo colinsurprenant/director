@@ -112,9 +112,7 @@ func handleSessionStart(in Input, out io.Writer, hub string) error {
 // is stamped alongside the branch so liveness can check the branch still exists
 // and self-clean a merged-away worktree (§5.5).
 func refreshFleet(hub string, ws identity.Workstream, uuid, cwd string) error {
-	// UTC to match every other fleet writer (register/heartbeat/adopt) so fleet/
-	// rows never carry mixed-offset timestamps.
-	now := time.Now().UTC()
+	now := time.Now()
 	row := fleet.Row{
 		Workstream: ws.ID,
 		UUID:       uuid,
@@ -122,13 +120,11 @@ func refreshFleet(hub string, ws identity.Workstream, uuid, cwd string) error {
 		Handle:     ws.ID,
 		Branch:     ws.Branch,
 		Dir:        cwd,
-		Heartbeat:  now.Format(time.RFC3339Nano),
 	}
-	if err := fleet.Register(hub, row); err != nil {
+	// Register stamps the heartbeat from now itself, so no separate Heartbeat
+	// call is needed — one atomic row write covers registration and liveness.
+	if err := fleet.Register(hub, row, now); err != nil {
 		return fmt.Errorf("register: %w", err)
-	}
-	if err := fleet.Heartbeat(hub, ws.ID, uuid, now); err != nil {
-		return fmt.Errorf("heartbeat: %w", err)
 	}
 	return nil
 }

@@ -57,16 +57,15 @@ type Row struct {
 const StatusDone = "done"
 
 // Register creates or refreshes the row file for row's (workstream, uuid),
-// stamping its heartbeat from row.Heartbeat. The caller fills Workstream, UUID,
-// Handle, and Heartbeat; an empty Heartbeat is rejected so a row is never
-// written without the freshness signal liveness depends on.
-func Register(hub string, row Row) error {
+// stamping its heartbeat from now. The caller fills Workstream, UUID, Handle,
+// and the identity fields; the heartbeat is stamped here — like Heartbeat and
+// archiveRow, the write boundary formats the timestamp (normalized to UTC), so
+// no caller can produce a mixed-offset or malformed heartbeat.
+func Register(hub string, row Row, now time.Time) error {
 	if row.Workstream == "" || row.UUID == "" {
 		return fmt.Errorf("fleet: register requires workstream and uuid")
 	}
-	if row.Heartbeat == "" {
-		return fmt.Errorf("fleet: register requires a heartbeat")
-	}
+	row.Heartbeat = now.UTC().Format(heartbeatLayout)
 	dir := filepath.Join(hub, fleetDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("fleet: create fleet dir: %w", err)

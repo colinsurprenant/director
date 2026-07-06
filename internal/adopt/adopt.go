@@ -98,9 +98,8 @@ func Adopt(hub, dir string) (Result, error) {
 		UUID:       adoptUUID,
 		RepoKey:    ws.RepoKey,
 		Handle:     ws.ID,
-		Heartbeat:  time.Now().UTC().Format(time.RFC3339Nano),
 	}
-	if err := fleet.Register(hub, row); err != nil {
+	if err := fleet.Register(hub, row, time.Now()); err != nil {
 		return Result{}, fmt.Errorf("adopt: register fleet row: %w", err)
 	}
 

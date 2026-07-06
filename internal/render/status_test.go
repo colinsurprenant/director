@@ -20,9 +20,8 @@ func registerRow(t *testing.T, hub, ws, repoKey string, hbAge time.Duration) {
 		UUID:       "uuid-" + ws,
 		RepoKey:    repoKey,
 		Handle:     "@" + ws,
-		Heartbeat:  statusNow.Add(-hbAge).Format(time.RFC3339Nano),
 	}
-	if err := fleet.Register(hub, row); err != nil {
+	if err := fleet.Register(hub, row, statusNow.Add(-hbAge)); err != nil {
 		t.Fatalf("register %s: %v", ws, err)
 	}
 }
@@ -110,9 +109,8 @@ func TestStatusGoneShowsRemedy(t *testing.T) {
 		Handle:     "@ws1",
 		Branch:     "feature",
 		Dir:        filepath.Join(hub, "vanished-worktree"),
-		Heartbeat:  statusNow.Add(-time.Minute).Format(time.RFC3339Nano),
 	}
-	if err := fleet.Register(hub, row); err != nil {
+	if err := fleet.Register(hub, row, statusNow.Add(-time.Minute)); err != nil {
 		t.Fatalf("register ws1: %v", err)
 	}
 

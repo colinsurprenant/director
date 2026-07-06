@@ -27,9 +27,8 @@ func TestDoneWorkstreamRouting(t *testing.T) {
 		t.Fatalf("done --workstream with no rows = %d, want 2", got)
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, uuid := range []string{"uuid-A", "uuid-B"} {
-		if err := fleet.Register(hub, fleet.Row{Workstream: "dead-sibling", UUID: uuid, Heartbeat: now}); err != nil {
+		if err := fleet.Register(hub, fleet.Row{Workstream: "dead-sibling", UUID: uuid}, time.Now()); err != nil {
 			t.Fatalf("Register: %v", err)
 		}
 	}
