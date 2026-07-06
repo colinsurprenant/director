@@ -235,6 +235,10 @@ perform for the model:
 - **Ground Truth** — treat the injected CHARTER + digest as authoritative: build on it, don't re-derive it
   by re-scanning the repo or re-reading the log.
 
+This is what those habits look like live, with the model's actual `director` calls visible:
+
+![Director demo: a session emits decisions, open items, and a handoff as it works; three weeks later a cold session rehydrates from the log with brief and status, then closes the loop with resolve](assets/director-demo.gif)
+
 There are exactly four event kinds: `decision`, `open-item` (the home for "documented, not dropped";
 `--risk escalate` is the "needs a human" subset that surfaces in `status`), `handoff`, and `note`. There is
 no `blocker` kind and `done` is fleet-liveness only. Your job is to **review** — read `status`/`brief`,

@@ -5,6 +5,8 @@
 
 **A coordination ledger for your coding-agent work: decisions, open loops, handoffs — durable across sessions, repos, and weeks.**
 
+**[The two-minute tour: colinsurprenant.github.io/director](https://colinsurprenant.github.io/director/)**
+
 Memory tools answer *"what does the agent know?"* Director answers *"what is the state of the work?"*: what was decided and why, which loops were deliberately deferred, where the work stopped when the block ended, and what still needs *you*. Facts accumulate; loops open and close. Nothing in a memory store ever *closes* — that lifecycle is the difference. Run both: they don't overlap.
 
 Three weeks after you park a project, a new session starts already knowing all of this: injected at session start as ground truth, not recalled by similarity.
@@ -18,10 +20,35 @@ You work with a coding agent (Claude Code, OpenAI Codex, or both) across several
 
 The LOG (plus the deliberately-edited living docs) is the only system of record; sessions and every rendered view are disposable caches reconstructible from it. Director wires natively into **Claude Code and OpenAI Codex** — same hooks, same log, same boundary commands, either agent alone or both side by side. A single static binary, stdlib-first, one vetted build-time dependency (`github.com/oklog/ulid/v2`). No daemon, no database, no cloud: the log is plain NDJSON you could read with `cat`.
 
-![Director demo: a session emits decisions, open items, and a handoff as it works; three weeks later a cold session rehydrates from the log with brief and status, then closes the loop with resolve](docs/assets/director-demo.gif)
+```text
+$ claude
+  … deep into the pagination rework …
+▸ decision   recorded · cursor pagination, not offset; offsets break under deletes
+  …
+▸ open-item  recorded · timezone edge case before the backfill merges
+  … later …
+▸ handoff    parked · cursor rework done · next: the backfill script · watch the p99
 
-> **Status: v1.** Director ships the hook-first coordination core plus informed repo adoption (see [Status & scope](#status--scope)). Single-machine.
+──────────── session ends · hours, days, or weeks pass ────────────
 
+$ claude
+> where were we?
+▸ Director: acme-api-main-7c21e9d4 · 1 open-item(s), 1 need-you
+
+## open-items
+01KWJ4X2…  open-item  timezone edge case before the backfill merges  [risk:escalate]
+
+## handoffs
+01KWJ9RM…  handoff    cursor rework done · next: the backfill script · watch the p99
+
+## decisions
+01KWJ4W8…  decision   cursor pagination, not offset; offsets break under deletes
+```
+
+*The same three facts on both sides of the gap: recorded as the session works, injected when the next one starts.*
+
+> **Scope:** single-machine for now, single-human by design; multi-machine sync is on the roadmap (see [Status & scope](#status--scope)).
+>
 > **New here?** [`docs/getting-started.md`](docs/getting-started.md) is the task-oriented first-run guide (install → adopt → first session → cockpit), plus how the model uses Director and a troubleshooting section. This README is the reference.
 
 ## Why Director
@@ -204,7 +231,11 @@ A workstream's id is `<repo>-<branch>-<shortid>`, derived deterministically from
 
 **In v1:** the hook-first coordination core (CLI write path, identity, event store, fleet/liveness, `render`/`brief`/`status`, hooks + the `_managedBy` installer, the protocol skill), **informed adoption** (`adopt` registers; `/director:adopt` drafts the CHARTER proposal and runs the triaged open-loop import — see [Adopt an existing repo](#adopt-an-existing-repo)), and a **Codex adapter**: `director install --codex` wires the same hooks into Codex's `hooks.json` (Codex asks you to trust them at the next session start; if you dismiss that prompt, run `/hooks` in the session) and installs the boundary commands as agent skills — `$director-adopt`, `$director-complete`, `$director-handoff`. Ground truth injection, liveness, and close-out work identically on both agents; the emit-guard and the context-fill handoff nudge are Claude Code-only for now (they read CC's transcript format and stay safely inert on Codex). Single-machine.
 
-**Deferred:** deeper brownfield analysis beyond the informed-adopt pass (doc living/record/rot reconciliation, an arc42 overview draft, back-dated decision records). `brief --synthesize` (model-narrated prose) is deferred — v1 ships the deterministic brief. A background monitor/reaper, notifications, a freshness sweep, and multi-machine sync come later.
+**Deferred:** deeper brownfield analysis beyond the informed-adopt pass (doc living/record/rot reconciliation, an arc42 overview draft, back-dated decision records). `brief --synthesize` (model-narrated prose) is deferred — v1 ships the deterministic brief. A background monitor/reaper, notifications, and a freshness sweep come later.
+
+**Multi-machine** is the one distribution mode on the roadmap, and its shape is settled: the hub becomes git-synced, and the merge is just the fold (the fold is a pure, order-independent function of the event set, so per-machine logs merge as set union). No server, no protocol, no conflict resolution, ever.
+
+**Multi-user is different: not deferred, out of scope by design.** Director externalizes *one* human's in-flight working memory; sessions are plural, machines are plural, humans are not. A team syncs through the slower artifacts (plans, architecture docs), never through a shared in-flight log.
 
 **Quality gate** (the bar for "done"):
 
