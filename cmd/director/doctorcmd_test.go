@@ -309,16 +309,45 @@ func TestDoctorNativeWindowsIsCLIOnly(t *testing.T) {
 	}
 }
 
-// TestNearestExistingDir exercises the ancestor walk behind the missing-hub
-// writability check deterministically, with no permission mutation.
-func TestNearestExistingDir(t *testing.T) {
+// TestNearestExistingAncestor exercises the ancestor walk behind the missing-hub
+// creatability check deterministically, with no permission mutation: a deep
+// missing path resolves to its nearest real-dir ancestor; an existing dir returns
+// itself; a regular-file ancestor is a broken surface (error), not a dir to climb.
+func TestNearestExistingAncestor(t *testing.T) {
 	root := t.TempDir()
 	deep := filepath.Join(root, "a", "b", "c", "d")
-	if got := nearestExistingDir(deep); got != root {
-		t.Fatalf("nearestExistingDir(%q) = %q, want %q", deep, got, root)
+	if got, err := nearestExistingAncestor(deep); err != nil || got != root {
+		t.Fatalf("deep-missing: got (%q, %v), want (%q, nil)", got, err, root)
 	}
-	if got := nearestExistingDir(root); got != root {
-		t.Fatalf("nearestExistingDir(existing) = %q, want %q", got, root)
+	if got, err := nearestExistingAncestor(root); err != nil || got != root {
+		t.Fatalf("existing dir: got (%q, %v), want (%q, nil)", got, err, root)
+	}
+	f := filepath.Join(root, "afile")
+	if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := nearestExistingAncestor(f); err == nil {
+		t.Fatal("a regular-file ancestor must return an error, not be treated as creatable")
+	}
+}
+
+// TestHubDanglingSymlinkAncestorFails is the reachable false-healthy the naive
+// walk missed: a hub under a dangling-symlink ancestor. Stat follows the link to
+// not-exist and would climb past it, but MkdirAll cannot create through a dangling
+// link, so the hub is uncreatable and must FAIL. Mirrors event.logTrulyAbsent's
+// Lstat tiebreak.
+func TestHubDanglingSymlinkAncestorFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs privilege on native Windows")
+	}
+	root := t.TempDir()
+	dangling := filepath.Join(root, "link")
+	if err := os.Symlink(filepath.Join(root, "no-such-target"), dangling); err != nil {
+		t.Fatal(err)
+	}
+	c := hubCheck(filepath.Join(dangling, "hub"))
+	if c.level != levelFail {
+		t.Fatalf("a hub under a dangling-symlink ancestor must FAIL, got level %v: %s", c.level, c.detail)
 	}
 }
 
