@@ -526,7 +526,10 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 // stale link to a moved/deleted build can't shadow it. An
 // existing REGULAR file is never clobbered: that is a real binary the user
 // placed deliberately, and the shims will run it as-is (the CLI notes it in the
-// install output). Native Windows is a no-op — symlink creation needs
+// install output). Anything else at the path (a directory, a FIFO) is an
+// error: the fallback tier cannot resolve through it, and skipping silently
+// would recreate the exact silent-absence this symlink exists to close.
+// Native Windows is a no-op — symlink creation needs
 // privileges there, the shims are bash anyway, and the CLI refuses the install
 // before reaching here; the guard only covers direct package callers (tests).
 func writeBinSymlink(hooksDir string) error {
@@ -548,7 +551,10 @@ func writeBinSymlink(hooksDir string) error {
 	link := filepath.Join(binDir, "director")
 	if fi, err := os.Lstat(link); err == nil {
 		if fi.Mode()&os.ModeSymlink == 0 {
-			return nil // a real file the user placed there — leave it
+			if fi.Mode().IsRegular() {
+				return nil // a real binary the user placed there — leave it
+			}
+			return fmt.Errorf("install: bin path %s exists and is neither a symlink nor a regular file (%s); remove it and re-run install", link, fi.Mode().Type())
 		}
 		if existing, err := os.Readlink(link); err == nil && existing == target {
 			return nil // already points at us — idempotent no-op
