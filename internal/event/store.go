@@ -196,45 +196,51 @@ func (s *Store) scan(fn func(Event) error) error {
 // logTrulyAbsent reports whether a failed Open(path) means the log file does not
 // exist yet — the only case scan may treat as an empty log. os.IsNotExist alone
 // is not portable: on Windows, Open through a path component that exists as a
-// regular FILE also reports not-exist (ERROR_PATH_NOT_FOUND), where unix reports
-// ENOTDIR and fails loud. A silently-empty read of the system-of-record is the
-// §9 "silence reads as healthy" / LIE-TEST failure class, so a not-exist openErr
-// is only a precondition. The log is genuinely absent only when BOTH the parent
-// and the log path itself check out as truly nothing:
+// regular FILE (or a dangling symlink) also reports not-exist
+// (ERROR_PATH_NOT_FOUND), where unix reports ENOTDIR and fails loud. A silently-
+// empty read of the system-of-record is the §9 "silence reads as healthy" /
+// LIE-TEST failure class, so a not-exist openErr is only a precondition. The log
+// is genuinely absent only when neither the log path nor any ancestor is a
+// broken non-directory:
 //
-//   - the parent must be a real directory (reachable through symlinks) or itself
-//     absent; a parent that exists as a non-directory — a regular file or a
-//     dangling symlink — is a broken surface and fails loud;
-//   - within a real parent, the log path itself must be genuinely nothing; a
-//     dangling symlink AT the log path (Open followed it to a missing target) is
-//     a broken surface, not an empty log, and fails loud.
+//   - the log path itself must be nothing; if Lstat still finds an entry there,
+//     Open followed a dangling symlink to a missing target — a broken surface;
+//   - walking up from the log's parent, the nearest component that EXISTS must
+//     be a real directory (Stat follows symlinks, so a symlinked project dir is
+//     valid); a component that exists as a regular file or a dangling symlink is
+//     a broken surface. A chain that is genuinely absent to the filesystem root
+//     is a fresh repo.
 //
-// Stat (which follows symlinks) classifies a present entry, so a symlinked
-// project directory stays valid; Lstat (which does not) is the tiebreak that
-// separates a genuinely-absent name from a dangling symlink. This mirrors
-// fleet.dirTrulyAbsent's dangling-symlink stance, adapted from a directory read
-// to a file open — but guards both the parent and the log path, since here the
-// classified name (parent) is one level up from the opened one (the log file).
+// Any re-check error other than not-exist (EACCES, ELOOP, …) fails loud rather
+// than being read as absence. This goes deeper than fleet.dirTrulyAbsent, which
+// classifies only its own directory: here the opened path (the log file) sits
+// below the components that can be broken, and on Windows every broken ancestor
+// collapses to ERROR_PATH_NOT_FOUND, so a one-level check would read a broken
+// hub as empty.
 func logTrulyAbsent(path string, openErr error) bool {
 	if !os.IsNotExist(openErr) {
 		return false
 	}
-	parent := filepath.Dir(path)
-	info, err := os.Stat(parent)
-	if err == nil {
-		if !info.IsDir() {
-			return false // parent exists as a non-directory → broken surface
+	if _, err := os.Lstat(path); err == nil {
+		return false // dangling symlink at the log path → broken surface
+	} else if !os.IsNotExist(err) {
+		return false // re-check failed for a non-absence reason → fail loud
+	}
+	for dir := filepath.Dir(path); ; {
+		if info, err := os.Stat(dir); err == nil {
+			return info.IsDir() // nearest existing ancestor: absent iff a real dir
+		} else if !os.IsNotExist(err) {
+			return false // Stat failed for a non-absence reason → fail loud
 		}
-		if _, lerr := os.Lstat(path); lerr == nil {
-			return false // log path is a dangling symlink → broken surface
+		if _, lerr := os.Lstat(dir); lerr == nil {
+			return false // dangling symlink at this level → broken surface
+		} else if !os.IsNotExist(lerr) {
+			return false // Lstat failed for a non-absence reason → fail loud
 		}
-		return true // real parent, log path genuinely absent → fresh
+		if parent := filepath.Dir(dir); parent != dir {
+			dir = parent
+		} else {
+			return true // climbed to the root, nothing existed → genuinely fresh
+		}
 	}
-	if !os.IsNotExist(err) {
-		return false // Stat failed for a non-absence reason → fail loud
-	}
-	if _, lerr := os.Lstat(parent); lerr == nil {
-		return false // parent is a dangling symlink → broken surface
-	}
-	return true // parent genuinely absent → fresh
 }

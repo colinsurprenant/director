@@ -313,6 +313,71 @@ func TestReadLogFileAsDanglingSymlinkErrors(t *testing.T) {
 	}
 }
 
+// TestReadAncestorAsFileErrors: a broken component ABOVE the project dir — here
+// <hub>/projects existing as a regular file — must fail loud, not read as empty.
+// logTrulyAbsent walks ancestors rather than checking only the immediate parent:
+// unix fails loud at Open (ENOTDIR), but on Windows every broken ancestor
+// collapses to ERROR_PATH_NOT_FOUND, so a one-level check would read the broken
+// hub as an empty log.
+func TestReadAncestorAsFileErrors(t *testing.T) {
+	hub := t.TempDir()
+	store := NewStore(hub, "repo")
+	projectsDir := filepath.Dir(filepath.Dir(store.Path())) // <hub>/projects
+	if err := os.WriteFile(projectsDir, []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.ReadAll(); err == nil {
+		t.Fatal("ReadAll with an ancestor that is a regular file must error, not read as empty")
+	}
+	if _, err := store.Tail(5); err == nil {
+		t.Fatal("Tail with an ancestor that is a regular file must error, not read as empty")
+	}
+}
+
+// TestReadAncestorAsDanglingSymlinkErrors: an ancestor (<hub>/projects) that is a
+// symlink to a missing target is a broken surface. Open and both re-checks
+// report not-exist because the dangling ancestor cannot be traversed, so the
+// ancestor walk must find the dangling link via Lstat at its own level and fail
+// loud rather than folding it into "absent".
+func TestReadAncestorAsDanglingSymlinkErrors(t *testing.T) {
+	skipIfNoSymlinks(t)
+	hub := t.TempDir()
+	store := NewStore(hub, "repo")
+	projectsDir := filepath.Dir(filepath.Dir(store.Path())) // <hub>/projects
+	if err := os.Symlink(filepath.Join(t.TempDir(), "gone"), projectsDir); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.ReadAll(); err == nil {
+		t.Fatal("ReadAll with a dangling-symlink ancestor must error, not read as empty")
+	}
+	if _, err := store.Tail(5); err == nil {
+		t.Fatal("Tail with a dangling-symlink ancestor must error, not read as empty")
+	}
+}
+
+// TestReadAncestorAsSymlinkedDirIsEmpty guards the valid side of the ancestor
+// walk: an ancestor reached through a symlink to a REAL directory is fine, and a
+// genuinely-absent log below it reads empty, not an error.
+func TestReadAncestorAsSymlinkedDirIsEmpty(t *testing.T) {
+	skipIfNoSymlinks(t)
+	hub := t.TempDir()
+	store := NewStore(hub, "repo")
+	projectsDir := filepath.Dir(filepath.Dir(store.Path())) // <hub>/projects
+	if err := os.Symlink(t.TempDir(), projectsDir); err != nil {
+		t.Fatal(err)
+	}
+
+	all, err := store.ReadAll()
+	if err != nil {
+		t.Fatalf("ReadAll through a symlinked ancestor dir: %v", err)
+	}
+	if len(all) != 0 {
+		t.Fatalf("ReadAll returned %d events, want 0", len(all))
+	}
+}
+
 // TestAppendRejectsInvalid confirms the store validates before writing: an
 // invalid event must surface the error and leave the log empty (no partial line).
 func TestAppendRejectsInvalid(t *testing.T) {
