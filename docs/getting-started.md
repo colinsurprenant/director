@@ -87,7 +87,25 @@ installed Director hooks into /Users/you/.claude/settings.json (set DIRECTOR_SET
   `/director:handoff` (pause a workstream, record the resume point) and `/director:complete` (close out a finished,
   merged workstream). More on the boundary pair in section 5.
 
-Verify it took:
+Verify it took. `director doctor` is the thorough check: it walks the same binary-resolution ladder
+the hooks walk and reports each link (binary, Claude Code hooks, Codex hooks if present, hub), so a
+broken install becomes loud instead of a silent no-op. It exits non-zero when the install is broken,
+and warns (without failing) on a partial one — such as a terminal-only install the desktop app would miss.
+
+```bash
+director doctor
+```
+
+```text
+✓ binary: director resolves on your PATH (/usr/local/bin/director), and the install symlink ~/.claude/director/bin/director backs desktop-app (Dock/Launchpad) launches — both launch contexts covered
+✓ claude code hooks: wired in ~/.claude/settings.json; shims present in ~/.claude/director/hooks
+✓ hub: ~/.director does not exist yet — it is created on first write
+
+✓ Director is healthy: the hooks will fire and coordination is live.
+  (For a repo's coordination state, run `director status`.)
+```
+
+`director status` confirms the read side:
 
 ```bash
 director status
@@ -292,6 +310,10 @@ what `brief` shows and what the next session starts from.
 ---
 
 ## 6. Troubleshooting
+
+Start with **`director doctor`**: it checks the whole install chain (binary resolution, Claude Code and
+Codex hooks, shims present, hub writable) and names the broken link, exiting non-zero when coordination
+would not fire. The table covers the specifics.
 
 | Symptom | Cause & fix |
 |---|---|

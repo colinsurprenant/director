@@ -97,6 +97,12 @@ director install
 
 The installed hook commands point at the **shims**, not the binary directly, so rebuilding or relocating `director` never requires rewriting `settings.json` (re-run `install` to refresh the shims to the current binary). If `~/.claude/settings.json` already has a malformed (non-object) `hooks` value, `install` refuses rather than overwrite it.
 
+Confirm the wiring will actually fire with `director doctor`. The shims fail safe (a missing binary exits 0 and coordination silently no-ops), so a broken install is otherwise invisible; `doctor` walks the same binary-resolution ladder the shims walk and reports each link (binary, Claude Code hooks, Codex hooks if present, hub). It exits non-zero when the install is broken, and warns (without failing) on a partial one — such as a terminal-only install the desktop app would miss:
+
+```bash
+director doctor
+```
+
 ### Wire into OpenAI Codex
 
 ```bash
@@ -122,7 +128,7 @@ Install paths and runtime knobs, common to both agents unless a default says oth
 | `DIRECTOR_BIN` | (PATH) | which `director` binary the shims invoke (defaults to `director` on `PATH`, then the symlink `install` drops next to the shims at `<hooks dir>/../bin/director` — `~/.claude/director/bin/director` by default) |
 | `DIRECTOR_HANDOFF_NUDGE_TOKENS` | (unset) | the context-fill handoff nudge (Claude Code-only for now): an absolute token threshold at which sessions are nudged toward `/director:handoff`; unset or `0` disables it. Fires once per crossing and re-arms only after context falls below half the threshold (a compaction or a context clear) |
 
-> **The binary must be findable.** With `DIRECTOR_BIN` set, the shims use it and nothing else — a stale value exits 0 without ever trying the other tiers. Unset, they fall back to `director` on `PATH`, then to the symlink `install` drops next to them at `<hooks dir>/../bin/director` (`~/.claude/director/bin/director` by default; a `DIRECTOR_HOOKS_DIR` override moves it too). A miss exits 0 (fail-safe) and coordination silently no-ops. The symlink tier covers the Claude Code **desktop app**, whose Dock/Launchpad launches get the bare launchd `PATH` ([anthropics/claude-code#44649](https://github.com/anthropics/claude-code/issues/44649)). To pin a specific binary explicitly, set `DIRECTOR_BIN` via `"env"` in `~/.claude/settings.json`.
+> **The binary must be findable.** With `DIRECTOR_BIN` set, the shims use it and nothing else — a stale value exits 0 without ever trying the other tiers. Unset, they fall back to `director` on `PATH`, then to the symlink `install` drops next to them at `<hooks dir>/../bin/director` (`~/.claude/director/bin/director` by default; a `DIRECTOR_HOOKS_DIR` override moves it too). A miss exits 0 (fail-safe) and coordination silently no-ops. The symlink tier covers the Claude Code **desktop app**, whose Dock/Launchpad launches get the bare launchd `PATH` ([anthropics/claude-code#44649](https://github.com/anthropics/claude-code/issues/44649)). To pin a specific binary explicitly, set `DIRECTOR_BIN` via `"env"` in `~/.claude/settings.json`. `director doctor` flags a stale `DIRECTOR_BIN` that resolves to nothing, the failure mode that silently disables the fallback tiers.
 
 ## Adopt an existing repo
 
@@ -173,6 +179,7 @@ adoption & install:
   install     idempotent merge of Director hooks into settings.json
               (--codex: Codex's hooks.json + $director-* agent skills instead)
   uninstall   remove only Director-managed hook entries (--codex: Codex's)
+  doctor      check the install is wired and the hooks will actually fire
 
 misc:
   version     print the director version
@@ -294,6 +301,7 @@ go build -o bin/director ./cmd/director
 sudo install bin/director /usr/local/bin/director
 director install              # Claude Code
 director install --codex      # OpenAI Codex — either, or both
+director doctor               # confirm the wiring will actually fire
 
 # 2. Register an existing repo in the fleet
 cd ~/dev/src/some-project
