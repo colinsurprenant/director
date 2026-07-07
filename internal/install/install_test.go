@@ -772,3 +772,34 @@ func TestUninstallSparesShimsWhenCodexPresent(t *testing.T) {
 		t.Errorf("with no Codex install left, CC uninstall should remove the shims (err=%v)", err)
 	}
 }
+
+// TestSettingsDirectorBin pins the contract doctor relies on: read a DIRECTOR_BIN
+// pinned in settings.json's env block, and read "not pinned" for every shape that
+// isn't a non-empty string — a missing file, no env block, an empty value, or a
+// non-string value.
+func TestSettingsDirectorBin(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+
+	if v, ok := SettingsDirectorBin(filepath.Join(dir, "does-not-exist.json")); ok {
+		t.Errorf("missing file: got (%q, true), want not pinned", v)
+	}
+	if v, ok := SettingsDirectorBin(write("no-env.json", `{"hooks":{}}`)); ok {
+		t.Errorf("no env block: got (%q, true), want not pinned", v)
+	}
+	if v, ok := SettingsDirectorBin(write("empty.json", `{"env":{"DIRECTOR_BIN":""}}`)); ok {
+		t.Errorf("empty value: got (%q, true), want not pinned", v)
+	}
+	if v, ok := SettingsDirectorBin(write("wrong-type.json", `{"env":{"DIRECTOR_BIN":123}}`)); ok {
+		t.Errorf("non-string value: got (%q, true), want not pinned", v)
+	}
+	if v, ok := SettingsDirectorBin(write("pinned.json", `{"env":{"DIRECTOR_BIN":"/opt/director"}}`)); !ok || v != "/opt/director" {
+		t.Errorf("pinned value: got (%q, %v), want (/opt/director, true)", v, ok)
+	}
+}

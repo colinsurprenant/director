@@ -421,6 +421,27 @@ func ExpectedShims() []string {
 	return names
 }
 
+// SettingsDirectorBin returns the DIRECTOR_BIN value pinned in the settings
+// file's top-level "env" block, if any. Claude Code injects that env into the
+// hook process, and the shims use DIRECTOR_BIN exclusively when set — so a
+// self-check (`director doctor`) must consult the pinned value, not just the
+// ambient shell env, to predict what the shim will actually resolve. A missing
+// file, absent env block, or non-string/empty value all read as "not pinned".
+func SettingsDirectorBin(path string) (string, bool) {
+	root, err := loadSettings(path)
+	if err != nil {
+		return "", false
+	}
+	env, ok := typedMap(root, "env")
+	if !ok {
+		return "", false
+	}
+	if v := stringAt(env, "DIRECTOR_BIN"); v != "" {
+		return v, true
+	}
+	return "", false
+}
+
 // writeShims materializes the embedded hook shims into hooksDir, creating the dir
 // and overwriting any existing shims so they always match THIS binary. Writing is
 // idempotent (re-install reproduces the same files) and atomic per file (temp +
