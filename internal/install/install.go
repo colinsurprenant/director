@@ -120,9 +120,11 @@ func DefaultHooksDir() (string, error) {
 // shims' last resolution tier probes "$here/../bin/director" — the bin/
 // SIBLING of the hooks dir — so the two must always derive from the same root:
 // ~/.claude/director/hooks ⇒ ~/.claude/director/bin, and a DIRECTOR_HOOKS_DIR
-// override relocates both together.
+// override relocates both together. Clean first: a trailing slash on the
+// override (routine tab-completion residue) would otherwise shift the
+// derivation to hooks/bin — a sibling the shims never probe.
 func binDirFor(hooksDir string) string {
-	return filepath.Join(filepath.Dir(hooksDir), "bin")
+	return filepath.Join(filepath.Dir(filepath.Clean(hooksDir)), "bin")
 }
 
 // DefaultBinPath resolves the shim-fallback binary path,
@@ -549,7 +551,13 @@ func writeBinSymlink(hooksDir string) error {
 		return fmt.Errorf("install: create bin dir %s: %w", binDir, err)
 	}
 	link := filepath.Join(binDir, "director")
-	if fi, err := os.Lstat(link); err == nil {
+	fi, err := os.Lstat(link)
+	if err != nil && !os.IsNotExist(err) {
+		// Not-exist and cannot-look are different facts: falling through here
+		// would mis-attribute an EACCES/EIO to symlink creation.
+		return fmt.Errorf("install: inspect bin path %s: %w", link, err)
+	}
+	if err == nil {
 		if fi.Mode()&os.ModeSymlink == 0 {
 			if fi.Mode().IsRegular() {
 				return nil // a real binary the user placed there — leave it
@@ -559,12 +567,21 @@ func writeBinSymlink(hooksDir string) error {
 		if existing, err := os.Readlink(link); err == nil && existing == target {
 			return nil // already points at us — idempotent no-op
 		}
-		if err := os.Remove(link); err != nil {
-			return fmt.Errorf("install: replace bin symlink %s: %w", link, err)
-		}
 	}
-	if err := os.Symlink(target, link); err != nil {
+	// Create-or-replace atomically: symlink at a temp name, rename over the
+	// link — the same temp+rename discipline as writeFileAtomic, so a hook
+	// firing mid-replace never sees a missing fallback and concurrent installs
+	// cannot fail each other in a Remove→Symlink gap. The pid suffix keeps
+	// concurrent processes off each other's temp name; a stale temp from a
+	// crashed run with the same pid is cleared first.
+	tmpName := fmt.Sprintf("%s.tmp-%d", link, os.Getpid())
+	os.Remove(tmpName)
+	if err := os.Symlink(target, tmpName); err != nil {
 		return fmt.Errorf("install: create bin symlink %s: %w", link, err)
+	}
+	if err := os.Rename(tmpName, link); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("install: rename bin symlink %s into place: %w", link, err)
 	}
 	return nil
 }
