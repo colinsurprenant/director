@@ -3,23 +3,52 @@
 [![ci](https://github.com/colinsurprenant/director/actions/workflows/ci.yml/badge.svg)](https://github.com/colinsurprenant/director/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/colinsurprenant/director?display_name=tag)](https://github.com/colinsurprenant/director/releases/latest)
 
-**An engineering daybook your agents actually keep.**
+**A coordination ledger for your coding-agent work: decisions, open loops, handoffs — durable across sessions, repos, and weeks.**
 
-You work with a coding agent (Claude Code, OpenAI Codex, or both) across several projects, in blocks: days or weeks deep in one, an afternoon in another, back to the first, sometimes a few parallel worktree sessions in a burst. Native agent memory remembers *facts*. What nothing carries across those boundaries is the **coordination narrative**: what was decided and why, which loops were deliberately deferred, where the baton was parked when the block ended, and what still needs *you*. So the human becomes the message bus, re-explaining last month's decision to this morning's session.
+**[The two-minute tour: colinsurprenant.github.io/director](https://colinsurprenant.github.io/director/)**
 
-Director moves you from **message bus** to **reviewer**. It is a standalone Go CLI built around a shared, durable, **append-only event log** per repo:
+Memory tools answer *"what does the agent know?"* Director answers *"what is the state of the work?"*: what was decided and why, which loops were deliberately deferred, where the work stopped when the block ended, and what still needs *you*. Facts accumulate; loops open and close. Nothing in a memory store ever *closes* — that lifecycle is the difference. Run both: they don't overlap.
+
+Three weeks after you park a project, a new session starts already knowing all of this: injected at session start as ground truth, not recalled by similarity.
+
+You work with a coding agent (Claude Code, OpenAI Codex, or both) across several projects, in blocks: days or weeks deep in one, an afternoon in another, back to the first, sometimes a few parallel worktree sessions in a burst. The state of the work is exactly what nothing else carries across those boundaries, so the human becomes the message bus, re-explaining last month's decision to this morning's session. Director moves you from **message bus** to **reviewer**. It is a standalone Go CLI built around a shared, durable, **append-only event log** per repo:
 
 - Sessions **`emit`** typed events as they work (`decision` · `open-item` · `handoff` · `note`) and **`resolve`** open loops when they truly close.
-- Deterministic folds project the log into **`render`** (the machine digest), **`brief`** (the human re-orientation view), and **`status`** (the one-line-per-workstream cockpit).
-- A SessionStart hook **injects** the CHARTER + digest into every new session as ground truth, so re-entering a project after three weeks starts from your parked handoff instead of from git archaeology.
+- A deterministic fold collapses the log into **`render`** (the machine digest), **`brief`** (the human re-orientation view), and **`status`** (the one-line-per-workstream cockpit).
+- A SessionStart hook **injects** the CHARTER + digest into every new session as ground truth, so a cold re-entry starts from your parked handoff instead of from git archaeology.
 - The log is **model-agnostic**: the next session can be you tomorrow, you after a compaction, or a stronger model you escalate a stuck problem to, with the tried-and-failed hypotheses traveling along. Escalate with context, not with amnesia.
 
 The LOG (plus the deliberately-edited living docs) is the only system of record; sessions and every rendered view are disposable caches reconstructible from it. Director wires natively into **Claude Code and OpenAI Codex** — same hooks, same log, same boundary commands, either agent alone or both side by side. A single static binary, stdlib-first, one vetted build-time dependency (`github.com/oklog/ulid/v2`). No daemon, no database, no cloud: the log is plain NDJSON you could read with `cat`.
 
-![Director demo: a session emits decisions, open items, and a handoff as it works; three weeks later a cold session rehydrates from the log with brief and status, then closes the loop with resolve](docs/assets/director-demo.gif)
+```text
+$ claude
+  … deep into the pagination rework …
+▸ decision   recorded · cursor pagination, not offset; offsets break under deletes
+  …
+▸ open-item  recorded · timezone edge case before the backfill merges
+  … later …
+▸ handoff    parked · cursor rework done · next: the backfill script · watch the p99
 
-> **Status: v1.** Director ships the hook-first coordination core plus informed repo adoption (see [Status & scope](#status--scope)). Single-machine.
+──────────── session ends · hours, days, or weeks pass ────────────
 
+$ claude
+> where were we?
+▸ Director: acme-api-main-7c21e9d4 · 1 open-item(s), 1 need-you
+
+## open-items
+01KWJ4X2…  open-item  timezone edge case before the backfill merges  [risk:escalate]
+
+## handoffs
+01KWJ9RM…  handoff    cursor rework done · next: the backfill script · watch the p99
+
+## decisions
+01KWJ4W8…  decision   cursor pagination, not offset; offsets break under deletes
+```
+
+*The same three facts on both sides of the gap: recorded as the session works, injected when the next one starts.*
+
+> **Scope:** single-machine for now, single-human by design; multi-machine sync is on the roadmap (see [Status & scope](#status--scope)).
+>
 > **New here?** [`docs/getting-started.md`](docs/getting-started.md) is the task-oriented first-run guide (install → adopt → first session → cockpit), plus how the model uses Director and a troubleshooting section. This README is the reference.
 
 ## Why Director
@@ -35,16 +64,24 @@ The design in four ideas — the full argument, including honest comparisons, is
 
 ## Install
 
-Prebuilt binaries for macOS and Linux (amd64/arm64) are published on the [releases page](https://github.com/colinsurprenant/director/releases); [`docs/getting-started.md`](docs/getting-started.md) covers install-from-release.
+One command downloads the right prebuilt binary for your platform (checksum-verified), installs it to `~/.local/bin`, and wires it into Claude Code. Installed and wired, no second step (it tells you if `~/.local/bin` isn't on your `PATH` yet):
 
-Or build the binary and put it on your `PATH`:
+```bash
+curl -fsSL https://raw.githubusercontent.com/colinsurprenant/director/main/install.sh | sh
+```
+
+Wire Codex instead with `sh -s -- --codex` (or `--both`); install the binary only with `sh -s -- --no-wire`.
+
+> **On Windows?** Run the one-liner inside [WSL](https://learn.microsoft.com/windows/wsl/) with the Linux binary: everything works there, hooks included. Native Windows is CLI-only for now: the binary is built and CI-tested, and every manual verb (`emit`, `render`, `status`, `brief`, `show`, `resolve`, …) works from PowerShell, but the hook shims are bash, so the ambient layer — session-start injection, heartbeats, boundary nudges — is not yet wired natively.
+
+**Other ways in:** prebuilt binaries for macOS, Linux, and Windows (amd64/arm64) are on the [releases page](https://github.com/colinsurprenant/director/releases) ([`docs/getting-started.md`](docs/getting-started.md) covers install-from-release), `go install github.com/colinsurprenant/director/cmd/director@latest` builds from source (Go 1.25+), or build it yourself:
 
 ```bash
 go build -o bin/director ./cmd/director
 sudo install bin/director /usr/local/bin/director   # or copy it anywhere on PATH
 ```
 
-Then wire it into your agent — Claude Code, Codex, or both.
+Then wire it into your agent. The one-liner already wired Claude Code; the sections below spell out what that does, and how to add Codex.
 
 ### Wire into Claude Code
 
@@ -86,16 +123,17 @@ Install paths and runtime knobs, common to all agents unless a default says othe
 
 | Variable | Default | Selects |
 |---|---|---|
+| `DIRECTOR_SETTINGS_PATH` | `~/.claude/settings.json` | the Claude Code settings file `install` merges into (also the probe that decides whether an uninstall may reclaim the shared shims) |
 | `DIRECTOR_HOOKS_DIR` | `~/.claude/director/hooks` | where `install` writes the shims and the settings entries point; override to relocate them |
 | `DIRECTOR_COMMANDS_DIR` | `~/.claude/commands/director` | where `install` writes the `/director:*` slash commands |
 | `DIRECTOR_CODEX_HOOKS_PATH` | `~/.codex/hooks.json` | the Codex hooks file `install --codex` merges into |
 | `DIRECTOR_CODEX_SKILLS_DIR` | `~/.agents/skills` | where `install --codex` writes the `$director-*` agent skills |
 | `DIRECTOR_GEMINI_CONFIG_DIR` | `~/.gemini/config` | the Gemini/Antigravity customization root directory `install --gemini` targets |
 | `DIRECTOR_HUB` | `~/.director` | the central hub that holds all cross-repo coordination state |
-| `DIRECTOR_BIN` | (PATH) | which `director` binary the shims invoke (defaults to `director` on `PATH`) |
+| `DIRECTOR_BIN` | (PATH) | which `director` binary the shims invoke (defaults to `director` on `PATH`, then the symlink `install` drops next to the shims at `<hooks dir>/../bin/director` — `~/.claude/director/bin/director` by default) |
 | `DIRECTOR_HANDOFF_NUDGE_TOKENS` | (unset) | the context-fill handoff nudge (Claude Code-only for now): an absolute token threshold at which sessions are nudged toward `/director:handoff`; unset or `0` disables it. Fires once per crossing and re-arms only after context falls below half the threshold (a compaction or a context clear) |
 
-> **The binary must be on `PATH`.** The shims resolve `director` via `DIRECTOR_BIN` → `PATH`; if it's missing they exit 0 (fail-safe) and coordination silently no-ops.
+> **The binary must be findable.** With `DIRECTOR_BIN` set, the shims use it and nothing else — a stale value exits 0 without ever trying the other tiers. Unset, they fall back to `director` on `PATH`, then to the symlink `install` drops next to them at `<hooks dir>/../bin/director` (`~/.claude/director/bin/director` by default; a `DIRECTOR_HOOKS_DIR` override moves it too). A miss exits 0 (fail-safe) and coordination silently no-ops. The symlink tier covers the Claude Code **desktop app**, whose Dock/Launchpad launches get the bare launchd `PATH` ([anthropics/claude-code#44649](https://github.com/anthropics/claude-code/issues/44649)). To pin a specific binary explicitly, set `DIRECTOR_BIN` via `"env"` in `~/.claude/settings.json`.
 
 ## Adopt an existing repo
 
@@ -124,6 +162,8 @@ Re-running `/director:adopt` on an adopted repo is the refresh path: the proposa
 write path (model-emitted):
   emit        append a semantic event (decision|open-item|handoff|note)
   resolve     close an open-item by its ULID
+  promote     fold decisions' rationale into a slow-layer doc
+              (promote <ulid>... --to <doc>; a doc pointer stays in the digest)
 
 projections:
   render      deterministic machine digest (+ --verify, manifest)
@@ -168,6 +208,18 @@ director resolve <ulid>
 
 `resolve` appends a close-marker for an open-item. The `<ulid>` **must** be one the CLI surfaced (from `emit`, `render`, or `open-items`) — `resolve` validates the target and rejects invented ids, non-open-items, and already-closed items.
 
+### promote — fold aged rationale into the docs
+
+```bash
+director promote <ulid> [<ulid>...] --to <doc>
+```
+
+`promote` is the grooming ceremony that keeps the digest tracking **current work, not project age**. Once a batch of aged-but-durable decisions' rationale has been written into a living doc (an ADR, an architecture overview), `promote` appends one **promote-marker**: a `decision` with `status: promoted`, `refs` naming the promoted decisions, and `promoted_to` carrying the doc path. The fold drops the promoted decisions from the active projection; the marker stays as a one-line doc pointer, and `director show <ulid>` still serves every original in full. Nothing is lost, the rationale just changed address (and since Director is single-human by design, promotion into the slow layer is also the cross-human interface).
+
+Validation is `resolve`-parity: every target must be a decision the CLI surfaced, not superseded by an ordinary decision, and not already claimed by a *live* promote-marker. Invented ids, non-decisions, already-promoted and superseded targets are refused, and one bad target rejects the whole batch (nothing is written). A mispointed promotion is recoverable: supersede the bad marker with an ordinary decision (`emit --refs <marker-ulid>`), then re-promote to the correct address — only *live* markers hold the already-promoted claim.
+
+`--to` takes a **durable address**, not necessarily a file: a repo-relative path (`docs/adr/0007-cursor-pagination.md`) or a stable URL (a GitHub issue where the rationale now lives). Machine-specific paths (absolute, `~/…`) are refused — the log is a portable file and its pointers must travel. Two conventions, nudged not gated: prefer the repo doc (it's version-controlled and travels with the repo; a URL can die, though the original rationale stays one `show` away), and have the receiving doc cite the promoted ULIDs, so a reader can drill back from the ADR into the full decision chain, superseded alternatives included. Director records the address; it never dials it — no issue is created, no doc is checked, the write-the-doc-then-promote ordering is yours.
+
 ### The three projections
 
 | Command | Audience | What it is |
@@ -178,7 +230,7 @@ director resolve <ulid>
 
 `brief` and `render` share the same byte-identical fold — the human reads the same picture a fresh session reads. A fourth, narrower projection, `open-items`, lists a workstream's unresolved open-items (ULID + body); it exists to feed `resolve` and `/director:complete`. It defaults to the current workstream; `--workstream <id>` retargets it at a sibling — the close-out path for a workstream whose session is already gone.
 
-The digest is deliberately an *index*: every line is capped to a headline so the injection stays small as a project's log grows, and nothing is lost — `show <ulid>` prints any single event in full (body verbatim, as recorded), one deterministic hop from any headline. When even the capped digest would overrun the injection budget, the decisions section collapses to a count-plus-pointer line and the overflow lands in `health/` as a grooming signal; the open-set and the handoff baton are never cut.
+The digest is deliberately an *index*: every line is capped to a headline so the injection stays small as a project's log grows, and nothing is lost — `show <ulid>` prints any single event in full (body verbatim, as recorded), one deterministic hop from any headline. When even the capped digest would overrun the injection budget, the decisions section collapses to a count-plus-pointer line and the overflow lands in `health/` as a grooming signal; the open-set and the latest handoff are never cut. The grooming verbs that keep that headroom are `resolve` (compacts the open-set), supersession via `--refs`, and `promote` (compacts the decision set into the docs).
 
 ### Fleet lifecycle
 
@@ -190,7 +242,7 @@ There are exactly four model-emitted semantic kinds. Pick by what the fact *is*:
 
 | Kind | Use it for | Lifecycle |
 |---|---|---|
-| `decision` | a choice + what it affects | carries `--risk low\|escalate` |
+| `decision` | a choice + what it affects | active → superseded (a later decision's `--refs`) or promoted (via `promote`); carries `--risk low\|escalate` |
 | `open-item` | an open loop / follow-up / deferred item — the canonical home for "documented, not dropped" | open → closed (via `resolve`) |
 | `handoff` | a positional snapshot: current task · next action · hypotheses | — |
 | `note` | FYI / context for a parallel or future session | — |
@@ -198,9 +250,9 @@ There are exactly four model-emitted semantic kinds. Pick by what the fact *is*:
 - **There is no `blocker` kind.** "Stuck, needs a human" is an `open-item` with `--risk escalate` — exactly the open-set that surfaces in `status`'s Needs-you band.
 - **`done` is not a semantic kind** — it is fleet-liveness only (a hook marks the session terminal). "What's done" belongs in a `handoff` body.
 
-## The protocol skill
+## The coordination protocol
 
-`skills/director/SKILL.md` is the model-facing coordination protocol. It teaches a session two load-bearing habits that no hook can perform for it:
+The SessionStart hook injects this protocol into every managed-repo session, so the emit habit is in context from turn one: pushed as injected state, not shipped as a lazy model-invoked skill, because an always-on habit only fires if it is already in the window. (`skills/director/SKILL.md` is the readable source of the same text.) It teaches a session two load-bearing habits that no hook can perform for it:
 
 - **Continuous boundary-flush** — emit durable state to the LOG *as you work* (the moment a decision is made or a loop is deferred, and a `handoff` at each natural boundary), never batched for the end of a session. Transient working state survives a compaction only if the model wrote it to the LOG during a turn.
 - **Ground Truth** — treat the CHARTER + digest injected at session start as the *authoritative current picture*: build on it, do not re-derive it by re-scanning the repo or re-reading the log.
@@ -211,9 +263,13 @@ A workstream's id is `<repo>-<branch>-<shortid>`, derived deterministically from
 
 ## Status & scope
 
-**In v1:** the hook-first coordination core (CLI write path, identity, event store, fleet/liveness, `render`/`brief`/`status`, hooks + the `_managedBy` installer, the protocol skill), **informed adoption** (`adopt` registers; `/director:adopt` drafts the CHARTER proposal and runs the triaged open-loop import — see [Adopt an existing repo](#adopt-an-existing-repo)), and a **Codex adapter**: `director install --codex` wires the same hooks into Codex's `hooks.json` (Codex asks you to trust them at the next session start; if you dismiss that prompt, run `/hooks` in the session) and installs the boundary commands as agent skills — `$director-adopt`, `$director-complete`, `$director-handoff`. Ground truth injection, liveness, and close-out work identically on both agents; the emit-guard and the context-fill handoff nudge are Claude Code-only for now (they read CC's transcript format and stay safely inert on Codex). Single-machine.
+**In v1:** the hook-first coordination core (CLI write path, identity, event store, fleet/liveness, `render`/`brief`/`status`, hooks + the `_managedBy` installer, the injected coordination protocol), **informed adoption** (`adopt` registers; `/director:adopt` drafts the CHARTER proposal and runs the triaged open-loop import — see [Adopt an existing repo](#adopt-an-existing-repo)), and a **Codex adapter**: `director install --codex` wires the same hooks into Codex's `hooks.json` (Codex asks you to trust them at the next session start; if you dismiss that prompt, run `/hooks` in the session) and installs the boundary commands as agent skills — `$director-adopt`, `$director-complete`, `$director-handoff`. Ground truth injection, liveness, and close-out work identically on both agents; the emit-guard and the context-fill handoff nudge are Claude Code-only for now (they read CC's transcript format and stay safely inert on Codex). Single-machine.
 
-**Deferred:** deeper brownfield analysis beyond the informed-adopt pass (doc living/record/rot reconciliation, an arc42 overview draft, back-dated decision records). `brief --synthesize` (model-narrated prose) is deferred — v1 ships the deterministic brief. A background monitor/reaper, notifications, a freshness sweep, and multi-machine sync come later.
+**Deferred:** deeper brownfield analysis beyond the informed-adopt pass (doc living/record/rot reconciliation, an arc42 overview draft, back-dated decision records). `brief --synthesize` (model-narrated prose) is deferred — v1 ships the deterministic brief. A background monitor/reaper, notifications, and a freshness sweep come later.
+
+**Multi-machine** is the one distribution mode on the roadmap, and its shape is settled: the hub becomes git-synced, and the merge is just the fold (the fold is a pure, order-independent function of the event set, so per-machine logs merge as set union). No server, no protocol, no conflict resolution, ever.
+
+**Multi-user is different: not deferred, out of scope by design.** Director externalizes *one* human's in-flight working memory; sessions are plural, machines are plural, humans are not. A team syncs through the slower artifacts (plans, architecture docs), never through a shared in-flight log.
 
 **Quality gate** (the bar for "done"):
 

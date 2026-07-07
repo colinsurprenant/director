@@ -134,10 +134,17 @@ func charterOutlook(hub, repoKey string) string {
 func projectKeys(hub string) ([]string, error) {
 	dir := filepath.Join(hub, "projects")
 	entries, err := os.ReadDir(dir)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
 	if err != nil {
+		// Not-exist on the ReadDir error is only a precondition, and the Lstat
+		// re-check is what decides: on Windows, ReadDir on a path that exists as
+		// a regular file also classifies as not-exist, which would silently read
+		// a broken hub as an empty one — and Lstat (not Stat) keeps a dangling
+		// symlink classified as broken. Same rationale as fleet.dirTrulyAbsent.
+		if os.IsNotExist(err) {
+			if _, statErr := os.Lstat(dir); os.IsNotExist(statErr) {
+				return nil, nil
+			}
+		}
 		return nil, fmt.Errorf("brief: read projects dir: %w", err)
 	}
 	var keys []string

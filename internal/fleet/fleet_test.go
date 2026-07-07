@@ -18,9 +18,11 @@ func TestLifecycleRegisterCreatesRow(t *testing.T) {
 		Workstream: "widget-main-abc123",
 		UUID:       "uuid-1",
 		Handle:     "@colin",
-		Heartbeat:  fixedTime.Format(heartbeatLayout),
+		// Deliberately garbage: Register stamps the heartbeat from its clock
+		// and must ignore whatever a caller left in the field.
+		Heartbeat: "junk-not-a-timestamp",
 	}
-	if err := Register(hub, row); err != nil {
+	if err := Register(hub, row, fixedTime); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -28,8 +30,8 @@ func TestLifecycleRegisterCreatesRow(t *testing.T) {
 	if got.Workstream != row.Workstream || got.UUID != row.UUID || got.Handle != row.Handle {
 		t.Errorf("row roundtrip mismatch: got %+v want %+v", got, row)
 	}
-	if got.Heartbeat != row.Heartbeat {
-		t.Errorf("heartbeat = %q, want %q", got.Heartbeat, row.Heartbeat)
+	if want := fixedTime.Format(heartbeatLayout); got.Heartbeat != want {
+		t.Errorf("heartbeat = %q, want the Register-stamped %q", got.Heartbeat, want)
 	}
 	if got.Status != "" {
 		t.Errorf("a live row must carry no status, got %q", got.Status)
@@ -43,7 +45,7 @@ func TestLifecycleRegisterCreatesRow(t *testing.T) {
 func TestRowFileDistinctForSluggingCollision(t *testing.T) {
 	hub := t.TempDir()
 	for _, ws := range []string{"a-b", "a_b"} {
-		if err := Register(hub, Row{Workstream: ws, UUID: "u", Heartbeat: fixedTime.Format(heartbeatLayout)}); err != nil {
+		if err := Register(hub, Row{Workstream: ws, UUID: "u"}, fixedTime); err != nil {
 			t.Fatalf("Register(%s): %v", ws, err)
 		}
 	}
@@ -59,12 +61,11 @@ func TestRowFileDistinctForSluggingCollision(t *testing.T) {
 func TestLifecycleRegisterRejectsMissingFields(t *testing.T) {
 	hub := t.TempDir()
 	cases := []Row{
-		{UUID: "u", Heartbeat: fixedTime.Format(heartbeatLayout)},       // no workstream
-		{Workstream: "w", Heartbeat: fixedTime.Format(heartbeatLayout)}, // no uuid
-		{Workstream: "w", UUID: "u"},                                    // no heartbeat
+		{UUID: "u"},       // no workstream
+		{Workstream: "w"}, // no uuid
 	}
 	for i, row := range cases {
-		if err := Register(hub, row); err == nil {
+		if err := Register(hub, row, fixedTime); err == nil {
 			t.Errorf("case %d: expected error for incomplete row %+v, got nil", i, row)
 		}
 	}
@@ -73,7 +74,7 @@ func TestLifecycleRegisterRejectsMissingFields(t *testing.T) {
 func TestLifecycleHeartbeatAdvancesTimestamp(t *testing.T) {
 	hub := t.TempDir()
 	ws, uuid := "widget-main-abc123", "uuid-1"
-	if err := Register(hub, Row{Workstream: ws, UUID: uuid, Heartbeat: fixedTime.Format(heartbeatLayout)}); err != nil {
+	if err := Register(hub, Row{Workstream: ws, UUID: uuid}, fixedTime); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -111,7 +112,7 @@ func TestLifecycleHeartbeatCreatesWhenAbsent(t *testing.T) {
 func TestLifecycleDoneArchivesNeverDeletes(t *testing.T) {
 	hub := t.TempDir()
 	ws, uuid := "widget-main-abc123", "uuid-1"
-	if err := Register(hub, Row{Workstream: ws, UUID: uuid, Heartbeat: fixedTime.Format(heartbeatLayout)}); err != nil {
+	if err := Register(hub, Row{Workstream: ws, UUID: uuid}, fixedTime); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -143,11 +144,10 @@ func TestLifecycleDoneMissingRow(t *testing.T) {
 	}
 }
 
-// TestLifecycleTimestampsNormalizedToUTC locks the write-boundary guarantee: a
-// caller passing a zoned clock to Heartbeat/Done still produces UTC-stamped
-// rows and UTC-dated archive buckets, whatever zone the caller's clock is in.
-// (Register still trusts its caller's pre-formatted heartbeat string — that
-// gap is tracked as its own open-item.)
+// TestLifecycleTimestampsNormalizedToUTC locks the write-boundary guarantee:
+// a caller passing a zoned clock to Register/Heartbeat/Done still produces
+// UTC-stamped rows and UTC-dated archive buckets — no fleet writer can carry
+// a mixed-offset timestamp, whatever zone the caller's clock is in.
 func TestLifecycleTimestampsNormalizedToUTC(t *testing.T) {
 	hub := t.TempDir()
 	ws, uuid := "widget-main-abc123", "uuid-1"
@@ -155,20 +155,30 @@ func TestLifecycleTimestampsNormalizedToUTC(t *testing.T) {
 	// the stored offset and the archive date bucket.
 	zoned := time.Date(2026, 6, 8, 23, 0, 0, 0, time.FixedZone("UTC-5", -5*3600))
 
+	assertUTCHeartbeat := func(step string) {
+		t.Helper()
+		got := readRowOrFail(t, rowPath(hub, ws, uuid))
+		hb, err := time.Parse(heartbeatLayout, got.Heartbeat)
+		if err != nil {
+			t.Fatalf("%s: parse heartbeat %q: %v", step, got.Heartbeat, err)
+		}
+		if _, offset := hb.Zone(); offset != 0 {
+			t.Errorf("%s: heartbeat %q carries a zone offset, want UTC", step, got.Heartbeat)
+		}
+		if !hb.Equal(zoned) {
+			t.Errorf("%s: normalization changed the instant: %v != %v", step, hb, zoned)
+		}
+	}
+
+	if err := Register(hub, Row{Workstream: ws, UUID: uuid}, zoned); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	assertUTCHeartbeat("Register")
+
 	if err := Heartbeat(hub, ws, uuid, zoned); err != nil {
 		t.Fatalf("Heartbeat: %v", err)
 	}
-	got := readRowOrFail(t, rowPath(hub, ws, uuid))
-	hb, err := time.Parse(heartbeatLayout, got.Heartbeat)
-	if err != nil {
-		t.Fatalf("parse heartbeat %q: %v", got.Heartbeat, err)
-	}
-	if _, offset := hb.Zone(); offset != 0 {
-		t.Errorf("heartbeat %q carries a zone offset, want UTC", got.Heartbeat)
-	}
-	if !hb.Equal(zoned) {
-		t.Errorf("normalization changed the instant: %v != %v", hb, zoned)
-	}
+	assertUTCHeartbeat("Heartbeat")
 
 	if err := Done(hub, ws, uuid, zoned); err != nil {
 		t.Fatalf("Done: %v", err)
@@ -187,11 +197,11 @@ func TestLifecycleDoneWorkstreamArchivesAllRows(t *testing.T) {
 	hub := t.TempDir()
 	ws := "widget-feature-abc123"
 	for _, uuid := range []string{"uuid-A", "uuid-B"} {
-		if err := Register(hub, Row{Workstream: ws, UUID: uuid, Heartbeat: fixedTime.Format(heartbeatLayout)}); err != nil {
+		if err := Register(hub, Row{Workstream: ws, UUID: uuid}, fixedTime); err != nil {
 			t.Fatalf("Register %s: %v", uuid, err)
 		}
 	}
-	if err := Register(hub, Row{Workstream: "other-main-def456", UUID: "uuid-C", Heartbeat: fixedTime.Format(heartbeatLayout)}); err != nil {
+	if err := Register(hub, Row{Workstream: "other-main-def456", UUID: "uuid-C"}, fixedTime); err != nil {
 		t.Fatalf("Register other: %v", err)
 	}
 
@@ -225,7 +235,7 @@ func TestLifecycleDoneWorkstreamArchivesAllRows(t *testing.T) {
 func TestLifecycleDoneWorkstreamSkipsCorruptAndArchivesDriftedName(t *testing.T) {
 	hub := t.TempDir()
 	ws := "widget-feature-abc123"
-	if err := Register(hub, Row{Workstream: ws, UUID: "uuid-A", Heartbeat: fixedTime.Format(heartbeatLayout)}); err != nil {
+	if err := Register(hub, Row{Workstream: ws, UUID: "uuid-A"}, fixedTime); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	// A matching row living under a filename its identity does not hash to.
@@ -261,11 +271,30 @@ func TestLifecycleDoneWorkstreamNoRows(t *testing.T) {
 	if _, err := DoneWorkstream(hub, "nope", fixedTime); !errors.Is(err, ErrRowNotFound) {
 		t.Errorf("DoneWorkstream on empty hub: got %v, want ErrRowNotFound", err)
 	}
-	if err := Register(hub, Row{Workstream: "present", UUID: "u", Heartbeat: fixedTime.Format(heartbeatLayout)}); err != nil {
+	if err := Register(hub, Row{Workstream: "present", UUID: "u"}, fixedTime); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := DoneWorkstream(hub, "nope", fixedTime); !errors.Is(err, ErrRowNotFound) {
 		t.Errorf("DoneWorkstream with no matching rows: got %v, want ErrRowNotFound", err)
+	}
+}
+
+// TestDoneWorkstreamFleetPathAsFileErrors: the DoneWorkstream twin of
+// TestListFleetPathAsFileErrors — a <hub>/fleet that exists as a regular FILE
+// must surface as a real error, not ErrRowNotFound, so a broken surface is
+// never mistaken for "nothing to archive" (portable classification via
+// dirTrulyAbsent; unix ENOTDIR vs Windows ERROR_PATH_NOT_FOUND).
+func TestDoneWorkstreamFleetPathAsFileErrors(t *testing.T) {
+	hub := t.TempDir()
+	if err := os.WriteFile(filepath.Join(hub, fleetDir), []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := DoneWorkstream(hub, "any", fixedTime)
+	if err == nil {
+		t.Fatal("DoneWorkstream on a fleet path that is a regular file must error")
+	}
+	if errors.Is(err, ErrRowNotFound) {
+		t.Fatalf("broken fleet surface misclassified as ErrRowNotFound: %v", err)
 	}
 }
 
@@ -274,12 +303,12 @@ func TestLifecycleDoneWorkstreamNoRows(t *testing.T) {
 func TestLifecycleConcurrentUUIDsDoNotClobber(t *testing.T) {
 	hub := t.TempDir()
 	ws := "widget-main-abc123"
-	a := Row{Workstream: ws, UUID: "uuid-A", Handle: "@a", Heartbeat: fixedTime.Format(heartbeatLayout)}
-	b := Row{Workstream: ws, UUID: "uuid-B", Handle: "@b", Heartbeat: fixedTime.Format(heartbeatLayout)}
-	if err := Register(hub, a); err != nil {
+	a := Row{Workstream: ws, UUID: "uuid-A", Handle: "@a"}
+	b := Row{Workstream: ws, UUID: "uuid-B", Handle: "@b"}
+	if err := Register(hub, a, fixedTime); err != nil {
 		t.Fatalf("Register a: %v", err)
 	}
-	if err := Register(hub, b); err != nil {
+	if err := Register(hub, b, fixedTime); err != nil {
 		t.Fatalf("Register b: %v", err)
 	}
 

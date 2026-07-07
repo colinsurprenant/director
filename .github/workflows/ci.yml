@@ -36,3 +36,38 @@ jobs:
 
       - name: go test -race
         run: go test ./... -race
+
+  # The front-door install script is POSIX sh piped to `sh` (often dash). Lint it
+  # so a bashism can never regress the primary external entry point. shellcheck is
+  # preinstalled on ubuntu-latest; dash is /bin/sh there.
+  installer:
+    name: "installer (shellcheck · dash -n)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: shellcheck
+        run: shellcheck -s sh install.sh
+
+      - name: posix parse (dash)
+        run: dash -n install.sh
+
+  # Windows portability check: build + full test suite under Windows filesystem
+  # semantics (no unix permission bits, rename-over-open restrictions, CRLF git
+  # defaults). vet/gofmt run once on the ubuntu gate; duplicating them here adds
+  # nothing platform-specific.
+  windows:
+    name: "windows (build · test -race)"
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test -race
+        run: go test ./... -race

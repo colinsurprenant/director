@@ -74,6 +74,14 @@ func (s *Store) Append(ev Event) error {
 	framed = append(framed, line...)
 	framed = append(framed, '\n')
 
+	// Defense in depth: never write a line the reader would reject. Field caps
+	// (MaxBodyBytes, MaxPromotedToBytes) make this unreachable for prose, but
+	// refs are unbounded, and one oversized line bricks every projection over
+	// this log — refusing here turns a poisoned log into a loud writer error.
+	if len(framed) > maxLineBytes {
+		return fmt.Errorf("store: refusing to append event %s: %d-byte line exceeds the reader's %d-byte limit", ev.ID, len(framed), maxLineBytes)
+	}
+
 	dir := filepath.Dir(s.Path())
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("store: create project dir %s: %w", dir, err)
@@ -154,7 +162,7 @@ func (s *Store) Tail(n int) ([]Event, error) {
 func (s *Store) scan(fn func(Event) error) error {
 	f, err := os.Open(s.Path())
 	if err != nil {
-		if os.IsNotExist(err) {
+		if logTrulyAbsent(s.Path(), err) {
 			return nil
 		}
 		return fmt.Errorf("store: open log %s: %w", s.Path(), err)
@@ -183,4 +191,56 @@ func (s *Store) scan(fn func(Event) error) error {
 		return fmt.Errorf("store: read log %s: %w", s.Path(), err)
 	}
 	return nil
+}
+
+// logTrulyAbsent reports whether a failed Open(path) means the log file does not
+// exist yet — the only case scan may treat as an empty log. os.IsNotExist alone
+// is not portable: on Windows, Open through a path component that exists as a
+// regular FILE (or a dangling symlink) also reports not-exist
+// (ERROR_PATH_NOT_FOUND), where unix reports ENOTDIR and fails loud. A silently-
+// empty read of the system-of-record is the §9 "silence reads as healthy" /
+// LIE-TEST failure class, so a not-exist openErr is only a precondition. The log
+// is genuinely absent only when neither the log path nor any ancestor is a
+// broken non-directory:
+//
+//   - the log path itself must be nothing; if Lstat still finds an entry there,
+//     Open followed a dangling symlink to a missing target — a broken surface;
+//   - walking up from the log's parent, the nearest component that EXISTS must
+//     be a real directory (Stat follows symlinks, so a symlinked project dir is
+//     valid); a component that exists as a regular file or a dangling symlink is
+//     a broken surface. A chain that is genuinely absent to the filesystem root
+//     is a fresh repo.
+//
+// Any re-check error other than not-exist (EACCES, ELOOP, …) fails loud rather
+// than being read as absence. This goes deeper than fleet.dirTrulyAbsent, which
+// classifies only its own directory: here the opened path (the log file) sits
+// below the components that can be broken, and on Windows every broken ancestor
+// collapses to ERROR_PATH_NOT_FOUND, so a one-level check would read a broken
+// hub as empty.
+func logTrulyAbsent(path string, openErr error) bool {
+	if !os.IsNotExist(openErr) {
+		return false
+	}
+	if _, err := os.Lstat(path); err == nil {
+		return false // dangling symlink at the log path → broken surface
+	} else if !os.IsNotExist(err) {
+		return false // re-check failed for a non-absence reason → fail loud
+	}
+	for dir := filepath.Dir(path); ; {
+		if info, err := os.Stat(dir); err == nil {
+			return info.IsDir() // nearest existing ancestor: absent iff a real dir
+		} else if !os.IsNotExist(err) {
+			return false // Stat failed for a non-absence reason → fail loud
+		}
+		if _, lerr := os.Lstat(dir); lerr == nil {
+			return false // dangling symlink at this level → broken surface
+		} else if !os.IsNotExist(lerr) {
+			return false // Lstat failed for a non-absence reason → fail loud
+		}
+		if parent := filepath.Dir(dir); parent != dir {
+			dir = parent
+		} else {
+			return true // climbed to the root, nothing existed → genuinely fresh
+		}
+	}
 }

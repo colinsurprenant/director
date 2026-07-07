@@ -85,6 +85,9 @@ func formatEvent(ev event.Event) string {
 	if ev.TS != "" {
 		fmt.Fprintf(&b, "ts: %s\n", ev.TS)
 	}
+	if ev.PromotedTo != "" {
+		fmt.Fprintf(&b, "promoted_to: %s\n", ev.PromotedTo)
+	}
 	if len(ev.Refs) > 0 {
 		fmt.Fprintf(&b, "refs: %s\n", strings.Join(ev.Refs, " "))
 	}

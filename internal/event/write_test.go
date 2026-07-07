@@ -2,6 +2,8 @@ package event
 
 import (
 	"errors"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -145,6 +147,299 @@ func TestResolveNonOpenItem(t *testing.T) {
 	}
 	if got, _ := store.ReadAll(); len(got) != 1 {
 		t.Fatalf("rejected resolve changed the log: %d events, want 1", len(got))
+	}
+}
+
+// TestPromoteMarksDecisions promotes a batch of two decisions and asserts the
+// appended promote-marker has the locked shape: decision + status promoted +
+// refs to both targets + promoted_to, in one marker.
+func TestPromoteMarksDecisions(t *testing.T) {
+	store := NewStore(t.TempDir(), "promote-repo")
+	d1, err := Emit(store, testWorkstream, EmitParams{Type: KindDecision, Area: "api", Body: "chose X"})
+	if err != nil {
+		t.Fatalf("Emit d1: %v", err)
+	}
+	d2, err := Emit(store, testWorkstream, EmitParams{Type: KindDecision, Area: "api", Body: "chose Y"})
+	if err != nil {
+		t.Fatalf("Emit d2: %v", err)
+	}
+
+	marker, err := Promote(store, testWorkstream, []string{d1.ID, d2.ID}, "docs/why-director.md")
+	if err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+	if marker.Type != KindDecision || marker.Status != StatusPromoted {
+		t.Fatalf("marker type/status = %q/%q, want decision/promoted", marker.Type, marker.Status)
+	}
+	if marker.PromotedTo != "docs/why-director.md" {
+		t.Fatalf("marker promoted_to = %q, want docs/why-director.md", marker.PromotedTo)
+	}
+	if len(marker.Refs) != 2 || marker.Refs[0] != d1.ID || marker.Refs[1] != d2.ID {
+		t.Fatalf("marker refs = %v, want [%s %s]", marker.Refs, d1.ID, d2.ID)
+	}
+	if marker.Body == "" {
+		t.Fatal("marker body is empty, want a generated doc-pointer line")
+	}
+	if err := marker.Validate(); err != nil {
+		t.Fatalf("marker invalid: %v", err)
+	}
+	if got, _ := store.ReadAll(); len(got) != 3 {
+		t.Fatalf("log has %d events, want 3 (2 decisions + marker)", len(got))
+	}
+}
+
+// TestPromoteDedupesTargets passes the same id twice; the marker stores it once
+// (set semantics, matching refs handling everywhere else).
+func TestPromoteDedupesTargets(t *testing.T) {
+	store := NewStore(t.TempDir(), "promote-dedupe-repo")
+	d, err := Emit(store, testWorkstream, EmitParams{Type: KindDecision, Area: "api", Body: "chose X"})
+	if err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+
+	marker, err := Promote(store, testWorkstream, []string{d.ID, d.ID}, "docs/x.md")
+	if err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+	if len(marker.Refs) != 1 || marker.Refs[0] != d.ID {
+		t.Fatalf("marker refs = %v, want [%s]", marker.Refs, d.ID)
+	}
+}
+
+// TestPromoteMalformedTarget rejects a non-ULID target before touching the log,
+// and rejects empty targets/doc — the guards ahead of any history read.
+func TestPromoteMalformedTarget(t *testing.T) {
+	store := NewStore(t.TempDir(), "promote-malformed-repo")
+	if _, err := Promote(store, testWorkstream, []string{"not-a-ulid"}, "docs/x.md"); !errors.Is(err, ErrInvalidTarget) {
+		t.Fatalf("Promote(malformed) error = %v, want ErrInvalidTarget", err)
+	}
+	if _, err := Promote(store, testWorkstream, nil, "docs/x.md"); !errors.Is(err, ErrInvalidTarget) {
+		t.Fatalf("Promote(no targets) error = %v, want ErrInvalidTarget", err)
+	}
+	if _, err := Promote(store, testWorkstream, []string{mustID(t)}, ""); !errors.Is(err, ErrInvalidDoc) {
+		t.Fatalf("Promote(empty doc) error = %v, want ErrInvalidDoc", err)
+	}
+	if got, _ := store.ReadAll(); len(got) != 0 {
+		t.Fatalf("rejected promotes wrote %d events, want 0", len(got))
+	}
+}
+
+// TestPromoteUnknownTarget rejects an id that parses but is not in the log —
+// the invented-id case, Resolve-parity.
+func TestPromoteUnknownTarget(t *testing.T) {
+	store := NewStore(t.TempDir(), "promote-unknown-repo")
+	invented := mustID(t)
+
+	_, err := Promote(store, testWorkstream, []string{invented}, "docs/x.md")
+	if !errors.Is(err, ErrPromoteTargetNotFound) {
+		t.Fatalf("Promote(invented) error = %v, want ErrPromoteTargetNotFound", err)
+	}
+	if got, _ := store.ReadAll(); len(got) != 0 {
+		t.Fatalf("rejected promote wrote %d events, want 0", len(got))
+	}
+}
+
+// TestPromoteNonDecision rejects promoting a non-decision (an open-item): only
+// decisions carry promotable rationale.
+func TestPromoteNonDecision(t *testing.T) {
+	store := NewStore(t.TempDir(), "promote-nondecision-repo")
+	open, err := Emit(store, testWorkstream, EmitParams{Type: KindOpenItem, Area: "api", Body: "loop"})
+	if err != nil {
+		t.Fatalf("Emit open-item: %v", err)
+	}
+
+	_, err = Promote(store, testWorkstream, []string{open.ID}, "docs/x.md")
+	if !errors.Is(err, ErrPromoteTargetNotFound) {
+		t.Fatalf("Promote(open-item id) error = %v, want ErrPromoteTargetNotFound", err)
+	}
+}
+
+// TestPromoteDoublePromote rejects re-promoting an already-promoted decision.
+func TestPromoteDoublePromote(t *testing.T) {
+	store := NewStore(t.TempDir(), "promote-double-repo")
+	d, err := Emit(store, testWorkstream, EmitParams{Type: KindDecision, Area: "api", Body: "chose X"})
+	if err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+	if _, err := Promote(store, testWorkstream, []string{d.ID}, "docs/x.md"); err != nil {
+		t.Fatalf("first Promote: %v", err)
+	}
+
+	_, err = Promote(store, testWorkstream, []string{d.ID}, "docs/y.md")
+	if !errors.Is(err, ErrAlreadyPromoted) {
+		t.Fatalf("second Promote error = %v, want ErrAlreadyPromoted", err)
+	}
+	if got, _ := store.ReadAll(); len(got) != 2 {
+		t.Fatalf("double-promote wrote an extra marker: %d events, want 2", len(got))
+	}
+}
+
+// TestPromoteSupersededTarget rejects promoting a decision an ordinary later
+// decision already superseded: replaced rationale is not promotable.
+func TestPromoteSupersededTarget(t *testing.T) {
+	store := NewStore(t.TempDir(), "promote-superseded-repo")
+	old, err := Emit(store, testWorkstream, EmitParams{Type: KindDecision, Area: "api", Body: "chose X"})
+	if err != nil {
+		t.Fatalf("Emit old: %v", err)
+	}
+	if _, err := Emit(store, testWorkstream, EmitParams{Type: KindDecision, Area: "api", Refs: []string{old.ID}, Body: "chose Y instead"}); err != nil {
+		t.Fatalf("Emit superseding: %v", err)
+	}
+
+	_, err = Promote(store, testWorkstream, []string{old.ID}, "docs/x.md")
+	if !errors.Is(err, ErrTargetSuperseded) {
+		t.Fatalf("Promote(superseded) error = %v, want ErrTargetSuperseded", err)
+	}
+}
+
+// TestPromoteMarkerNotPromotable rejects promoting a promote-marker itself:
+// markers are resolution metadata, like close-markers for resolve.
+func TestPromoteMarkerNotPromotable(t *testing.T) {
+	store := NewStore(t.TempDir(), "promote-marker-repo")
+	d, err := Emit(store, testWorkstream, EmitParams{Type: KindDecision, Area: "api", Body: "chose X"})
+	if err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+	marker, err := Promote(store, testWorkstream, []string{d.ID}, "docs/x.md")
+	if err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+
+	_, err = Promote(store, testWorkstream, []string{marker.ID}, "docs/y.md")
+	if !errors.Is(err, ErrPromoteTargetNotFound) {
+		t.Fatalf("Promote(marker id) error = %v, want ErrPromoteTargetNotFound", err)
+	}
+}
+
+// TestPromoteRejectsMachineSpecificDoc rejects destinations that would not
+// survive leaving this machine: the log is portable, so promoted_to must be a
+// repo-relative path or a URL.
+func TestPromoteRejectsMachineSpecificDoc(t *testing.T) {
+	cases := []struct {
+		name string
+		doc  string
+		ok   bool
+	}{
+		{"unix absolute", "/Users/someone/notes/x.md", false},
+		{"home-relative", "~/notes/x.md", false},
+		{"windows drive backslash", `C:\Users\me\x.md`, false},
+		{"windows drive slash", "C:/Users/me/x.md", false},
+		{"UNC", `\\server\share\x.md`, false},
+		{"windows rooted single backslash", `\Users\me\x.md`, false},
+		{"windows drive-relative", `C:foo\bar.md`, false},
+		{"over the promoted_to cap", "docs/" + strings.Repeat("x", MaxPromotedToBytes), false},
+		{"file URL", "file:///Users/me/x.md", false},
+		{"file URL uppercase", "FILE:///Users/me/x.md", false},
+		{"repo-escaping", "docs/../../etc/x.md", false},
+		{"whitespace-only", "   ", false},
+		{"newline injection", "docs/x.md\nrefs: 01FAKE", false},
+		{"repo-relative", "docs/adr/0001.md", true},
+		{"URL", "https://github.com/acme/api/issues/42", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := NewStore(t.TempDir(), "promote-doc-repo")
+			d, err := Emit(store, testWorkstream, EmitParams{Type: KindDecision, Area: "api", Body: "chose X"})
+			if err != nil {
+				t.Fatalf("Emit: %v", err)
+			}
+			_, err = Promote(store, testWorkstream, []string{d.ID}, tc.doc)
+			if tc.ok && err != nil {
+				t.Fatalf("Promote(--to %q) = %v, want success", tc.doc, err)
+			}
+			if !tc.ok {
+				if err == nil {
+					t.Fatalf("Promote(--to %q) = nil error, want rejection", tc.doc)
+				}
+				if !errors.Is(err, ErrInvalidDoc) {
+					t.Fatalf("Promote(--to %q) error = %v, want ErrInvalidDoc", tc.doc, err)
+				}
+			}
+		})
+	}
+}
+
+// TestPromoteOriginalsUntouched pins the "nothing is lost" claim: promotion
+// appends a marker and leaves every promoted original byte-identical in the log.
+func TestPromoteOriginalsUntouched(t *testing.T) {
+	store := NewStore(t.TempDir(), "promote-untouched-repo")
+	d, err := Emit(store, testWorkstream, EmitParams{Type: KindDecision, Area: "api", Body: "the full rationale, verbatim"})
+	if err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+	before, err := store.ReadAll()
+	if err != nil {
+		t.Fatalf("ReadAll before: %v", err)
+	}
+
+	if _, err := Promote(store, testWorkstream, []string{d.ID}, "docs/x.md"); err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+	after, err := store.ReadAll()
+	if err != nil {
+		t.Fatalf("ReadAll after: %v", err)
+	}
+	if len(after) != len(before)+1 {
+		t.Fatalf("log has %d events, want %d (originals + one marker)", len(after), len(before)+1)
+	}
+	if !reflect.DeepEqual(after[0], before[0]) {
+		t.Fatalf("promoted original changed:\n before %+v\n after  %+v", before[0], after[0])
+	}
+}
+
+// TestPromoteRecoveryAfterMarkerSuperseded pins the typo-recovery path: a
+// mispointed promotion is undone by superseding the bad marker with an
+// ordinary decision, after which the target is re-promotable to the correct
+// address — and locked again once the new marker is live.
+func TestPromoteRecoveryAfterMarkerSuperseded(t *testing.T) {
+	store := NewStore(t.TempDir(), "promote-recovery-repo")
+	d, err := Emit(store, testWorkstream, EmitParams{Type: KindDecision, Area: "api", Body: "chose X"})
+	if err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+	bad, err := Promote(store, testWorkstream, []string{d.ID}, "docs/adr/007.md") // typo'd path
+	if err != nil {
+		t.Fatalf("first Promote: %v", err)
+	}
+	if _, err := Promote(store, testWorkstream, []string{d.ID}, "docs/adr/0007.md"); !errors.Is(err, ErrAlreadyPromoted) {
+		t.Fatalf("re-promote with live bad marker error = %v, want ErrAlreadyPromoted", err)
+	}
+
+	// Supersede the bad marker — the sanctioned undo.
+	if _, err := Emit(store, testWorkstream, EmitParams{Type: KindDecision, Area: "api", Refs: []string{bad.ID}, Body: "mispointed; re-promoting"}); err != nil {
+		t.Fatalf("Emit superseding decision: %v", err)
+	}
+
+	good, err := Promote(store, testWorkstream, []string{d.ID}, "docs/adr/0007.md")
+	if err != nil {
+		t.Fatalf("re-promote after superseding bad marker: %v", err)
+	}
+	if good.PromotedTo != "docs/adr/0007.md" {
+		t.Fatalf("recovered marker promoted_to = %q, want docs/adr/0007.md", good.PromotedTo)
+	}
+
+	// The new marker is live: the target is locked again.
+	if _, err := Promote(store, testWorkstream, []string{d.ID}, "docs/other.md"); !errors.Is(err, ErrAlreadyPromoted) {
+		t.Fatalf("promote after recovery error = %v, want ErrAlreadyPromoted", err)
+	}
+}
+
+// TestPromoteBatchAtomic rejects the whole batch when one target is bad and
+// writes nothing — no partial promotion.
+func TestPromoteBatchAtomic(t *testing.T) {
+	store := NewStore(t.TempDir(), "promote-atomic-repo")
+	d, err := Emit(store, testWorkstream, EmitParams{Type: KindDecision, Area: "api", Body: "chose X"})
+	if err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+	invented := mustID(t)
+
+	_, err = Promote(store, testWorkstream, []string{d.ID, invented}, "docs/x.md")
+	if !errors.Is(err, ErrPromoteTargetNotFound) {
+		t.Fatalf("Promote(good+invented) error = %v, want ErrPromoteTargetNotFound", err)
+	}
+	if got, _ := store.ReadAll(); len(got) != 1 {
+		t.Fatalf("rejected batch changed the log: %d events, want 1", len(got))
 	}
 }
 

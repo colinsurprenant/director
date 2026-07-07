@@ -5,7 +5,7 @@ in another, back to the first, sometimes a burst of parallel worktree sessions. 
 portfolio coordinated without you being the message bus. Sessions write durable coordination state
 (decisions, open loops, handoffs) to a shared append-only LOG; every new session starts from that record
 instead of from git archaeology, so re-entering a project you haven't touched in weeks picks up exactly
-where the last block parked the baton. You read deterministic projections (`status`, `brief`) and step in
+where the last block left off. You read deterministic projections (`status`, `brief`) and step in
 only where a human is actually needed.
 
 This guide walks the first run end to end, written in Claude Code terms with the Codex differences
@@ -21,9 +21,9 @@ Get the `director` binary onto your `PATH` by any of the three paths below, then
 
 ### From a release (recommended)
 
-Each tagged release publishes prebuilt binaries for macOS and Linux (amd64 and arm64) as
-`director_<tag>_<os>_<arch>.tar.gz`, plus a `checksums.txt`, on the
-[releases page](https://github.com/colinsurprenant/director/releases). Download the tarball for your
+Each tagged release publishes prebuilt binaries for macOS, Linux, and Windows (amd64 and arm64) as
+`director_<tag>_<os>_<arch>.tar.gz` (`.zip` for Windows), plus a `checksums.txt`, on the
+[releases page](https://github.com/colinsurprenant/director/releases). Download the archive for your
 platform, verify it, and put the binary on your `PATH`. For example, on an Apple Silicon Mac
 (adjust `darwin_arm64` for your platform):
 
@@ -55,6 +55,15 @@ version (e.g. `director v1.4.0`); a `go build` from a git clone prints the versi
 the checkout (a tag or pseudo-version, `+dirty` if modified); `director dev` appears only when no
 VCS metadata is available.
 
+**Windows note.** This guide, including the `director install` step above, assumes a unix-like
+environment: macOS, Linux, or Windows via [WSL](https://learn.microsoft.com/windows/wsl/), which is
+the recommended Windows setup — with the Linux binary, install and hooks work there exactly as on
+Linux. On native Windows the CLI itself works (build and tests run in CI on `windows-latest`), but
+`director install` refuses to run there: the hook shims are bash scripts, which Claude Code on
+native Windows cannot execute, so the ambient layer (session-start injection, heartbeats, boundary
+nudges) is not wired there yet. You can still use the manual verbs (`emit`, `render`, `status`, `brief`, `show`,
+`resolve`) from PowerShell.
+
 ### Wire the hooks
 
 ```bash
@@ -62,9 +71,10 @@ director install
 ```
 
 ```text
-installed Director hooks into /Users/you/.claude/settings.json
+installed Director hooks into /Users/you/.claude/settings.json (set DIRECTOR_SETTINGS_PATH to override)
   shims written to /Users/you/.claude/director/hooks (set DIRECTOR_HOOKS_DIR to override)
   commands written to /Users/you/.claude/commands/director (/director:adopt, /director:complete, /director:handoff; set DIRECTOR_COMMANDS_DIR to override)
+  binary symlinked at /Users/you/.claude/director/bin/director (hook fallback when director is not on PATH, e.g. desktop app launches)
 ```
 
 `director install` is **self-contained and idempotent**:
@@ -74,7 +84,7 @@ installed Director hooks into /Users/you/.claude/settings.json
 - It merges three hooks into `~/.claude/settings.json` (`SessionStart`, `PostToolUse`, `Stop`), each tagged
   `"_managedBy":"director"` so they coexist with GSD and any hand-rolled hooks. Re-running changes nothing.
 - It materializes the three slash commands: `/director:adopt` (informed adoption — see section 3),
-  `/director:handoff` (pause a workstream, park the baton) and `/director:complete` (close out a finished,
+  `/director:handoff` (pause a workstream, record the resume point) and `/director:complete` (close out a finished,
   merged workstream). More on the boundary pair in section 5.
 
 Verify it took:
@@ -84,9 +94,28 @@ director status
 # (no live workstreams)        ← expected before you adopt anything / open a session
 ```
 
-> **Keep `director` on `PATH`.** The shims invoke it via `DIRECTOR_BIN` → `PATH`. If the binary isn't
-> found, the shims exit 0 (fail-safe) and coordination silently no-ops — nothing breaks, but nothing
-> coordinates. After rebuilding the binary, re-run `director install` to refresh the shims.
+> **Keep `director` on `PATH`.** With `DIRECTOR_BIN` set, the shims use it and nothing else — a
+> stale value exits 0 without ever trying `PATH` or the symlink. Unset, they fall back to `director`
+> on `PATH`, then to the symlink `install` drops next to them at `<hooks dir>/../bin/director`
+> (`~/.claude/director/bin/director` by default; a `DIRECTOR_HOOKS_DIR` override moves it too).
+> If the binary isn't found, the shims exit 0 (fail-safe) and
+> coordination silently no-ops — nothing breaks, but nothing coordinates. After rebuilding the binary,
+> re-run `director install` to refresh the shims.
+>
+> The last tier is what the install's **bin symlink** provisions, and it matters more than it looks:
+> the Claude Code **desktop app** launched from the Dock/Launchpad inherits the bare launchd `PATH`
+> (no `/opt/homebrew/bin`, `/usr/local/bin`, or `~/go/bin` —
+> [anthropics/claude-code#44649](https://github.com/anthropics/claude-code/issues/44649)), so the
+> `PATH` tier misses there even when your terminal finds `director` fine. The explicit alternative is
+> pinning the binary via `DIRECTOR_BIN` in `~/.claude/settings.json`:
+>
+> ```json
+> { "env": { "DIRECTOR_BIN": "/absolute/path/to/director" } }
+> ```
+>
+> Install never overwrites a **regular file** already sitting at the fallback path
+> (`<hooks dir>/../bin/director`) — a binary you placed there yourself stays, and the shims run it
+> as long as it is executable.
 
 ### Using OpenAI Codex?
 
@@ -116,9 +145,9 @@ The rest of this guide uses the Claude Code command names (`/director:adopt` etc
 as its `$director-*` skill twin — same command, same behavior.
 
 `director uninstall --codex` removes only the tagged entries and the three skill directories. The hook
-shims are shared between the two agents: a `--codex` uninstall leaves them for a Claude Code install,
-and the plain `director uninstall` leaves them while a Codex install still references them — so
-uninstalling one agent never silently breaks the other.
+shims are shared between the two agents: either uninstall form leaves them in place while the other
+agent's install still references them, and reclaims them once neither does — so uninstalling one agent
+never silently breaks the other, and uninstalling the last one leaves no shim files behind.
 
 ### Using Gemini / Antigravity CLI?
 
@@ -241,8 +270,9 @@ director show <ulid>      # read any event in full first — digest lines are ca
 
 ## 5. How the model uses Director
 
-You rarely run `emit`/`resolve` by hand — **the session does**, guided by
-[`../skills/director/SKILL.md`](../skills/director/SKILL.md). The protocol teaches two habits no hook can
+You rarely run `emit`/`resolve` by hand — **the session does**, guided by the coordination protocol the
+SessionStart hook injects into every managed-repo session (its readable source is
+[`../skills/director/SKILL.md`](../skills/director/SKILL.md)). The protocol teaches two habits no hook can
 perform for the model:
 
 - **Continuous boundary-flush** — emit durable state *as work happens* (a `decision` the moment it's made,
@@ -250,6 +280,10 @@ perform for the model:
   end. Transient working state survives a compaction only if it was written to the LOG during a turn.
 - **Ground Truth** — treat the injected CHARTER + digest as authoritative: build on it, don't re-derive it
   by re-scanning the repo or re-reading the log.
+
+This is what those habits look like live, with the model's actual `director` calls visible:
+
+![Director demo: a session emits decisions, open items, and a handoff as it works; three weeks later a cold session rehydrates from the log with brief and status, then closes the loop with resolve](assets/director-demo.gif)
 
 There are exactly four event kinds: `decision`, `open-item` (the home for "documented, not dropped";
 `--risk escalate` is the "needs a human" subset that surfaces in `status`), `handoff`, and `note`. There is
@@ -260,7 +294,7 @@ At block boundaries, two slash commands (installed by `director install`) mark w
 
 - **`/director:handoff`** when pausing work you will resume. It flushes pending decisions and open items
   and emits a self-sufficient handoff: a checkpoint written to your future self, so the next block (even
-  weeks later) rehydrates from the parked baton instead of re-deriving state.
+  weeks later) rehydrates from the parked handoff instead of re-deriving state.
 - **`/director:complete`** when a workstream is done and merged. It closes out the workstream's open loops
   with your confirmation and archives its fleet row. Nothing auto-resolves; close-out is human-confirmed.
   It also takes a workstream id — `/director:complete <id>` — to close out a *dead sibling*: a worktree
@@ -278,7 +312,8 @@ what `brief` shows and what the next session starts from.
 | Symptom | Cause & fix |
 |---|---|
 | **Hooks don't seem to fire** | Confirm `director install` ran and `director` is on `PATH` (`command -v director`). Check the shims exist: `ls $DIRECTOR_HOOKS_DIR` (default `~/.claude/director/hooks`). Re-run `director install` after moving/rebuilding the binary. |
-| **Coordination silently does nothing** | The shims fail-safe to exit 0 when the binary is missing. Ensure `DIRECTOR_BIN` (or `PATH`) resolves `director`. |
+| **Coordination silently does nothing** | The shims fail-safe to exit 0 when the binary is missing. Ensure `DIRECTOR_BIN` (or `PATH`, or the `~/.claude/director/bin/director` symlink a re-run of `director install` refreshes) resolves `director`. |
+| **Works in the terminal, dead in the desktop app** | Dock/Launchpad launches get the bare launchd `PATH` ([anthropics/claude-code#44649](https://github.com/anthropics/claude-code/issues/44649)), so the shims' `PATH` tier misses. Re-run `director install` (it drops the `~/.claude/director/bin/director` symlink the shims fall back to), or pin the binary explicitly with `DIRECTOR_BIN` via `"env"` in `settings.json`. |
 | **State is in the wrong place** | All cross-repo state lives under `DIRECTOR_HUB` (default `~/.director`). If you set it for one command, set it for all — sessions and your CLI must agree. |
 | **A hook seems broken** | Hooks are fail-safe by design — a failure never blocks a session, it logs. Read `$DIRECTOR_HUB/health/hook.log` (one line per outcome, `ok=false` marks failures). |
 | **`director _hook ...`** | Internal — invoked by the shims, never run by hand. |

@@ -24,8 +24,7 @@ func registerAt(t *testing.T, hub, ws, uuid, handle string, hb time.Time) {
 		Workstream: ws,
 		UUID:       uuid,
 		Handle:     handle,
-		Heartbeat:  hb.Format(heartbeatLayout),
-	}); err != nil {
+	}, hb); err != nil {
 		t.Fatalf("Register(%s/%s): %v", ws, uuid, err)
 	}
 }
@@ -156,6 +155,84 @@ func TestLivenessCollapsesByWorkstream(t *testing.T) {
 	if got.State != StateActive {
 		t.Errorf("collapsed state = %q, want %q (newest wins)", got.State, StateActive)
 	}
+	// Only the fresh row counts as concurrently active — the stale one is a
+	// leftover, not a live session, so no concurrency signal fires here.
+	if got.ActiveSessions != 1 {
+		t.Errorf("active sessions = %d, want 1 (stale rows are not concurrent)", got.ActiveSessions)
+	}
+}
+
+// TestLivenessCountsActiveSessions: two rows heartbeating within the idle TTL
+// read as 2 concurrently-active sessions — the same-checkout collision signal —
+// while a third stale row still counts toward Sessions only.
+func TestLivenessCountsActiveSessions(t *testing.T) {
+	hub := t.TempDir()
+	now := fixedTime
+	ws := "ws-shared"
+	registerAt(t, hub, ws, "u-a", "@a", now.Add(-1*time.Minute))
+	registerAt(t, hub, ws, "u-b", "@b", now.Add(-2*time.Minute))
+	registerAt(t, hub, ws, "u-stale", "@stale", now.Add(-20*time.Minute))
+
+	got := onlyEntry(t, hub, now, alive)
+	if got.Sessions != 3 {
+		t.Errorf("sessions = %d, want 3", got.Sessions)
+	}
+	if got.ActiveSessions != 2 {
+		t.Errorf("active sessions = %d, want 2", got.ActiveSessions)
+	}
+}
+
+// TestLivenessActiveSessionsZeroWhenAllStale: leftovers from ungraceful exits
+// (rows never archived) age out of the concurrency signal even though the rows
+// still exist — Sessions counts them, ActiveSessions must read 0, never 2.
+func TestLivenessActiveSessionsZeroWhenAllStale(t *testing.T) {
+	hub := t.TempDir()
+	now := fixedTime
+	registerAt(t, hub, "ws-stale", "u-a", "@a", now.Add(-10*time.Minute))
+	registerAt(t, hub, "ws-stale", "u-b", "@b", now.Add(-20*time.Minute))
+
+	got := onlyEntry(t, hub, now, alive)
+	if got.Sessions != 2 {
+		t.Errorf("sessions = %d, want 2", got.Sessions)
+	}
+	if got.ActiveSessions != 0 {
+		t.Errorf("active sessions = %d, want 0 (stale leftovers must not signal concurrency)", got.ActiveSessions)
+	}
+}
+
+// TestLiveSessions locks the per-row view behind the SessionStart concurrency
+// hint: only rows of the asked workstream with a heartbeat younger than the
+// window, uuids sorted, corrupt rows skipped, missing fleet dir empty-not-error.
+func TestLiveSessions(t *testing.T) {
+	hub := t.TempDir()
+	now := fixedTime
+	registerAt(t, hub, "ws-shared", "u-b", "@b", now.Add(-1*time.Minute))
+	registerAt(t, hub, "ws-shared", "u-a", "@a", now.Add(-2*time.Minute))
+	registerAt(t, hub, "ws-shared", "u-stale", "@stale", now.Add(-20*time.Minute))
+	registerAt(t, hub, "ws-other", "u-o", "@o", now.Add(-1*time.Minute))
+	// A corrupt row must be skipped, never fail the listing.
+	if err := os.WriteFile(filepath.Join(hub, "fleet", "corrupt.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// So must a well-formed row whose heartbeat doesn't parse — the other
+	// lenient-skip branch.
+	if err := os.WriteFile(filepath.Join(hub, "fleet", "badhb.json"),
+		[]byte(`{"workstream":"ws-shared","uuid":"u-badhb","heartbeat":"not-a-time"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := LiveSessions(hub, "ws-shared", now, idleTTL)
+	if err != nil {
+		t.Fatalf("LiveSessions: %v", err)
+	}
+	if len(got) != 2 || got[0] != "u-a" || got[1] != "u-b" {
+		t.Errorf("live sessions = %v, want [u-a u-b] (fresh rows of ws-shared only, sorted)", got)
+	}
+
+	empty, err := LiveSessions(t.TempDir(), "ws-shared", now, idleTTL)
+	if err != nil || len(empty) != 0 {
+		t.Errorf("missing fleet dir should yield an empty result, got %v, %v", empty, err)
+	}
 }
 
 func TestLivenessSortedByWorkstream(t *testing.T) {
@@ -237,5 +314,26 @@ func TestLivenessSkipsCorruptRow(t *testing.T) {
 	}
 	if skipped != 2 {
 		t.Errorf("skipped = %d, want 2 (the two corrupt rows)", skipped)
+	}
+}
+
+// TestListFleetPathAsFileErrors: a <hub>/fleet that exists as a regular FILE is
+// a broken surface, not an empty fleet — List must error so the failure can land
+// in health/ instead of silently blinding the cockpit. Pinned as its own test
+// because the not-exist classification of ReadDir's error differs across
+// platforms (unix ENOTDIR vs Windows ERROR_PATH_NOT_FOUND): only a genuinely
+// absent dir may read as empty.
+func TestListFleetPathAsFileErrors(t *testing.T) {
+	hub := t.TempDir()
+	if err := os.WriteFile(filepath.Join(hub, fleetDir), []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := List(hub, fixedTime, idleTTL, dormantTTL, alive); err == nil {
+		t.Fatal("List on a fleet path that is a regular file must error, not read as an empty fleet")
+	}
+	// LiveSessions shares the surface and the contract: its caller fails open
+	// into health/, which a silent empty result would bypass.
+	if _, err := LiveSessions(hub, "any", fixedTime, idleTTL); err == nil {
+		t.Fatal("LiveSessions on a fleet path that is a regular file must error, not read as empty")
 	}
 }

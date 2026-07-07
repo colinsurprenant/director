@@ -1329,11 +1329,12 @@ func stopInput(cwd, transcript string, stopHookActive bool) string {
 }
 
 // TestSessionStartBudgetDegradesDeterministically locks the §15.5 self-measure:
-// a log whose line-capped digest still pushes the payload over the injection
-// budget degrades to DigestCompact — decisions collapse to a count+pointer line,
-// open-items and handoffs survive untouched — and the overflow lands in health/
-// as a grooming signal. The harness's own demotion threshold must never be the
-// first thing that notices growth.
+// a log whose line-capped digest pushes the payload over the injection budget
+// degrades down the ladder's FIRST rung — older decisions collapse to a
+// count+pointer line, the newest survive as index lines, open-items and
+// handoffs survive untouched — and the overflow lands in health/ as a grooming
+// signal. The harness's own demotion threshold must never be the first thing
+// that notices growth.
 func TestSessionStartBudgetDegradesDeterministically(t *testing.T) {
 	hub := t.TempDir()
 	repo := gitRepo(t, "widget", "main")
@@ -1346,6 +1347,15 @@ func TestSessionStartBudgetDegradesDeterministically(t *testing.T) {
 			t.Fatalf("seed decision %d: %v", i, err)
 		}
 	}
+	// A handoff BETWEEN the bulk and the newest decision anchors the recency
+	// band: the one decision after it is post-resume-point news and must
+	// survive the elision; the 120 before it must not.
+	if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindHandoff, Area: "hooks", Body: "resume point"}); err != nil {
+		t.Fatalf("seed handoff: %v", err)
+	}
+	if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindDecision, Area: "hooks", Body: "the sibling course correction must survive"}); err != nil {
+		t.Fatalf("seed post-handoff decision: %v", err)
+	}
 	if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindOpenItem, Area: "sync", Body: "the open loop must survive degradation"}); err != nil {
 		t.Fatalf("seed open-item: %v", err)
 	}
@@ -1357,11 +1367,14 @@ func TestSessionStartBudgetDegradesDeterministically(t *testing.T) {
 	}
 	ctx := injectedContext(t, out.String())
 
-	if !strings.Contains(ctx, "120 active decisions elided for size") {
-		t.Errorf("over-budget injection should collapse decisions with the count:\n%.2000s", ctx)
+	if !strings.Contains(ctx, "(120 older decision(s) elided for size — the newest 1 follow") {
+		t.Errorf("over-budget injection should elide only the pre-handoff decisions:\n%.2000s", ctx)
+	}
+	if !strings.Contains(ctx, "the sibling course correction must survive") {
+		t.Errorf("a decision newer than the workstream's latest handoff must survive degradation:\n%.2000s", ctx)
 	}
 	if strings.Contains(ctx, "rationale rationale") {
-		t.Errorf("collapsed injection must not carry decision bodies")
+		t.Errorf("elided injection must not carry pre-handoff decision bodies")
 	}
 	if !strings.Contains(ctx, "the open loop must survive degradation") {
 		t.Errorf("degradation must never eat the open-set:\n%.2000s", ctx)
@@ -1370,13 +1383,209 @@ func TestSessionStartBudgetDegradesDeterministically(t *testing.T) {
 		t.Errorf("degraded payload still over budget: %dB > %dB", len(ctx), injectionBudgetBytes)
 	}
 	health := readHealth(t, hub)
-	if !strings.Contains(health, "injection budget") {
-		t.Errorf("budget overflow should be health-logged as a grooming signal, got:\n%s", health)
+	if !strings.Contains(health, "older decisions collapsed to count+pointer, newest 1 kept") {
+		t.Errorf("budget overflow should be health-logged naming the first rung with its kept count, got:\n%s", health)
 	}
-	// Pin WHICH branch ran: the compact fallback must suffice here — the
-	// last-resort "actionable sections alone are over" sentinel firing would
-	// mean the fixture (or the degradation) is not what this test believes.
+	// Pin WHICH rung ran: the kept-newest band must suffice here — rung 2 (ALL
+	// collapsed) or the last-resort "actionable sections alone are over"
+	// sentinel firing would mean the fixture (or the ladder) is not what this
+	// test believes.
+	if strings.Contains(health, "ALL decisions collapsed") || strings.Contains(health, "STILL over budget") {
+		t.Errorf("fixture should land on the first rung only:\n%s", health)
+	}
+}
+
+// TestSessionStartBudgetSkipsEmptyKeptBand: when the workstream's latest
+// handoff postdates every decision (the common shape — the handoff comes last),
+// rung 1 would keep nothing and degenerate byte-for-byte to the full collapse.
+// The hook must take (and health-log) rung 2 directly — never claim a kept
+// band that is empty (Copilot review on PR #21).
+func TestSessionStartBudgetSkipsEmptyKeptBand(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+
+	store := event.NewStore(hub, ws.RepoKey)
+	body := strings.Repeat("rationale ", 30)
+	for i := 0; i < 120; i++ {
+		if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindDecision, Area: "hooks", Body: body}); err != nil {
+			t.Fatalf("seed decision %d: %v", i, err)
+		}
+	}
+	// The handoff lands AFTER every decision: the anchor is above them all, so
+	// zero decisions are post-resume-point news.
+	if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindHandoff, Area: "hooks", Body: "resume point"}); err != nil {
+		t.Fatalf("seed handoff: %v", err)
+	}
+
+	in := `{"session_id":"s-real","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	var out bytes.Buffer
+	if code := Dispatch(EventSessionStart, strings.NewReader(in), &out, hub); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	ctx := injectedContext(t, out.String())
+
+	if !strings.Contains(ctx, "(120 active decisions elided for size") {
+		t.Errorf("empty kept band should inject the full-collapse line:\n%.2000s", ctx)
+	}
+	if len(ctx) > injectionBudgetBytes {
+		t.Errorf("collapsed payload still over budget: %dB > %dB", len(ctx), injectionBudgetBytes)
+	}
+	health := readHealth(t, hub)
+	if !strings.Contains(health, "ALL decisions collapsed to count+pointer") {
+		t.Errorf("empty kept band should be health-logged as rung 2, got:\n%s", health)
+	}
+	if strings.Contains(health, "kept") {
+		t.Errorf("health must not claim a kept band when nothing was kept:\n%s", health)
+	}
+}
+
+// TestSessionStartBudgetCollapsesAllWhenKeptBandOverflows locks the ladder's
+// SECOND rung: when even the kept-newest band leaves the payload over budget,
+// every decision collapses to the count+pointer line — and the actionable
+// sections are still never eaten.
+func TestSessionStartBudgetCollapsesAllWhenKeptBandOverflows(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+
+	store := event.NewStore(hub, ws.RepoKey)
+	// Bulk the ACTIONABLE section close to the budget so rung 1's ~2KB kept
+	// band (10 × ~200B lines) still overflows while rung 2 fits: ~40 open-items
+	// × ~300-char bodies ≈ 13KB of open-set + ~2.5KB fixed blocks.
+	//
+	// Measured margins (2026-07-06): full ≈ 20.8KB, rung 1 ≈ 17.9KB (~1.5KB
+	// over, as required), rung 2 ≈ 15.9KB — only ~512B of headroom under the
+	// 16,384B budget. If this test starts failing with "STILL over budget"
+	// after a fixed block (emitProtocol, preamble, banner) grows, the FIXTURE
+	// has drifted out of its window — re-tune the open-item count downward;
+	// don't suspect the ladder.
+	openBody := strings.Repeat("open loop ", 29) // ~290 chars, under the 300-rune cap
+	for i := 0; i < 40; i++ {
+		if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindOpenItem, Area: "sync", Body: openBody}); err != nil {
+			t.Fatalf("seed open-item %d: %v", i, err)
+		}
+	}
+	body := strings.Repeat("rationale ", 30)
+	for i := 0; i < 25; i++ { // all newer than any handoff → all candidates for the kept band
+		if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindDecision, Area: "hooks", Body: body}); err != nil {
+			t.Fatalf("seed decision %d: %v", i, err)
+		}
+	}
+
+	in := `{"session_id":"s-real","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	var out bytes.Buffer
+	if code := Dispatch(EventSessionStart, strings.NewReader(in), &out, hub); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	ctx := injectedContext(t, out.String())
+
+	if !strings.Contains(ctx, "25 active decisions elided for size") {
+		t.Errorf("rung 2 should collapse ALL decisions with the count:\n%.2000s", ctx)
+	}
+	if strings.Contains(ctx, "rationale rationale") {
+		t.Errorf("rung 2 must not carry any decision bodies")
+	}
+	if !strings.Contains(ctx, "open loop open loop") {
+		t.Errorf("degradation must never eat the open-set:\n%.2000s", ctx)
+	}
+	if len(ctx) > injectionBudgetBytes {
+		t.Errorf("rung-2 payload still over budget: %dB > %dB", len(ctx), injectionBudgetBytes)
+	}
+	health := readHealth(t, hub)
+	if !strings.Contains(health, "ALL decisions collapsed to count+pointer") {
+		t.Errorf("rung 2 should be health-logged by name, got:\n%s", health)
+	}
 	if strings.Contains(health, "STILL over budget") {
-		t.Errorf("fixture should overflow on decisions only, not on actionable sections:\n%s", health)
+		t.Errorf("fixture should fit once all decisions collapse:\n%s", health)
+	}
+}
+
+// TestSessionStartConcurrentSessionNote: a SECOND live session starting on the
+// SAME checkout gets the ⚠ marker on its acknowledgment banner (the human-visible
+// signal, at the exact moment the collision becomes true) plus the model-facing
+// note explaining that handoffs interleave and the resume point may be a
+// sibling's — riding the head, before the protocol. The first session, alone at
+// its start, gets neither.
+func TestSessionStartConcurrentSessionNote(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+
+	// Adopted-repo gate: the banner/protocol blocks only inject for a managed repo.
+	store := event.NewStore(hub, ws.RepoKey)
+	if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindNote, Area: "x", Body: "managed"}); err != nil {
+		t.Fatalf("seed note: %v", err)
+	}
+
+	// First session: no sibling rows yet — no marker, no note.
+	inA := `{"session_id":"s-one","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	var outA bytes.Buffer
+	if code := Dispatch(EventSessionStart, strings.NewReader(inA), &outA, hub); code != 0 {
+		t.Fatalf("first session start exit = %d", code)
+	}
+	ctxA := injectedContext(t, outA.String())
+	if strings.Contains(ctxA, "other live session(s)") || strings.Contains(ctxA, "## Concurrent sessions") {
+		t.Errorf("a lone session must not get the concurrency signal:\n%.2000s", ctxA)
+	}
+
+	// Second session, same checkout: sees s-one's fresh row.
+	inB := `{"session_id":"s-two","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	var outB bytes.Buffer
+	if code := Dispatch(EventSessionStart, strings.NewReader(inB), &outB, hub); code != 0 {
+		t.Fatalf("second session start exit = %d", code)
+	}
+	ctxB := injectedContext(t, outB.String())
+	if !strings.Contains(ctxB, "· ⚠ 1 other live session(s) on this checkout") {
+		t.Errorf("second session's banner should carry the ⚠ concurrency marker:\n%.2000s", ctxB)
+	}
+	if !strings.Contains(ctxB, "## Concurrent sessions on this checkout") {
+		t.Errorf("second session should get the model-facing concurrency note:\n%.2000s", ctxB)
+	}
+	if !strings.Contains(ctxB, "suggest a separate worktree") {
+		t.Errorf("the note should nudge toward the worktree convention:\n%.2000s", ctxB)
+	}
+	// Head placement: the note changes how everything below it must be read, so
+	// it rides between the banner and the protocol.
+	b, c, p := strings.Index(ctxB, "## Acknowledge on entry"), strings.Index(ctxB, "## Concurrent sessions"), strings.Index(ctxB, "## Director protocol")
+	if b < 0 || c < 0 || p < 0 || !(b < c && c < p) {
+		t.Errorf("concurrency note must sit between banner and protocol (banner@%d, note@%d, protocol@%d):\n%.2000s", b, c, p, ctxB)
+	}
+}
+
+// TestSessionStartConcurrentNoteForThrowaway locks the uuid-exclusion path for a
+// session that never registers a row: a throwaway (no session_id — a subagent)
+// falls back to the manual uuid for exclusion, which matches no row, so a real
+// session's fresh row still counts as a sibling and the note appears. Deliberate:
+// the throwaway inherits the same working tree, so the interleave warning is
+// true for it too. (Corollary, accepted: a hand-run CLI registration under the
+// manual uuid would be excluded here — the fallback ids collide by design.)
+func TestSessionStartConcurrentNoteForThrowaway(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "") // pin the manual fallback, whatever ran the suite
+
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+
+	store := event.NewStore(hub, ws.RepoKey)
+	if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindNote, Area: "x", Body: "managed"}); err != nil {
+		t.Fatalf("seed note: %v", err)
+	}
+
+	// A real session registers its row first.
+	inA := `{"session_id":"s-real","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	if code := Dispatch(EventSessionStart, strings.NewReader(inA), &bytes.Buffer{}, hub); code != 0 {
+		t.Fatalf("real session start exit = %d", code)
+	}
+
+	// The throwaway starts on the same checkout: no session_id in the payload.
+	inB := `{"cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	var outB bytes.Buffer
+	if code := Dispatch(EventSessionStart, strings.NewReader(inB), &outB, hub); code != 0 {
+		t.Fatalf("throwaway session start exit = %d", code)
+	}
+	ctxB := injectedContext(t, outB.String())
+	if !strings.Contains(ctxB, "· ⚠ 1 other live session(s) on this checkout") {
+		t.Errorf("throwaway should see the real session as a sibling:\n%.2000s", ctxB)
 	}
 }

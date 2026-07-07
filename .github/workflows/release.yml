@@ -8,7 +8,28 @@ permissions:
   contents: write
 
 jobs:
+  # The windows twin of ci.yml's windows job, run at tag time: windows binaries
+  # are published below, so a release must never ship what windows tests didn't
+  # pass. main is normally already windows-green via PR CI, but nothing else
+  # enforces that on the tagged commit itself.
+  windows-gate:
+    name: "windows gate (build · test -race)"
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test -race
+        run: go test ./... -race
+
   release:
+    needs: windows-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -30,21 +51,27 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           mkdir -p dist
-          for platform in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64; do
-            GOOS="${platform%/*}" GOARCH="${platform#*/}" \
+          for platform in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
+            goos="${platform%/*}" goarch="${platform#*/}"
+            bin="director"; [ "$goos" = "windows" ] && bin="director.exe"
+            GOOS="$goos" GOARCH="$goarch" \
               go build -trimpath \
                 -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
-                -o "dist/director" ./cmd/director
-            tar -C dist -czf "dist/director_${GITHUB_REF_NAME}_${platform%/*}_${platform#*/}.tar.gz" director
-            rm dist/director
+                -o "dist/$bin" ./cmd/director
+            if [ "$goos" = "windows" ]; then
+              (cd dist && zip -q "director_${GITHUB_REF_NAME}_${goos}_${goarch}.zip" "$bin")
+            else
+              tar -C dist -czf "dist/director_${GITHUB_REF_NAME}_${goos}_${goarch}.tar.gz" "$bin"
+            fi
+            rm "dist/$bin"
           done
-          (cd dist && sha256sum *.tar.gz > checksums.txt)
+          (cd dist && sha256sum *.tar.gz *.zip > checksums.txt)
 
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/checksums.txt \
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.zip dist/checksums.txt \
             --verify-tag \
             --title "$GITHUB_REF_NAME" \
             --generate-notes

@@ -70,8 +70,16 @@ func Status(hub string, now time.Time) (string, error) {
 			if err != nil {
 				return "", err
 			}
+			// ×N marks several concurrently-live sessions sharing one workstream
+			// (same checkout — their handoffs interleave under one label); a lone
+			// session renders the bare state, so the marker only appears when the
+			// hygiene signal is real.
+			state := string(l.State)
+			if l.ActiveSessions > 1 {
+				state = fmt.Sprintf("%s ×%d", state, l.ActiveSessions)
+			}
 			fmt.Fprintf(&b, "%s · %s · %s · %s\n",
-				handleOf(l), l.State, recency(now, l.Heartbeat), blocked)
+				handleOf(l), state, recency(now, l.Heartbeat), blocked)
 		}
 	}
 	// Surface any skipped corrupt rows rather than dropping them silently (§9).

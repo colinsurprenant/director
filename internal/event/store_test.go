@@ -1,11 +1,23 @@
 package event
 
 import (
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 )
+
+// skipIfNoSymlinks skips a test that must create a symlink: on Windows that
+// needs privileges, so the symlink-classification branches are verified on unix
+// only (the regular-file branch, which needs no symlink, still runs everywhere).
+func skipIfNoSymlinks(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs privileges on Windows")
+	}
+}
 
 // newEvent builds a minimally-valid note event for store tests. It reuses the
 // mustID helper defined in event_test.go (same package).
@@ -185,6 +197,187 @@ func TestReadMissingLog(t *testing.T) {
 	}
 }
 
+// TestReadProjectPathAsFileErrors: a <hub>/projects/<repoKey> path that exists as
+// a regular FILE (where the project directory belongs) must surface as a real
+// error, never as an empty log — a silently-empty read of the system-of-record
+// is the §9/LIE-TEST failure class. Portable classification via logTrulyAbsent:
+// unix Open hits ENOTDIR and fails loud already; Windows hits
+// ERROR_PATH_NOT_FOUND and, without the parent-dir re-check, would misread it as
+// "no log yet" (twin of fleet.TestDoneWorkstreamFleetPathAsFileErrors).
+func TestReadProjectPathAsFileErrors(t *testing.T) {
+	store := NewStore(t.TempDir(), "broken-repo")
+	projectDir := filepath.Dir(store.Path()) // <hub>/projects/broken-repo
+	if err := os.MkdirAll(filepath.Dir(projectDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(projectDir, []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.ReadAll(); err == nil {
+		t.Fatal("ReadAll on a project path that is a regular file must error, not read as empty")
+	}
+	if _, err := store.Tail(5); err == nil {
+		t.Fatal("Tail on a project path that is a regular file must error, not read as empty")
+	}
+}
+
+// TestReadProjectDirWithoutLogIsEmpty guards the other side of logTrulyAbsent's
+// parent-dir re-check: when the project directory exists but the log file has
+// not been written yet, the read is empty, not an error. A real, empty project
+// must not be misclassified as a broken surface.
+func TestReadProjectDirWithoutLogIsEmpty(t *testing.T) {
+	store := NewStore(t.TempDir(), "empty-project")
+	if err := os.MkdirAll(filepath.Dir(store.Path()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	all, err := store.ReadAll()
+	if err != nil {
+		t.Fatalf("ReadAll on an existing-but-empty project dir: %v", err)
+	}
+	if len(all) != 0 {
+		t.Fatalf("ReadAll returned %d events, want 0", len(all))
+	}
+}
+
+// TestReadProjectPathAsDanglingSymlinkErrors: a <hub>/projects/<repoKey> that is
+// a symlink to a nonexistent target is a broken surface, not an absent log —
+// it must error, never read as empty. os.Stat follows the link and reports
+// not-exist; logTrulyAbsent's Lstat tiebreak keeps it failing loud (mirroring
+// fleet.dirTrulyAbsent's dangling-symlink stance).
+func TestReadProjectPathAsDanglingSymlinkErrors(t *testing.T) {
+	skipIfNoSymlinks(t)
+	store := NewStore(t.TempDir(), "dangling-repo")
+	projectDir := filepath.Dir(store.Path())
+	if err := os.MkdirAll(filepath.Dir(projectDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(t.TempDir(), "gone"), projectDir); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.ReadAll(); err == nil {
+		t.Fatal("ReadAll on a project path that is a dangling symlink must error, not read as empty")
+	}
+	if _, err := store.Tail(5); err == nil {
+		t.Fatal("Tail on a project path that is a dangling symlink must error, not read as empty")
+	}
+}
+
+// TestReadProjectPathAsSymlinkedDirIsEmpty guards the valid-symlink branch: a
+// project dir reached through a symlink to a REAL, empty directory is a fresh
+// project and reads empty, not an error — the case a naive Lstat classification
+// would wrongly fail loud.
+func TestReadProjectPathAsSymlinkedDirIsEmpty(t *testing.T) {
+	skipIfNoSymlinks(t)
+	store := NewStore(t.TempDir(), "symlinked-repo")
+	projectDir := filepath.Dir(store.Path())
+	if err := os.MkdirAll(filepath.Dir(projectDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), projectDir); err != nil {
+		t.Fatal(err)
+	}
+
+	all, err := store.ReadAll()
+	if err != nil {
+		t.Fatalf("ReadAll through a symlinked project dir: %v", err)
+	}
+	if len(all) != 0 {
+		t.Fatalf("ReadAll returned %d events, want 0", len(all))
+	}
+}
+
+// TestReadLogFileAsDanglingSymlinkErrors: the log file itself being a symlink to
+// a nonexistent target is a broken surface, not an absent log. Open follows the
+// link to a missing target (not-exist) and the parent is a real directory, so
+// logTrulyAbsent must Lstat the log path itself to catch the dangling link and
+// fail loud — parity with fleet.dirTrulyAbsent, which Lstats its exact target.
+func TestReadLogFileAsDanglingSymlinkErrors(t *testing.T) {
+	skipIfNoSymlinks(t)
+	store := NewStore(t.TempDir(), "dangling-log-repo")
+	logPath := store.Path()
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(t.TempDir(), "gone"), logPath); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.ReadAll(); err == nil {
+		t.Fatal("ReadAll on a log file that is a dangling symlink must error, not read as empty")
+	}
+	if _, err := store.Tail(5); err == nil {
+		t.Fatal("Tail on a log file that is a dangling symlink must error, not read as empty")
+	}
+}
+
+// TestReadAncestorAsFileErrors: a broken component ABOVE the project dir — here
+// <hub>/projects existing as a regular file — must fail loud, not read as empty.
+// logTrulyAbsent walks ancestors rather than checking only the immediate parent:
+// unix fails loud at Open (ENOTDIR), but on Windows every broken ancestor
+// collapses to ERROR_PATH_NOT_FOUND, so a one-level check would read the broken
+// hub as an empty log.
+func TestReadAncestorAsFileErrors(t *testing.T) {
+	hub := t.TempDir()
+	store := NewStore(hub, "repo")
+	projectsDir := filepath.Dir(filepath.Dir(store.Path())) // <hub>/projects
+	if err := os.WriteFile(projectsDir, []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.ReadAll(); err == nil {
+		t.Fatal("ReadAll with an ancestor that is a regular file must error, not read as empty")
+	}
+	if _, err := store.Tail(5); err == nil {
+		t.Fatal("Tail with an ancestor that is a regular file must error, not read as empty")
+	}
+}
+
+// TestReadAncestorAsDanglingSymlinkErrors: an ancestor (<hub>/projects) that is a
+// symlink to a missing target is a broken surface. Open and both re-checks
+// report not-exist because the dangling ancestor cannot be traversed, so the
+// ancestor walk must find the dangling link via Lstat at its own level and fail
+// loud rather than folding it into "absent".
+func TestReadAncestorAsDanglingSymlinkErrors(t *testing.T) {
+	skipIfNoSymlinks(t)
+	hub := t.TempDir()
+	store := NewStore(hub, "repo")
+	projectsDir := filepath.Dir(filepath.Dir(store.Path())) // <hub>/projects
+	if err := os.Symlink(filepath.Join(t.TempDir(), "gone"), projectsDir); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.ReadAll(); err == nil {
+		t.Fatal("ReadAll with a dangling-symlink ancestor must error, not read as empty")
+	}
+	if _, err := store.Tail(5); err == nil {
+		t.Fatal("Tail with a dangling-symlink ancestor must error, not read as empty")
+	}
+}
+
+// TestReadAncestorAsSymlinkedDirIsEmpty guards the valid side of the ancestor
+// walk: an ancestor reached through a symlink to a REAL directory is fine, and a
+// genuinely-absent log below it reads empty, not an error.
+func TestReadAncestorAsSymlinkedDirIsEmpty(t *testing.T) {
+	skipIfNoSymlinks(t)
+	hub := t.TempDir()
+	store := NewStore(hub, "repo")
+	projectsDir := filepath.Dir(filepath.Dir(store.Path())) // <hub>/projects
+	if err := os.Symlink(t.TempDir(), projectsDir); err != nil {
+		t.Fatal(err)
+	}
+
+	all, err := store.ReadAll()
+	if err != nil {
+		t.Fatalf("ReadAll through a symlinked ancestor dir: %v", err)
+	}
+	if len(all) != 0 {
+		t.Fatalf("ReadAll returned %d events, want 0", len(all))
+	}
+}
+
 // TestAppendRejectsInvalid confirms the store validates before writing: an
 // invalid event must surface the error and leave the log empty (no partial line).
 func TestAppendRejectsInvalid(t *testing.T) {
@@ -234,4 +427,123 @@ func TestAppendBodySizeBound(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("over-cap body must not be written: log has %d events, want 1", len(got))
 	}
+}
+
+// TestAppendRejectsOversizedLine pins the writer/reader contract: a line the
+// scanner would reject (> maxLineBytes) is refused at Append instead of being
+// written — one oversized line would otherwise brick every projection over the
+// log. Field caps make this unreachable via prose; unbounded refs are the vector.
+func TestAppendRejectsOversizedLine(t *testing.T) {
+	store := NewStore(t.TempDir(), "oversized-repo")
+	one := mustID(t)
+	refs := make([]string, 45000) // ~1.2 MB of refs on one line
+	for i := range refs {
+		refs[i] = one
+	}
+	ev := Event{
+		ID: mustID(t), SchemaVersion: SchemaVersion, Type: KindDecision,
+		Workstream: "ws1", Refs: refs, Body: "oversized",
+	}
+	if err := ev.Validate(); err != nil {
+		t.Fatalf("Validate: %v (the event itself is structurally valid; only the line is too long)", err)
+	}
+
+	if err := store.Append(ev); err == nil {
+		t.Fatal("Append(oversized) = nil error, want refusal")
+	}
+	got, err := store.ReadAll()
+	if err != nil {
+		t.Fatalf("ReadAll after refused append: %v — the log must stay readable", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("refused append still wrote %d events, want 0", len(got))
+	}
+}
+
+// TestAppendLineLimitBoundary pins the exact writer/reader boundary: a framed
+// line (JSON + '\n') of exactly maxLineBytes is the largest the scanner can
+// tokenize mid-file — the buffer must hold the JSON AND its newline to find the
+// token — so Append accepts exactly that and refuses one byte more. This is the
+// contract TestAppendRejectsOversizedLine asserts at scale, pinned at the edge.
+func TestAppendLineLimitBoundary(t *testing.T) {
+	build := func(t *testing.T, framedLen int) Event {
+		t.Helper()
+		ref := mustID(t)
+		ev := Event{
+			ID: mustID(t), SchemaVersion: SchemaVersion, Type: KindDecision,
+			Workstream: "ws1", Body: "",
+		}
+		// Grow via refs to within a body's reach of the target, then land the
+		// exact framed length with the body (1 byte per 'x', no JSON escaping).
+		probe, err := Marshal(ev)
+		if err != nil {
+			t.Fatalf("Marshal probe: %v", err)
+		}
+		perRef := len(ref) + len(`"",`)
+		refsBudget := framedLen - len(probe) - MaxBodyBytes/2
+		nRefs := refsBudget/perRef + 1
+		ev.Refs = make([]string, nRefs)
+		for i := range ev.Refs {
+			ev.Refs[i] = ref
+		}
+		withRefs, err := Marshal(ev)
+		if err != nil {
+			t.Fatalf("Marshal with refs: %v", err)
+		}
+		// Body is omitempty, so adding it costs field scaffolding beyond the
+		// payload bytes — measure the overhead instead of assuming it.
+		ev.Body = "x"
+		withOne, err := Marshal(ev)
+		if err != nil {
+			t.Fatalf("Marshal with 1-byte body: %v", err)
+		}
+		overhead := len(withOne) - len(withRefs) - 1
+		pad := framedLen - 1 - len(withRefs) - overhead // -1 for the '\n' Append adds
+		if pad < 1 || pad > MaxBodyBytes {
+			t.Fatalf("test arithmetic off: pad = %d", pad)
+		}
+		ev.Body = strings.Repeat("x", pad)
+		framed, err := Marshal(ev)
+		if err != nil {
+			t.Fatalf("Marshal padded: %v", err)
+		}
+		if got := len(framed) + 1; got != framedLen {
+			t.Fatalf("built framed length %d, want %d", got, framedLen)
+		}
+		if err := ev.Validate(); err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+		return ev
+	}
+
+	t.Run("exactly at the limit round-trips", func(t *testing.T) {
+		store := NewStore(t.TempDir(), "boundary-ok-repo")
+		ev := build(t, maxLineBytes)
+		if err := store.Append(ev); err != nil {
+			t.Fatalf("Append(at limit) = %v, want success", err)
+		}
+		// A second, ordinary event proves the scanner tokenizes PAST the
+		// max-size line mid-file, not just up to it.
+		if err := store.Append(newEvent(t, "after the big one")); err != nil {
+			t.Fatalf("Append(follow-up) = %v", err)
+		}
+		got, err := store.ReadAll()
+		if err != nil {
+			t.Fatalf("ReadAll: %v", err)
+		}
+		if len(got) != 2 || got[0].ID != ev.ID {
+			t.Fatalf("read %d events, want 2 with the big line first", len(got))
+		}
+	})
+
+	t.Run("one byte over is refused", func(t *testing.T) {
+		store := NewStore(t.TempDir(), "boundary-over-repo")
+		ev := build(t, maxLineBytes+1)
+		if err := store.Append(ev); err == nil {
+			t.Fatal("Append(one over) = nil error, want refusal")
+		}
+		if got, _ := store.ReadAll(); len(got) != 0 {
+			t.Fatalf("refused append wrote %d events, want 0", len(got))
+		}
+	})
 }

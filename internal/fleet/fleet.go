@@ -57,16 +57,15 @@ type Row struct {
 const StatusDone = "done"
 
 // Register creates or refreshes the row file for row's (workstream, uuid),
-// stamping its heartbeat from row.Heartbeat. The caller fills Workstream, UUID,
-// Handle, and Heartbeat; an empty Heartbeat is rejected so a row is never
-// written without the freshness signal liveness depends on.
-func Register(hub string, row Row) error {
+// stamping its heartbeat from now. The caller fills Workstream, UUID, Handle,
+// and the identity fields; the heartbeat is stamped here — like Heartbeat and
+// archiveRow, the write boundary formats the timestamp (normalized to UTC), so
+// no caller can produce a mixed-offset or malformed heartbeat.
+func Register(hub string, row Row, now time.Time) error {
 	if row.Workstream == "" || row.UUID == "" {
 		return fmt.Errorf("fleet: register requires workstream and uuid")
 	}
-	if row.Heartbeat == "" {
-		return fmt.Errorf("fleet: register requires a heartbeat")
-	}
+	row.Heartbeat = now.UTC().Format(heartbeatLayout)
 	dir := filepath.Join(hub, fleetDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("fleet: create fleet dir: %w", err)
@@ -159,10 +158,10 @@ func DoneWorkstream(hub, workstream string, now time.Time) (int, error) {
 	}
 	dir := filepath.Join(hub, fleetDir)
 	files, err := os.ReadDir(dir)
-	if os.IsNotExist(err) {
-		return 0, ErrRowNotFound
-	}
 	if err != nil {
+		if dirTrulyAbsent(dir, err) {
+			return 0, ErrRowNotFound
+		}
 		return 0, fmt.Errorf("fleet: read fleet dir: %w", err)
 	}
 	archived := 0
@@ -245,6 +244,24 @@ func readRow(path string) (Row, error) {
 		return Row{}, fmt.Errorf("fleet: parse row %s: %w", path, err)
 	}
 	return row, nil
+}
+
+// dirTrulyAbsent reports whether a failed ReadDir(dir) means dir does not
+// exist at all — the only case a caller may treat the failure as an empty
+// result. Classifying readErr with os.IsNotExist alone is not portable: on
+// Windows, ReadDir on a path that exists as a regular FILE also classifies as
+// not-exist (ERROR_PATH_NOT_FOUND), which would silently read a broken surface
+// as an empty one (§9: silence reads as healthy); unix returns ENOTDIR there
+// and fails loud. So a not-exist readErr is only a precondition (anything else
+// is a real failure regardless of what a re-check would say), and the Lstat
+// re-check makes both platforms agree — Lstat, not Stat, so a dangling symlink
+// at dir counts as a broken surface, not an absent one.
+func dirTrulyAbsent(dir string, readErr error) bool {
+	if !os.IsNotExist(readErr) {
+		return false
+	}
+	_, err := os.Lstat(dir)
+	return os.IsNotExist(err)
 }
 
 // slug collapses s into one filesystem-safe path segment, keeping [A-Za-z0-9._]

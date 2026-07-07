@@ -85,3 +85,24 @@ func TestFormatEvent(t *testing.T) {
 		t.Errorf("output should end with a newline")
 	}
 }
+
+// TestFormatEventPromoteMarker pins the promote-marker rendering: status and
+// promoted_to are both visible — show is the full record, so the doc pointer
+// must not live only in the body prose.
+func TestFormatEventPromoteMarker(t *testing.T) {
+	got := formatEvent(event.Event{
+		ID: "01TESTULID0000000000000000", Type: event.KindDecision, Status: event.StatusPromoted,
+		Workstream: "widget-main", PromotedTo: "docs/why-director.md",
+		Refs: []string{"01REF00000000000000000000A"}, TS: "2026-07-06T12:00:00Z",
+		Body: "promoted → docs/why-director.md (1 decision)",
+	})
+	for _, want := range []string{
+		"decision [status:promoted]",
+		"promoted_to: docs/why-director.md",
+		"refs: 01REF00000000000000000000A",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("formatEvent missing %q:\n%s", want, got)
+		}
+	}
+}

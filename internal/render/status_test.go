@@ -20,9 +20,8 @@ func registerRow(t *testing.T, hub, ws, repoKey string, hbAge time.Duration) {
 		UUID:       "uuid-" + ws,
 		RepoKey:    repoKey,
 		Handle:     "@" + ws,
-		Heartbeat:  statusNow.Add(-hbAge).Format(time.RFC3339Nano),
 	}
-	if err := fleet.Register(hub, row); err != nil {
+	if err := fleet.Register(hub, row, statusNow.Add(-hbAge)); err != nil {
 		t.Fatalf("register %s: %v", ws, err)
 	}
 }
@@ -56,6 +55,86 @@ func TestStatusBlockedOn(t *testing.T) {
 	}
 	if !strings.HasSuffix(lines[1], "ok") {
 		t.Errorf("ws2 line should end with ok: %q", lines[1])
+	}
+}
+
+// TestStatusMarksConcurrentSessions: several sessions heartbeating one
+// workstream at once render as "active ×N" — the same-checkout hygiene signal —
+// while stale leftover rows don't inflate the count and a lone session keeps
+// the bare state.
+func TestStatusMarksConcurrentSessions(t *testing.T) {
+	hub := t.TempDir()
+	seedProject(t, hub, "repo1", nil)
+
+	mk := func(uuid string, hbAge time.Duration) {
+		t.Helper()
+		if err := fleet.Register(hub, fleet.Row{
+			Workstream: "ws1", UUID: uuid, RepoKey: "repo1", Handle: "@ws1",
+		}, statusNow.Add(-hbAge)); err != nil {
+			t.Fatalf("register %s: %v", uuid, err)
+		}
+	}
+	mk("u-a", time.Minute)
+	mk("u-b", 2*time.Minute)
+	mk("u-stale", IdleAfter+time.Hour) // never archived; must not count
+
+	registerRow(t, hub, "ws2", "repo1", time.Minute) // lone session, bare state
+
+	// ws3: only stale leftovers — the whole workstream reads idle, and an idle
+	// line never carries the marker (ActiveSessions is 0 there by definition).
+	for _, uuid := range []string{"u-x", "u-y"} {
+		if err := fleet.Register(hub, fleet.Row{
+			Workstream: "ws3", UUID: uuid, RepoKey: "repo1", Handle: "@ws3",
+		}, statusNow.Add(-IdleAfter-time.Hour)); err != nil {
+			t.Fatalf("register ws3/%s: %v", uuid, err)
+		}
+	}
+
+	out, err := Status(hub, statusNow)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 cockpit lines, got %d:\n%s", len(lines), out)
+	}
+	if !strings.Contains(lines[0], "· active ×2 ·") {
+		t.Errorf("concurrent workstream should read active ×2: %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "· active ·") || strings.Contains(lines[1], "×") {
+		t.Errorf("lone-session workstream should keep the bare state: %q", lines[1])
+	}
+	if !strings.Contains(lines[2], "· idle ·") || strings.Contains(lines[2], "×") {
+		t.Errorf("all-stale workstream should read bare idle: %q", lines[2])
+	}
+}
+
+// TestStatusMarksConcurrentSessionsOnGone pins that the ×N marker composes with
+// non-active states: two sessions still heartbeating a checkout whose branch is
+// gone read "gone ×2". Deliberate — that is two live sessions needing wind-down,
+// and hiding the count there would understate exactly the collision the marker
+// exists to surface.
+func TestStatusMarksConcurrentSessionsOnGone(t *testing.T) {
+	hub := t.TempDir()
+	seedProject(t, hub, "repo1", nil)
+
+	// Branch+Dir pointing at a vanished worktree derive gone (BranchAlive treats
+	// the show-ref failure as branch-gone) even with fresh heartbeats.
+	for _, uuid := range []string{"u-a", "u-b"} {
+		if err := fleet.Register(hub, fleet.Row{
+			Workstream: "ws1", UUID: uuid, RepoKey: "repo1", Handle: "@ws1",
+			Branch: "feature", Dir: filepath.Join(hub, "vanished-worktree"),
+		}, statusNow.Add(-time.Minute)); err != nil {
+			t.Fatalf("register %s: %v", uuid, err)
+		}
+	}
+
+	out, err := Status(hub, statusNow)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if !strings.Contains(out, "· gone ×2 ·") {
+		t.Errorf("gone workstream with two fresh sessions should read gone ×2:\n%s", out)
 	}
 }
 
@@ -110,9 +189,8 @@ func TestStatusGoneShowsRemedy(t *testing.T) {
 		Handle:     "@ws1",
 		Branch:     "feature",
 		Dir:        filepath.Join(hub, "vanished-worktree"),
-		Heartbeat:  statusNow.Add(-time.Minute).Format(time.RFC3339Nano),
 	}
-	if err := fleet.Register(hub, row); err != nil {
+	if err := fleet.Register(hub, row, statusNow.Add(-time.Minute)); err != nil {
 		t.Fatalf("register ws1: %v", err)
 	}
 

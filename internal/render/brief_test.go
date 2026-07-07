@@ -118,6 +118,20 @@ func TestBriefFleetEmpty(t *testing.T) {
 	}
 }
 
+// TestBriefFleetProjectsPathAsFileErrors: a <hub>/projects that exists as a
+// regular FILE is a broken hub, not an empty one — BriefFleet must error rather
+// than render "no projects yet" over it (portable classification: unix ENOTDIR
+// vs Windows ERROR_PATH_NOT_FOUND both propagate; only genuine absence is empty).
+func TestBriefFleetProjectsPathAsFileErrors(t *testing.T) {
+	hub := t.TempDir()
+	if err := os.WriteFile(filepath.Join(hub, "projects"), []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BriefFleet(hub); err == nil {
+		t.Fatal("BriefFleet on a projects path that is a regular file must error, not render an empty fleet")
+	}
+}
+
 func writeCharter(t *testing.T, hub, repoKey, body string) {
 	t.Helper()
 	dir := filepath.Join(hub, "projects", repoKey)

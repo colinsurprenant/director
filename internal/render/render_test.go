@@ -2,6 +2,7 @@ package render
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,7 +83,7 @@ func TestDigestThroughStore(t *testing.T) {
 // fully-populated skeleton — every section header present with "(none)".
 func TestDigestEmptyLogStable(t *testing.T) {
 	d := Digest(Fold(nil), "empty")
-	// Fixed section order is survival order: actionable state (open-set, baton)
+	// Fixed section order is survival order: actionable state (open-set, latest handoff)
 	// first, deferrable decision rationale last, so a truncated delivery of the
 	// injected digest costs rationale, never open loops.
 	last := -1
@@ -209,33 +210,163 @@ func TestDigestLineCaps(t *testing.T) {
 	}
 }
 
-// TestDigestCompact locks the deterministic degradation step: identical to the
-// full digest except decisions collapse to one count-plus-pointer line, and the
+// TestDigestCollapsed locks the LAST degradation rung: identical to the full
+// digest except every decision collapses to one count-plus-pointer line, and the
 // actionable sections (open-items, handoffs) are untouched.
-func TestDigestCompact(t *testing.T) {
+func TestDigestCollapsed(t *testing.T) {
 	events, _ := richSet(t)
 	proj := Fold(events)
 	full := Digest(proj, "widget")
-	compact := DigestCompact(proj, "widget")
+	collapsed := DigestCollapsed(proj, "widget")
 
-	if !strings.Contains(compact, "2 active decisions elided for size") {
-		t.Errorf("compact digest should announce the elision with the count:\n%s", compact)
+	if !strings.Contains(collapsed, "2 active decisions elided for size") {
+		t.Errorf("collapsed digest should announce the elision with the count:\n%s", collapsed)
 	}
-	if strings.Contains(compact, "decision B") {
-		t.Errorf("compact digest must not carry decision bodies:\n%s", compact)
+	if strings.Contains(collapsed, "decision B") {
+		t.Errorf("collapsed digest must not carry decision bodies:\n%s", collapsed)
 	}
 	idx := strings.Index(full, "## decisions")
 	if idx < 0 {
 		t.Fatalf("full digest missing the decisions heading:\n%s", full)
 	}
 	wantPrefix := full[:idx]
-	if !strings.HasPrefix(compact, wantPrefix) {
+	if !strings.HasPrefix(collapsed, wantPrefix) {
+		t.Errorf("collapsed digest must be byte-identical to the full digest above the decisions section:\n--- full ---\n%s\n--- collapsed ---\n%s", full, collapsed)
+	}
+
+	// No active decisions → nothing to collapse; collapsed == full.
+	empty := Fold(nil)
+	if DigestCollapsed(empty, "widget") != Digest(empty, "widget") {
+		t.Errorf("collapsed of a decision-less projection should equal the full digest")
+	}
+}
+
+// TestDigestCompactKeepsNewestSinceAnchor locks the FIRST degradation rung: a
+// decision newer than the anchor (the workstream's latest handoff — decided
+// after the session's last recorded position, so unseen by it) survives as an
+// index line, while the older tail collapses to the count-plus-pointer line.
+// This is the incident-01KWW146C7 guarantee: the all-or-nothing collapse hid a
+// sibling's course correction; the recency band must not.
+func TestDigestCompactKeepsNewestSinceAnchor(t *testing.T) {
+	events, ids := richSet(t)
+	proj := Fold(events)
+	// richSet's active decisions are decB then supersedeA (ULID-ascending);
+	// handoffWS1b sits between them, making it a real anchor: supersedeA is
+	// post-anchor news, decB is pre-anchor rationale.
+	compact := DigestCompact(proj, "widget", ids.handoffWS1b)
+
+	if !strings.Contains(compact, "supersedes A") {
+		t.Errorf("decision newer than the anchor must survive as an index line:\n%s", compact)
+	}
+	if strings.Contains(compact, "decision B") {
+		t.Errorf("decision older than the anchor must be elided:\n%s", compact)
+	}
+	if !strings.Contains(compact, "(1 older decision(s) elided for size — the newest 1 follow") {
+		t.Errorf("partial elision must announce what was dropped and what follows:\n%s", compact)
+	}
+	// The actionable sections above ## decisions are untouched.
+	full := Digest(proj, "widget")
+	idx := strings.Index(full, "## decisions")
+	if idx < 0 {
+		t.Fatalf("full digest missing the decisions heading:\n%s", full)
+	}
+	if !strings.HasPrefix(compact, full[:idx]) {
 		t.Errorf("compact digest must be byte-identical to the full digest above the decisions section:\n--- full ---\n%s\n--- compact ---\n%s", full, compact)
 	}
 
-	// No active decisions → nothing to collapse; compact == full.
-	empty := Fold(nil)
-	if DigestCompact(empty, "widget") != Digest(empty, "widget") {
-		t.Errorf("compact of a decision-less projection should equal the full digest")
+	// An anchor newer than every decision keeps nothing — identical to the
+	// full collapse.
+	newest := mint(t)
+	if DigestCompact(proj, "widget", newest) != DigestCollapsed(proj, "widget") {
+		t.Errorf("an anchor above every decision should degrade to the full collapse")
+	}
+
+	// The boundary is STRICT: an anchor exactly equal to the newest decision's
+	// own id keeps nothing — "newer" means after the anchor, never at it. A
+	// regression to >= would slip past every other case in this suite.
+	if DigestCompact(proj, "widget", ids.supersedeA) != DigestCollapsed(proj, "widget") {
+		t.Errorf("an anchor equal to the newest decision id must not keep that decision")
+	}
+
+	// KeptDecisions is the rung-selection view of the same rule — it must agree
+	// with what DigestCompact renders, since the hook trusts it to pick a rung.
+	if got := KeptDecisions(proj, ids.handoffWS1b); got != 1 {
+		t.Errorf("KeptDecisions(anchor between the two) = %d, want 1", got)
+	}
+	if got := KeptDecisions(proj, newest); got != 0 {
+		t.Errorf("KeptDecisions(anchor above all) = %d, want 0", got)
+	}
+
+	// No anchor (workstream without a handoff): everything is unseen, so with
+	// fewer decisions than the cap the compact digest equals the full one.
+	if DigestCompact(proj, "widget", "") != Digest(proj, "widget") {
+		t.Errorf("anchorless compact under the cap should equal the full digest")
+	}
+}
+
+// TestDigestCompactCapsKeptBand: even when many decisions are newer than the
+// anchor, at most recentDecisionsKept survive — the newest ones — so the kept
+// band can re-add ~2KB at most to an over-budget payload.
+func TestDigestCompactCapsKeptBand(t *testing.T) {
+	n := recentDecisionsKept + 3
+	events := make([]event.Event, 0, n)
+	var lastBody string
+	for i := 0; i < n; i++ {
+		lastBody = fmt.Sprintf("decision number %d", i)
+		events = append(events, event.Event{
+			ID: mint(t), SchemaVersion: event.SchemaVersion,
+			Type: event.KindDecision, Workstream: "ws1", Body: lastBody,
+		})
+	}
+	proj := Fold(events)
+	compact := DigestCompact(proj, "widget", "")
+
+	want := fmt.Sprintf("(3 older decision(s) elided for size — the newest %d follow", recentDecisionsKept)
+	if !strings.Contains(compact, want) {
+		t.Errorf("cap overflow must elide the oldest and say so; want %q in:\n%s", want, compact)
+	}
+	if !strings.Contains(compact, lastBody) {
+		t.Errorf("the newest decision must survive the cap:\n%s", compact)
+	}
+	for i := 0; i < 3; i++ {
+		if strings.Contains(compact, fmt.Sprintf("decision number %d\n", i)) {
+			t.Errorf("decision %d is older than the cap window and must be elided:\n%s", i, compact)
+		}
+	}
+
+	// Determinism holds on the compact form too: same set, any order, same bytes.
+	for _, seed := range []int64{1, 7, 99} {
+		if got := DigestCompact(Fold(shuffled(events, seed)), "widget", ""); got != compact {
+			t.Fatalf("compact digest changed under input shuffle seed %d", seed)
+		}
+	}
+}
+
+// TestDigestPromotion pins the user-visible outcome of the promote ceremony at
+// the digest level (not just the fold): promoted decisions' headlines leave the
+// decisions section, the marker's doc-pointer line appears, and the pointer
+// address survives the headline cap for realistic doc paths and URLs.
+func TestDigestPromotion(t *testing.T) {
+	d1 := mint(t)
+	d2 := mint(t)
+	m := mint(t)
+	longDoc := "https://github.com/colinsurprenant/director/issues/4242"
+	events := []event.Event{
+		{ID: d1, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Body: "aged rationale ONE"},
+		{ID: d2, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Body: "current decision TWO"},
+		{ID: m, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1",
+			Status: event.StatusPromoted, PromotedTo: longDoc, Refs: []string{d1},
+			Body: "promoted → " + longDoc + " (1 decision)"},
+	}
+
+	got := Digest(Fold(events), "widget")
+	if strings.Contains(got, "aged rationale ONE") {
+		t.Errorf("promoted decision's headline still in digest:\n%s", got)
+	}
+	if !strings.Contains(got, "current decision TWO") {
+		t.Errorf("unpromoted decision missing from digest:\n%s", got)
+	}
+	if !strings.Contains(got, "promoted → "+longDoc) {
+		t.Errorf("doc pointer (full address) missing from digest:\n%s", got)
 	}
 }

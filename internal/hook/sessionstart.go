@@ -54,8 +54,8 @@ const emitProtocol = "## Director protocol — keep this current as you work\n" 
 	"The digest below is an INDEX: entries are capped headlines, not full text. `director show <ulid>` prints any event in full — before touching an area, pull the full bodies of its listed decisions rather than guessing past a headline.\n" +
 	"At a WORKSTREAM boundary, suggest the matching close-out command to the human — the two are not interchangeable:\n" +
 	"- work DONE and merged → suggest `/director:complete`, BEFORE the branch/worktree is deleted — it reviews this workstream's open-items with the human, resolves the finished ones, and archives the workstream\n" +
-	"- PAUSING work that will resume (session ending mid-task, switching focus, context filling up) → suggest `/director:handoff` — it flushes unrecorded state and writes a self-sufficient resume baton\n" +
-	"Never hand off a finished workstream: a handoff there plants a phantom baton that keeps a dead workstream surfacing as resumable — done+merged always takes `/director:complete`.\n" +
+	"- PAUSING work that will resume (session ending mid-task, switching focus, context filling up) → suggest `/director:handoff` — it flushes unrecorded state and writes a self-sufficient resume point\n" +
+	"Never hand off a finished workstream: a handoff there plants a phantom resume point that keeps a dead workstream surfacing as resumable — done+merged always takes `/director:complete`.\n" +
 	"This is load-bearing — treat it as a standing instruction, not a suggestion.\n"
 
 // handleSessionStart derives identity, refreshes the fleet row, and writes the
@@ -89,7 +89,7 @@ func handleSessionStart(in Input, out io.Writer, hub string) error {
 		}
 	}
 
-	ctx, err := buildGroundTruth(hub, ws.RepoKey, ws.ID, in.SessionID, isCodexTranscript(in.TranscriptPath))
+	ctx, err := buildGroundTruth(hub, ws.RepoKey, ws.ID, in.SessionID, sessionUUID(in), isCodexTranscript(in.TranscriptPath))
 	if err != nil {
 		logFailure(hub, EventSessionStart, in.SessionID, fmt.Sprintf("build ground truth: %v", err))
 		return nil
@@ -112,9 +112,7 @@ func handleSessionStart(in Input, out io.Writer, hub string) error {
 // is stamped alongside the branch so liveness can check the branch still exists
 // and self-clean a merged-away worktree (§5.5).
 func refreshFleet(hub string, ws identity.Workstream, uuid, cwd string) error {
-	// UTC to match every other fleet writer (register/heartbeat/adopt) so fleet/
-	// rows never carry mixed-offset timestamps.
-	now := time.Now().UTC()
+	now := time.Now()
 	row := fleet.Row{
 		Workstream: ws.ID,
 		UUID:       uuid,
@@ -122,13 +120,11 @@ func refreshFleet(hub string, ws identity.Workstream, uuid, cwd string) error {
 		Handle:     ws.ID,
 		Branch:     ws.Branch,
 		Dir:        cwd,
-		Heartbeat:  now.Format(time.RFC3339Nano),
 	}
-	if err := fleet.Register(hub, row); err != nil {
+	// Register stamps the heartbeat from now itself, so no separate Heartbeat
+	// call is needed — one atomic row write covers registration and liveness.
+	if err := fleet.Register(hub, row, now); err != nil {
 		return fmt.Errorf("register: %w", err)
-	}
-	if err := fleet.Heartbeat(hub, ws.ID, uuid, now); err != nil {
-		return fmt.Errorf("heartbeat: %w", err)
 	}
 	return nil
 }
@@ -139,7 +135,7 @@ func refreshFleet(hub string, ws identity.Workstream, uuid, cwd string) error {
 // has been observed to drift (docs said 50K; a 36KB payload was demoted to a 2KB
 // preview on 2026-07-03), so it must never be load-bearing. Over budget, the
 // digest degrades deterministically (DigestCompact: decisions collapse to a
-// count+pointer line — never the open loops or the baton) and the overflow is
+// count+pointer line — never the open loops or the latest handoff) and the overflow is
 // health-logged so growth is loud long before any harness threshold bites. The
 // preamble's DELIVERY CHECK contract remains the backstop of last resort.
 //
@@ -154,14 +150,18 @@ const injectionBudgetBytes = 16 * 1024
 // the project CHARTER (graceful when absent), and the deterministic digest
 // folded from the LOG. Under budget — the normal case — the digest is
 // byte-for-byte the `director render` / `--verify` output, so what the session
-// is handed is exactly what the cockpit shows. Over injectionBudgetBytes it is
-// the DigestCompact variant instead (decisions collapsed to a count+pointer
-// line): still deterministic, but deliberately NOT the render output — the
-// divergence is announced in the digest itself and health-logged. sessionID
-// is only for health-logging a close-out-nudge failure (which is fail-open,
-// never blocking the injection). codex switches the protocol/nudge command
-// names to Codex's skill-mention namespace (see codexCommandNames).
-func buildGroundTruth(hub, repoKey, workstreamID, sessionID string, codex bool) (string, error) {
+// is handed is exactly what the cockpit shows. Over injectionBudgetBytes it
+// degrades down a deterministic ladder: first DigestCompact (older decisions
+// collapse to a count+pointer line, the newest — anchored to this workstream's
+// latest handoff, i.e. the ones no prior session of this workstream has seen —
+// survive), then DigestCollapsed (every decision collapses). Both rungs are
+// deliberately NOT the render output — the divergence is announced in the
+// digest itself and health-logged. sessionID is only for health-logging a
+// nudge/concurrency failure (both fail-open, never blocking the injection);
+// uuid is this session's fleet-row key, used to exclude its own row from the
+// concurrent-session count. codex switches the protocol/nudge command names to
+// Codex's skill-mention namespace (see codexCommandNames).
+func buildGroundTruth(hub, repoKey, workstreamID, sessionID, uuid string, codex bool) (string, error) {
 	store := event.NewStore(hub, repoKey)
 	events, err := store.ReadAll()
 	if err != nil {
@@ -177,7 +177,7 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID string, codex bool) 
 	// Compute the managed-only blocks once, outside the assembler: closeOutNudge
 	// reads the fleet and health-logs its own failure, so a budget re-assembly
 	// must not run it twice.
-	var protocol, nudge, banner, resume string
+	var protocol, nudge, banner, concurrent, resume string
 	if managed {
 		protocol = codexCommandNames(emitProtocol, codex)
 		n, err := closeOutNudge(hub, repoKey, workstreamID, proj, time.Now().UTC())
@@ -188,7 +188,30 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID string, codex bool) 
 		} else if n != "" {
 			nudge = codexCommandNames(n, codex)
 		}
-		banner = startupBanner(workstreamID, proj)
+		// Sibling sessions live on this same workstream (same checkout). "Live"
+		// is a row with a heartbeat younger than the idle TTL — but note what a
+		// row's lifetime actually is: PostToolUse heartbeats materialize it and
+		// every allowed Stop archives it (stop.go), so a live row means a sibling
+		// is MID-TURN right now, or died ungracefully within the TTL. A sibling
+		// sitting at its prompt between turns has no row and is NOT detected —
+		// the signal is honest but narrow; widening it is a row-lifecycle design
+		// question (archive on session end rather than per-turn Stop), not a
+		// window-tuning one. Fail open like the nudge: a fleet read problem
+		// costs the hint, never the Ground Truth.
+		siblings := 0
+		if uuids, err := fleet.LiveSessions(hub, workstreamID, time.Now().UTC(), render.IdleAfter); err != nil {
+			logFailure(hub, EventSessionStart, sessionID, fmt.Sprintf("concurrent-session check: %v", err))
+		} else {
+			for _, u := range uuids {
+				if u != uuid {
+					siblings++
+				}
+			}
+		}
+		banner = startupBanner(workstreamID, proj, siblings)
+		if siblings > 0 {
+			concurrent = concurrencyNote(siblings, workstreamID)
+		}
 		resume = resumePoint(workstreamID, proj)
 	}
 
@@ -209,6 +232,13 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID string, codex bool) 
 		if managed {
 			b.WriteString(banner)
 			b.WriteString("\n")
+			// The concurrency note rides high (right after the banner) because it
+			// changes how the model must read everything below it — the resume
+			// point and this checkout's uncommitted state may be a sibling's.
+			if concurrent != "" {
+				b.WriteString(concurrent)
+				b.WriteString("\n")
+			}
 			b.WriteString(protocol)
 			b.WriteString("\n")
 		}
@@ -238,16 +268,37 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID string, codex bool) 
 
 	ctx := assemble(render.Digest(proj, repoKey))
 	if len(ctx) > injectionBudgetBytes {
-		// Deterministic degradation: collapse the decisions section (the one
-		// deferrable section) and say so loudly in health/ — over-budget growth
-		// is a grooming signal (§15.5 / L2 promotion), not a silent state.
+		// Deterministic degradation ladder, loud in health/ at every rung —
+		// over-budget growth is a grooming signal (§15.5 / L2 promotion), not a
+		// silent state. Rung 1 collapses only the OLDER decisions: the ones newer
+		// than this workstream's latest handoff are precisely what a rehydrating
+		// session has not seen (a sibling's course correction lives there), so
+		// they are the last decision content sacrificed.
 		full := len(ctx)
-		ctx = assemble(render.DigestCompact(proj, repoKey))
-		detail := fmt.Sprintf("injection budget: full payload %dB > %dB — decisions collapsed to count+pointer (now %dB); groom the log (resolve/supersede/promote)", full, injectionBudgetBytes, len(ctx))
-		if len(ctx) > injectionBudgetBytes {
-			// Still over on open-items + handoffs alone: never eat the actionable
-			// sections — inject as-is and make the overflow visible.
-			detail += " — STILL over budget on actionable sections alone; the open-set needs grooming"
+		anchor := ""
+		if h, ok := proj.LatestHandoff[workstreamID]; ok {
+			anchor = h.ID
+		}
+		// Rung 1 only exists when it keeps something: with 0 post-anchor
+		// decisions DigestCompact degenerates to DigestCollapsed byte-for-byte,
+		// and logging it as "newest kept" would misname the rung on the very
+		// diagnostic surface the tests pin — skip straight to rung 2 instead of
+		// assembling the same digest twice.
+		var detail string
+		kept := render.KeptDecisions(proj, anchor)
+		if kept > 0 {
+			ctx = assemble(render.DigestCompact(proj, repoKey, anchor))
+			detail = fmt.Sprintf("injection budget: full payload %dB > %dB — older decisions collapsed to count+pointer, newest %d kept (now %dB); groom the log (resolve/supersede/promote)", full, injectionBudgetBytes, kept, len(ctx))
+		}
+		if kept == 0 || len(ctx) > injectionBudgetBytes {
+			// Rung 2: every decision collapses.
+			ctx = assemble(render.DigestCollapsed(proj, repoKey))
+			detail = fmt.Sprintf("injection budget: full payload %dB > %dB — ALL decisions collapsed to count+pointer (now %dB); groom the log (resolve/supersede/promote)", full, injectionBudgetBytes, len(ctx))
+			if len(ctx) > injectionBudgetBytes {
+				// Still over on open-items + handoffs alone: never eat the actionable
+				// sections — inject as-is and make the overflow visible.
+				detail += " — STILL over budget on actionable sections alone; the open-set needs grooming"
+			}
 		}
 		logFailure(hub, EventSessionStart, sessionID, detail)
 	}
@@ -343,7 +394,12 @@ func closeOutNudge(hub, repoKey, currentWS string, proj render.Projection, now t
 // It is placed immediately after the preamble so a harness persisted-output
 // preview (head-anchored, ~2KB observed) still carries it: the banner must be
 // printable BEFORE the full-file read the DELIVERY CHECK may demand.
-func startupBanner(workstreamID string, proj render.Projection) string {
+//
+// siblings > 0 appends the concurrent-session marker to the relayed line — the
+// banner is the one line the HUMAN is guaranteed to see, so the checkout
+// collision surfaces to them at the exact moment it becomes true, not only in
+// the cockpit.
+func startupBanner(workstreamID string, proj render.Projection, siblings int) string {
 	needYou := 0
 	for _, o := range proj.OpenItems {
 		if o.Risk == event.RiskEscalate {
@@ -351,7 +407,24 @@ func startupBanner(workstreamID string, proj render.Projection) string {
 		}
 	}
 	banner := fmt.Sprintf("▸ Director: %s · %d open-item(s), %d need-you", workstreamID, len(proj.OpenItems), needYou)
+	// "other" is load-bearing: the banner counts SIBLINGS (self excluded), while
+	// the cockpit's ×N counts every fresh row — the same collision reads "1
+	// other" here and "×2" there, and the wording must make both frames legible.
+	if siblings > 0 {
+		banner += fmt.Sprintf(" · ⚠ %d other live session(s) on this checkout", siblings)
+	}
 	return "## Acknowledge on entry\nBegin your VERY FIRST reply to the human with this line verbatim (then answer normally), so they can see Director rehydrated:\n" + banner + "\n"
+}
+
+// concurrencyNote is the model-facing counterpart of the banner's ⚠ marker: it
+// spells out what sharing a checkout with a live sibling session means for how
+// the rest of the injected block must be read. Awareness only — Director nudges
+// toward the worktree convention, it never gates (§ non-goals: not a methodology).
+func concurrencyNote(siblings int, workstreamID string) string {
+	return fmt.Sprintf("## Concurrent sessions on this checkout\n"+
+		"%d other live session(s) are working this same checkout right now, under the same workstream id [%s]. "+
+		"Their handoffs interleave with yours — the resume point below may be a sibling's position, not yours — and uncommitted changes in this tree may be theirs; verify before building on either. "+
+		"If the parallel work is more than a quick exchange, suggest a separate worktree to the human.\n", siblings, workstreamID)
 }
 
 // resumePoint names THIS workstream's own latest handoff as the resume anchor.

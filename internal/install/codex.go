@@ -85,6 +85,12 @@ func InstallCodex(hooksPath string) error {
 	if err := writeShims(hooksDir); err != nil {
 		return err
 	}
+	// The bin symlink travels with the shims (their PATH-independent fallback
+	// tier probes it), so the Codex form provisions it too — a Codex-only
+	// machine gets the same guarantee.
+	if err := writeBinSymlink(hooksDir); err != nil {
+		return err
+	}
 	skillsDir, err := DefaultCodexSkillsDir()
 	if err != nil {
 		return err
@@ -97,10 +103,17 @@ func InstallCodex(hooksPath string) error {
 
 // UninstallCodex removes Director's tagged entries from hooksPath and the
 // Director-owned skill directories. A missing hooks file means no Codex install
-// to undo — touch nothing, mirroring the CC Uninstall. The shared shims are
-// deliberately LEFT in place either way: a Claude Code install may still
-// reference them, and `director uninstall` (the CC form) removes them when no
-// Codex install remains.
+// to undo — touch nothing, mirroring the CC Uninstall. The shared shims (and
+// the bin symlink that travels with them) are spared while EITHER default
+// install still references them: the default CC settings.json carrying
+// Director-managed entries (the mirror of the CC Uninstall's
+// codexInstallPresent gate), or the default Codex hooks.json still carrying
+// them — a custom `--settings <path>` uninstall must not strand the default
+// install's shims. On the default-path uninstall the entries were just
+// stripped above, so the codex probe reads "absent" and the reclaim proceeds.
+// Without the reclaim, a Codex-only machine would keep the shim files forever:
+// the CC uninstall form no-ops on its missing settings.json, so nothing else
+// ever removes them.
 func UninstallCodex(hooksPath string) error {
 	if _, err := os.Stat(hooksPath); os.IsNotExist(err) {
 		return nil
@@ -111,12 +124,19 @@ func UninstallCodex(hooksPath string) error {
 	if skillsDir, err := DefaultCodexSkillsDir(); err == nil {
 		removeCodexSkills(skillsDir)
 	}
+	if !claudeInstallPresent() && !codexInstallPresent() {
+		if hooksDir, err := DefaultHooksDir(); err == nil {
+			removeShims(hooksDir)
+			removeBinSymlink(hooksDir)
+		}
+	}
 	return nil
 }
 
 // codexInstallPresent reports whether the default Codex hooks file still
-// carries Director-managed entries — the signal the CC Uninstall uses to spare
-// the shared shims. Best-effort and fail-safe in the conservative direction is
+// carries Director-managed entries — the signal the CC Uninstall (and a
+// custom-`--settings` UninstallCodex) uses to spare the shared shims.
+// Best-effort and fail-safe in the conservative direction is
 // NOT wanted here: an unreadable/missing hooks.json reads as "no Codex
 // install", because refusing to remove shims on every read hiccup would make
 // the CC uninstall permanently leaky. Only a positive managed-entry sighting
@@ -133,36 +153,7 @@ func codexInstallPresent() bool {
 	if err != nil {
 		return false
 	}
-	root, err := loadSettings(hooksPath)
-	if err != nil {
-		return false
-	}
-	hooks, ok := typedMap(root, "hooks")
-	if !ok {
-		return false
-	}
-	for event := range hooks {
-		groups, ok := typedArray(hooks, event)
-		if !ok {
-			continue
-		}
-		for _, g := range groups {
-			group := asMap(g)
-			if group == nil {
-				continue
-			}
-			cmds, ok := typedArray(group, "hooks")
-			if !ok {
-				continue
-			}
-			for _, c := range cmds {
-				if isManaged(c) {
-					return true
-				}
-			}
-		}
-	}
-	return false
+	return managedEntriesPresent(hooksPath)
 }
 
 // codexSkillName maps an embedded command filename to its skill name:

@@ -41,6 +41,12 @@ type Liveness struct {
 	Handle     string    `json:"handle,omitempty"`   // newest-heartbeat session
 	Heartbeat  time.Time `json:"heartbeat"`          // newest across the workstream's rows
 	Sessions   int       `json:"sessions"`           // live rows collapsed into this entry
+	// ActiveSessions counts the rows whose OWN heartbeat is younger than the idle
+	// TTL — the concurrent-session signal. > 1 means several sessions are working
+	// this workstream (same checkout) right now, so their handoffs interleave
+	// under one label. Distinct from Sessions, which also counts stale rows a
+	// crashed session never archived.
+	ActiveSessions int `json:"active_sessions"`
 }
 
 // List reads every live row under <hub>/fleet/ (the archive dir is ignored),
@@ -64,10 +70,10 @@ type Liveness struct {
 func List(hub string, now time.Time, idleAfter, dormantAfter time.Duration, branchAlive func(Row) bool) (entries []Liveness, skipped int, err error) {
 	dir := filepath.Join(hub, fleetDir)
 	files, err := os.ReadDir(dir)
-	if os.IsNotExist(err) {
-		return nil, 0, nil
-	}
 	if err != nil {
+		if dirTrulyAbsent(dir, err) {
+			return nil, 0, nil
+		}
 		return nil, 0, fmt.Errorf("fleet: read fleet dir: %w", err)
 	}
 
@@ -77,6 +83,7 @@ func List(hub string, now time.Time, idleAfter, dormantAfter time.Duration, bran
 		newest   Row
 		newestHB time.Time
 		count    int
+		active   int
 	}
 	byWorkstream := make(map[string]*agg)
 
@@ -111,22 +118,70 @@ func List(hub string, now time.Time, idleAfter, dormantAfter time.Duration, bran
 			a.newest = row
 			a.newestHB = hb
 		}
+		// Freshness of THIS row, not the collapsed newest: the concurrency signal
+		// is "how many sessions are heartbeating right now". A future-dated
+		// heartbeat clamps to fresh, matching derive().
+		if age := now.Sub(hb); age < idleAfter {
+			a.active++
+		}
 	}
 
 	out := make([]Liveness, 0, len(byWorkstream))
 	for ws, a := range byWorkstream {
 		out = append(out, Liveness{
-			Workstream: ws,
-			State:      derive(a.newestHB, now, idleAfter, dormantAfter, branchAlive(a.newest)),
-			UUID:       a.newest.UUID,
-			RepoKey:    a.newest.RepoKey,
-			Handle:     a.newest.Handle,
-			Heartbeat:  a.newestHB,
-			Sessions:   a.count,
+			Workstream:     ws,
+			State:          derive(a.newestHB, now, idleAfter, dormantAfter, branchAlive(a.newest)),
+			UUID:           a.newest.UUID,
+			RepoKey:        a.newest.RepoKey,
+			Handle:         a.newest.Handle,
+			Heartbeat:      a.newestHB,
+			Sessions:       a.count,
+			ActiveSessions: a.active,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Workstream < out[j].Workstream })
 	return out, skipped, nil
+}
+
+// LiveSessions returns the session UUIDs of workstream's rows whose heartbeat is
+// younger than within, sorted for a stable result. It is the per-row view List's
+// collapsed entries can't provide: the SessionStart hook uses it to count the
+// OTHER sessions live on this checkout (excluding its own uuid), so the signal
+// stays precise even for a session that never registered a row (a throwaway's
+// uuid simply matches nothing). A row's lifetime bounds what "live" can mean
+// here: Stop archives it at each allowed turn end, so a fresh row is a session
+// mid-turn or a recent ungraceful death — never a sibling idling at its prompt.
+// Corrupt rows and unparseable heartbeats are skipped with List's leniency — a
+// concurrency hint must never fail a session start. A missing fleet dir yields
+// an empty result, not an error.
+func LiveSessions(hub, workstream string, now time.Time, within time.Duration) ([]string, error) {
+	dir := filepath.Join(hub, fleetDir)
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		if dirTrulyAbsent(dir, err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("fleet: read fleet dir: %w", err)
+	}
+	var uuids []string
+	for _, e := range files {
+		if e.IsDir() || filepath.Ext(e.Name()) != rowExt {
+			continue
+		}
+		row, err := readRow(filepath.Join(dir, e.Name()))
+		if err != nil || row.Workstream != workstream {
+			continue
+		}
+		hb, err := time.Parse(heartbeatLayout, row.Heartbeat)
+		if err != nil {
+			continue
+		}
+		if now.Sub(hb) < within {
+			uuids = append(uuids, row.UUID)
+		}
+	}
+	sort.Strings(uuids)
+	return uuids, nil
 }
 
 // derive computes a single workstream's State. A gone branch reads gone no

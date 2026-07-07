@@ -8,7 +8,7 @@
 
 You work with coding agents across several projects. Not all at once, but in **blocks**: a few days or weeks deep in one project, an afternoon in another, back to the first. Some blocks overlap; occasionally you run two or three sessions in parallel worktrees. Over weeks, that adds up to a real fleet of workstreams, most of them dormant at any given moment, all of them still *yours*.
 
-Every session starts amnesiac about exactly the layer that matters across those boundaries. Native agent memory has gotten good at *facts*: what the project is, how the build works, your preferences. What nothing carries is the **coordination narrative**: what was decided and why, which loops were deliberately deferred, where the baton was parked when the block ended, and what still needs *you*. So the human becomes the message bus, re-explaining last month's decision to this morning's session, re-discovering their own open loops by grepping git history, relaying context by hand between a worktree session and the main one.
+Every session starts amnesiac about exactly the layer that matters across those boundaries. Native agent memory has gotten good at *facts*: what the project is, how the build works, your preferences. What nothing carries is the **coordination narrative**: what was decided and why, which loops were deliberately deferred, where the work stopped when the block ended, and what still needs *you*. So the human becomes the message bus, re-explaining last month's decision to this morning's session, re-discovering their own open loops by grepping git history, relaying context by hand between a worktree session and the main one.
 
 Director exists to move you from **message bus** to **reviewer**.
 
@@ -17,13 +17,13 @@ Director exists to move you from **message bus** to **reviewer**.
 A standalone Go CLI (single static binary, no daemon, no database, no cloud) that gives your sessions a shared, durable, **append-only event log** per repo, plus **deterministic projections** over it:
 
 - Sessions **emit** typed events as they work, using exactly four kinds (`decision`, `open-item`, `handoff`, `note`), and **resolve** open-items when they are truly closed.
-- Deterministic, non-LLM folds project the log into three views: `render` (the machine digest), `brief` (the human re-orientation view), and `status` (the one-line-per-workstream cockpit with a *Needs-you* band).
+- A deterministic, non-LLM fold collapses the log into three views: `render` (the machine digest), `brief` (the human re-orientation view), and `status` (the one-line-per-workstream cockpit with a *Needs-you* band).
 - A SessionStart hook **injects** the project CHARTER plus the folded digest into every new session as authoritative ground truth. Push, not pull: a protocol the model must remember to invoke is a protocol that never fires.
-- Boundary commands mark workstream lifecycle: `/director:handoff` when pausing (parks the baton), `/director:complete` when a workstream is done and merged (human-confirmed close-out of its open loops).
+- Boundary commands mark workstream lifecycle: `/director:handoff` when pausing (records the resume point), `/director:complete` when a workstream is done and merged (human-confirmed close-out of its open loops).
 
 The log is NDJSON: plain, greppable, git-trackable text. If Director disappeared tomorrow, your coordination history would still be readable with `cat`.
 
-The shortest honest description: **an engineering daybook your agents actually keep.** Engineers have known for decades that an append-only, timestamped, never-rewritten journal beats a curated wiki for recovering context. Director mechanizes that practice for a portfolio of agent sessions, and adds the one thing a daybook can't do: deterministic projections that answer "what's open, everywhere, right now."
+The shortest honest description: **a coordination ledger your agents actually keep.** Engineers have known for decades that an append-only, timestamped, never-rewritten journal (the engineering daybook) beats a curated wiki for recovering context. Director mechanizes that practice for a portfolio of agent sessions, and adds the two things a daybook can't do: lifecycle (a loop stays open until consciously resolved; a decision is superseded, never lost) and deterministic projections that answer "what's open, everywhere, right now."
 
 ## A portfolio, not a swarm
 
@@ -31,7 +31,7 @@ Most multi-agent tooling assumes the swarm: many simultaneous sessions on one re
 
 That shapes the design:
 
-- **Dormant is a first-class state.** A workstream untouched for three weeks with its baton parked in a handoff isn't stale data to clean up. It's a project between blocks, waiting for re-entry, and `status` and `brief` treat it that way.
+- **Dormant is a first-class state.** A workstream untouched for three weeks with its resume point recorded in a handoff isn't stale data to clean up. It's a project between blocks, waiting for re-entry, and `status` and `brief` treat it that way.
 - **Block boundaries are handoffs to your future self.** The `/director:handoff` you write when leaving a project is the rehydration your next block starts from, injected automatically instead of re-derived from git archaeology.
 - **Re-entry is the payoff.** Opening a session on a repo you haven't touched since last month, and having it already know what was decided, what's open, and what's next: that's the moment Director is built for. And it's the same mechanism at every scale: the next session after a `/clear` and a cold re-entry three weeks later rehydrate from the same parked checkpoint.
 - **The next session doesn't have to be the same model.** A handoff is model-agnostic: an agent that hasn't cracked the problem parks its checkpoint, failed hypotheses included, and a stronger model picks up at the frontier instead of re-deriving the dead ends. Escalate with context, not with amnesia. Native memory follows a vendor's model; the log is neutral ground.
@@ -66,6 +66,8 @@ Coordination facts, plans, and architecture move at different speeds. Director d
 
 Two rules keep the layers honest. **One home per fact:** Director's locked four-kind schema is itself a drift-prevention mechanism, because a tool too small to hold its neighbors' facts can't absorb them; plans don't leak into the log and architecture doesn't fossilize in handoffs. **Truth flows up, never sideways or down:** a fact is born at the fast layer (a decision event, emitted the moment it's made), and if it proves durable it gets *promoted* into a plan or an ADR, with the append-only record then pointing up. Because events are ULID-ordered, a later decision event beats a stale doc, and flags it.
 
+Promotion is a first-class ceremony, not just a habit: `director promote <ulid>... --to <doc>` records the move as a typed marker, the promoted rationale leaves the digest, and a one-line doc pointer stays (`director show` serves every original forever). This is also Director's scaling story, **semantic snapshotting**: history grows monotonically while the digest stays constant-size and constant-relevance, because `resolve` compacts the open-set, supersession compacts replaced decisions, and `promote` folds aged-but-durable rationale into the slow layer along a relevance axis instead of a time axis. Write rate is bounded by human attention (tens of events a day, not thousands a second), so the classic event-sourcing scaling pathologies structurally cannot arrive; the injection budget is the only scarce resource, and the three compaction verbs are what defend it.
+
 The slow layer independently validates the design. Nygard's original ADR discipline (an accepted record is never reopened, only *superseded* by a new one that links back) is the same append-only insight applied at monthly speed. And the ceremony threshold that keeps ADRs legible ("architecturally significant" only) is exactly Director's promotion filter: most decision events die in the log, correctly, because they were tactical; the one that keeps being re-asserted across sessions has earned an ADR, and the event chain, superseded events included, is the raw material for its *context* and *alternatives considered* sections.
 
 ## Steering is a hat, not a daemon
@@ -79,7 +81,7 @@ The design test: **if a session dying loses real information, that's a liability
 Honest answers to the five-minute evaluation questions.
 
 **vs. memory tools (Claude Code auto-memory, claude-mem, mem0, and the rest).**
-Different question. Memory tools answer *"what does the agent know?"*: recall across sequential sessions, and the good ones do it automatically and well. Director answers *"what is in flight?"*: what was decided, what's still open, where the baton is, and what needs the human, across a portfolio, with lifecycle semantics (an open-item is *open until resolved*, not a note that fades). Run both; they don't overlap. Native per-project memory is a private notebook; Director is the shared ledger.
+Different question. Memory tools answer *"what does the agent know?"*: recall across sequential sessions, and the good ones do it automatically and well. Director answers *"what is in flight?"*: what was decided, what's still open, where the work stands, and what needs the human, across a portfolio, with lifecycle semantics (an open-item is *open until resolved*, not a note that fades). Run both; they don't overlap. Native per-project memory is a private notebook; Director is the shared ledger.
 
 **vs. beads (and issue trackers as agent memory).**
 Closest neighbor, different shape. Beads is *task-shaped*: a git-backed dependency graph of work items, and excellent at that. Director is *event-shaped*: **the narrative between tasks**. The decision that reframed the task, the loop deferred while doing it, the handoff parked when the block ended. A decision is not a task; forcing it into an issue tracker strips its "why" of ordering and provenance. They compose rather than compete: track your work in beads, carry your narrative in Director. Director is also portfolio-wide by construction (one hub, many repos, one cockpit), where a tracker's world is one repo's graph.
@@ -106,11 +108,12 @@ Non-goals, stated as firmly as the goals:
 - **Not an orchestrator.** Team-room topology, never central command. It doesn't spawn, route, or schedule sessions.
 - **Not a methodology.** Invariants, not process (see above).
 - **Not semantic memory.** No embeddings, no vector DB, no retrieval ranking. The record is small enough to read because emission is deliberate, and legible because it's typed prose.
+- **Not multi-user.** Single-human by design: Director externalizes *one* developer's in-flight working memory. Sessions are plural, machines are plural, humans are not. In-flight fast-band context is inherently singular in every org shape; teams sync through the slow layers (PRs, tickets, ADRs), so the cross-human interface is `promote`, never a shared log. Succession still works for free: the log is a portable file plus a deterministic fold, and an inheritor rehydrates exactly like your own next session would.
 - **No database, no daemon, no cloud.** Durable state is NDJSON files in a directory you own. The binary runs and exits.
 - **No autonomy.** Close-out is human-confirmed; nothing auto-resolves your open loops; nudges never write on your behalf.
 
 ## The honest caveats
 
 - **The protocol depends on emission.** Hooks inject and nudge, but the events themselves are written by sessions following an injected protocol: deliberate, typed capture, not automatic transcript hoovering. That is what keeps the log signal-dense and legible; it is also the standing risk (a log nobody writes to starts lying). Director's own #1 named risk is abandonment, and it's fought with calibration (cheap emission, loud silence), not enforcement.
-- **Single-machine, for now.** The hub is a local directory; multi-machine sync is deferred, though the log's git-trackability means the escape hatch is the one you already use for everything else.
+- **Single-machine, for now.** The hub is a local directory. Multi-machine sync is the one distribution mode on the roadmap, and its shape is settled: a git-synced hub where the merge is just the fold (order-independent over the event set, so per-machine logs merge as set union); no server, no protocol, no conflict resolution, ever.
 - **It's opinionated where it must be.** Four event kinds, no more. If you need a fifth, the answer is probably one of the four, or a different layer of the gradient.

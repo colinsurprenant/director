@@ -20,6 +20,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 // shimFS embeds the hook shim scripts into the binary so `director install` is
@@ -60,6 +61,12 @@ const hooksDirEnv = "DIRECTOR_HOOKS_DIR"
 // markdown is materialized. When unset, DefaultCommandsDir is used.
 const commandsDirEnv = "DIRECTOR_COMMANDS_DIR"
 
+// settingsPathEnv lets a caller (and the tests) redirect the default CC
+// settings.json, mirroring DIRECTOR_CODEX_HOOKS_PATH. The CLI's --settings flag
+// already overrides the install/uninstall target; this env var additionally
+// redirects the cross-target claudeInstallPresent probe.
+const settingsPathEnv = "DIRECTOR_SETTINGS_PATH"
+
 // managedEntry describes one hook Director installs: which CC event it attaches
 // to, the matcher (empty = all), and the shim filename under the hooks dir.
 type managedEntry struct {
@@ -79,9 +86,13 @@ var directorEntries = []managedEntry{
 }
 
 // DefaultSettingsPath resolves the standard user settings file,
-// ~/.claude/settings.json. Callers that want a different target (a project
-// settings file, a test fixture) pass an explicit path to Install/Uninstall.
+// ~/.claude/settings.json. DIRECTOR_SETTINGS_PATH overrides the location.
+// Callers that want a different target (a project settings file, a test
+// fixture) pass an explicit path to Install/Uninstall.
 func DefaultSettingsPath() (string, error) {
+	if p := os.Getenv(settingsPathEnv); p != "" {
+		return p, nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("install: resolve home dir: %w", err)
@@ -103,6 +114,29 @@ func DefaultHooksDir() (string, error) {
 		return "", fmt.Errorf("install: resolve home dir: %w", err)
 	}
 	return filepath.Join(home, ".claude", "director", "hooks"), nil
+}
+
+// binDirFor resolves the shim-fallback bin directory for a hooks dir. The
+// shims' last resolution tier probes "$here/../bin/director" — the bin/
+// SIBLING of the hooks dir — so the two must always derive from the same root:
+// ~/.claude/director/hooks ⇒ ~/.claude/director/bin, and a DIRECTOR_HOOKS_DIR
+// override relocates both together. Clean first: a trailing slash on the
+// override (routine tab-completion residue) would otherwise shift the
+// derivation to hooks/bin — a sibling the shims never probe.
+func binDirFor(hooksDir string) string {
+	return filepath.Join(filepath.Dir(filepath.Clean(hooksDir)), "bin")
+}
+
+// DefaultBinPath resolves the shim-fallback binary path,
+// ~/.claude/director/bin/director — where Install drops the symlink to the
+// running binary (writeBinSymlink) and the shims look last when DIRECTOR_BIN is
+// unset and PATH has no `director`.
+func DefaultBinPath() (string, error) {
+	hooksDir, err := DefaultHooksDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(binDirFor(hooksDir), "director"), nil
 }
 
 // DefaultCommandsDir resolves the standard slash-command directory,
@@ -137,6 +171,11 @@ func Install(settingsPath string) error {
 	// Materialize the embedded shims FIRST: if this fails we return before touching
 	// settings.json, so the file never ends up pointing at shims that aren't there.
 	if err := writeShims(hooksDir); err != nil {
+		return err
+	}
+	// Drop the bin symlink beside the shims — the shims' PATH-independent fallback
+	// tier. Same ordering discipline: part of provisioning, before the merge.
+	if err := writeBinSymlink(hooksDir); err != nil {
 		return err
 	}
 	// Materialize the slash commands too, before the settings merge. This is an
@@ -224,10 +263,12 @@ func Uninstall(settingsPath string) error {
 	// (best-effort: only the exact Director filenames, never foreign files) —
 	// UNLESS a Codex install still references them: the shims are shared, and a
 	// CC uninstall must not silently break a coexisting Codex install (the
-	// mirror of UninstallCodex leaving them for CC).
+	// mirror of UninstallCodex leaving them for CC). The bin symlink shares the
+	// shims' lifecycle exactly: it exists only to be found by them.
 	if !codexInstallPresent() {
 		if hooksDir, err := DefaultHooksDir(); err == nil {
 			removeShims(hooksDir)
+			removeBinSymlink(hooksDir)
 		}
 	}
 	// And the Director-owned slash commands — the inverse of writeCommands, same
@@ -304,6 +345,61 @@ func removeManagedEntries(path string) error {
 		root["hooks"] = hooks
 	}
 	return writeSettings(path, root)
+}
+
+// claudeInstallPresent reports whether the default CC settings file still
+// carries Director-managed entries — the mirror image of codexInstallPresent,
+// and one of the two signals UninstallCodex uses to spare the shared shims
+// (the other being codexInstallPresent itself, for the custom-`--settings`
+// form). Same fail-open
+// stance and KNOWN LIMIT as its mirror (see codexInstallPresent): a missing or
+// unreadable settings.json reads as "no CC install", so only a positive
+// managed-entry sighting spares the shims — anything else would leave a
+// Codex-only machine leaking shim files forever.
+func claudeInstallPresent() bool {
+	settingsPath, err := DefaultSettingsPath()
+	if err != nil {
+		return false
+	}
+	return managedEntriesPresent(settingsPath)
+}
+
+// managedEntriesPresent reports whether the hooks file at path carries any
+// Director-managed command object — the shared scan behind codexInstallPresent
+// and claudeInstallPresent. Read errors and foreign shapes read as "not
+// present": both callers want the fail-open direction (see codexInstallPresent
+// for why fail-safe would make shim removal permanently leaky).
+func managedEntriesPresent(path string) bool {
+	root, err := loadSettings(path)
+	if err != nil {
+		return false
+	}
+	hooks, ok := typedMap(root, "hooks")
+	if !ok {
+		return false
+	}
+	for event := range hooks {
+		groups, ok := typedArray(hooks, event)
+		if !ok {
+			continue
+		}
+		for _, g := range groups {
+			group := asMap(g)
+			if group == nil {
+				continue
+			}
+			cmds, ok := typedArray(group, "hooks")
+			if !ok {
+				continue
+			}
+			for _, c := range cmds {
+				if isManaged(c) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // writeShims materializes the embedded hook shims into hooksDir, creating the dir
@@ -412,6 +508,97 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 		return fmt.Errorf("install: rename %s into place: %w", path, err)
 	}
 	return nil
+}
+
+// writeBinSymlink drops <bin dir>/director as a symlink to the resolved
+// absolute path of the currently running binary. It backstops the shims' PATH
+// tier for Claude Code desktop launched from the Dock/Launchpad: that process
+// inherits the bare launchd PATH (no /opt/homebrew/bin, /usr/local/bin, or
+// ~/go/bin — anthropics/claude-code#44649), `command -v director` misses, and
+// the shims' deliberate exit-0 fail-safe turns the miss into silently absent
+// coordination. The shims' last tier already probes this exact path; install
+// just has to put a binary there.
+//
+// Rules: the link targets the EvalSymlinks-resolved physical path, not the
+// invoked one — this prevents a self-referential link when install is re-run
+// through the symlink itself, at the cost that a versioned-symlink distribution
+// (e.g. a Homebrew Cellar path) leaves the link dangling after an upgrade until
+// `director install` is re-run, which the docs already prescribe. An existing
+// symlink is replaced whatever it points at — the running binary wins, so a
+// stale link to a moved/deleted build can't shadow it. An
+// existing REGULAR file is never clobbered: that is a real binary the user
+// placed deliberately, and the shims will run it as-is (the CLI notes it in the
+// install output). Anything else at the path (a directory, a FIFO) is an
+// error: the fallback tier cannot resolve through it, and skipping silently
+// would recreate the exact silent-absence this symlink exists to close.
+// Native Windows is a no-op — symlink creation needs
+// privileges there, the shims are bash anyway, and the CLI refuses the install
+// before reaching here; the guard only covers direct package callers (tests).
+func writeBinSymlink(hooksDir string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("install: resolve running binary: %w", err)
+	}
+	target, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		return fmt.Errorf("install: resolve running binary %s: %w", exe, err)
+	}
+	binDir := binDirFor(hooksDir)
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		return fmt.Errorf("install: create bin dir %s: %w", binDir, err)
+	}
+	link := filepath.Join(binDir, "director")
+	fi, err := os.Lstat(link)
+	if err != nil && !os.IsNotExist(err) {
+		// Not-exist and cannot-look are different facts: falling through here
+		// would mis-attribute an EACCES/EIO to symlink creation.
+		return fmt.Errorf("install: inspect bin path %s: %w", link, err)
+	}
+	if err == nil {
+		if fi.Mode()&os.ModeSymlink == 0 {
+			if fi.Mode().IsRegular() {
+				return nil // a real binary the user placed there — leave it
+			}
+			return fmt.Errorf("install: bin path %s exists and is neither a symlink nor a regular file (%s); remove it and re-run install", link, fi.Mode().Type())
+		}
+		if existing, err := os.Readlink(link); err == nil && existing == target {
+			return nil // already points at us — idempotent no-op
+		}
+	}
+	// Create-or-replace atomically: symlink at a temp name, rename over the
+	// link — the same temp+rename discipline as writeFileAtomic, so a hook
+	// firing mid-replace never sees a missing fallback and concurrent installs
+	// cannot fail each other in a Remove→Symlink gap. The pid suffix keeps
+	// concurrent processes off each other's temp name; a stale temp from a
+	// crashed run with the same pid is cleared first.
+	tmpName := fmt.Sprintf("%s.tmp-%d", link, os.Getpid())
+	os.Remove(tmpName)
+	if err := os.Symlink(target, tmpName); err != nil {
+		return fmt.Errorf("install: create bin symlink %s: %w", link, err)
+	}
+	if err := os.Rename(tmpName, link); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("install: rename bin symlink %s into place: %w", link, err)
+	}
+	return nil
+}
+
+// removeBinSymlink reclaims <bin dir>/director — the inverse of writeBinSymlink
+// — removing it ONLY if it is a symlink: a regular file there is a user-placed
+// binary that install never clobbered, and uninstall must not either. Same
+// best-effort discipline as removeShims, then drops the bin dir if left empty.
+func removeBinSymlink(hooksDir string) {
+	binDir := binDirFor(hooksDir)
+	link := filepath.Join(binDir, "director")
+	fi, err := os.Lstat(link)
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		return
+	}
+	_ = os.Remove(link)
+	_ = os.Remove(binDir) // succeeds only if now empty; foreign files keep it intact
 }
 
 // removeShims deletes the Director-owned shim files from hooksDir — the inverse of
