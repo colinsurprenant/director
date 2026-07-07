@@ -803,3 +803,22 @@ func TestSettingsDirectorBin(t *testing.T) {
 		t.Errorf("pinned value: got (%q, %v), want (/opt/director, true)", v, ok)
 	}
 }
+
+// TestExpectedShims locks the invariant doctor's missingShims relies on: the set
+// is sourced from the embedded shims/ dir, which `//go:embed shims/*.sh` requires
+// be non-empty at BUILD time (the build fails otherwise), so fs.ReadDir cannot
+// fail and the nil-on-error path is unreachable in a real binary. Asserting the
+// exact set here turns any future break of that embed into a loud test failure
+// rather than a silently-empty expected set (which would weaken the shim check).
+func TestExpectedShims(t *testing.T) {
+	got := ExpectedShims()
+	want := map[string]bool{"sessionstart.sh": true, "posttooluse.sh": true, "stop.sh": true}
+	if len(got) != len(want) {
+		t.Fatalf("ExpectedShims() = %v, want the %d embedded shims %v", got, len(want), want)
+	}
+	for _, name := range got {
+		if !want[name] {
+			t.Errorf("ExpectedShims() returned unexpected %q; want exactly %v", name, want)
+		}
+	}
+}

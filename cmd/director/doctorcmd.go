@@ -266,10 +266,14 @@ func codexHooksCheck(in doctorInputs) (check, bool) {
 func hubCheck(hub string) check {
 	fi, err := os.Stat(hub)
 	if os.IsNotExist(err) {
-		anc := nearestExistingDir(filepath.Dir(hub))
+		anc, ancErr := nearestExistingAncestor(filepath.Dir(hub))
+		if ancErr != nil {
+			return check{"hub", levelFail, fmt.Sprintf(
+				"%s cannot be created — %v; the first coordination write (MkdirAll) will fail.", hub, ancErr)}
+		}
 		if !dirWritable(anc) {
 			return check{"hub", levelFail, fmt.Sprintf(
-				"%s does not exist and its nearest existing parent %s is not writable — the first coordination write (MkdirAll) will fail.", hub, anc)}
+				"%s does not exist and its nearest existing ancestor %s is not writable — the first coordination write (MkdirAll) will fail.", hub, anc)}
 		}
 		return check{"hub", levelOK, fmt.Sprintf("%s does not exist yet — it is created on first write", hub)}
 	}
@@ -346,18 +350,34 @@ func missingShims(hooksDir string) []string {
 	return missing
 }
 
-// nearestExistingDir walks up from p to the first ancestor that exists on disk.
-// It always terminates: the filesystem root always exists, and filepath.Dir is a
-// fixed point there. Used to find the directory MkdirAll would actually create
-// the hub under, so its writability can be probed before the first hub write.
-func nearestExistingDir(p string) string {
+// nearestExistingAncestor returns the nearest ancestor of p (inclusive) that
+// exists as a real directory MkdirAll could create p under. It applies the same
+// not-exist-vs-broken discipline as event.logTrulyAbsent: a plain not-exist is
+// safe to climb past, but a stat error that is NOT not-exist (EACCES, ENOTDIR,
+// ELOOP), a dangling symlink (Stat follows it to not-exist while Lstat still finds
+// the link), or an existing non-directory is a broken surface MkdirAll cannot
+// cross — returned as an error rather than silently skipped, which would let
+// doctor report an uncreatable hub as healthy.
+func nearestExistingAncestor(p string) (string, error) {
 	for {
-		if _, err := os.Stat(p); err == nil {
-			return p
+		info, statErr := os.Stat(p)
+		if statErr == nil {
+			if info.IsDir() {
+				return p, nil
+			}
+			return p, fmt.Errorf("%s exists but is not a directory", p)
+		}
+		if !os.IsNotExist(statErr) {
+			return p, statErr // inaccessible/broken (EACCES, ENOTDIR, ELOOP, …)
+		}
+		if _, lerr := os.Lstat(p); lerr == nil {
+			return p, fmt.Errorf("%s is a dangling symlink", p)
+		} else if !os.IsNotExist(lerr) {
+			return p, lerr
 		}
 		parent := filepath.Dir(p)
 		if parent == p {
-			return p // reached the root; nothing more to climb
+			return p, fmt.Errorf("no existing ancestor of %s", p) // unreachable: the root exists
 		}
 		p = parent
 	}
