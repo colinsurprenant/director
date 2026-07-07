@@ -267,7 +267,7 @@
   <div class="install reveal d4">
     <div class="cmd">
       <span class="p">$</span>
-      <code id="install-cmd">go install github.com/colinsurprenant/director/cmd/director@latest</code>
+      <code id="install-cmd">curl -fsSL https://raw.githubusercontent.com/colinsurprenant/director/main/install.sh | sh</code>
       <button class="copy" id="copy-btn" type="button" aria-live="polite">copy</button>
     </div>
     <nav class="btns" aria-label="Primary">
@@ -275,7 +275,7 @@
       <a class="btn" href="https://github.com/colinsurprenant/director/blob/main/docs/getting-started.md">Getting started</a>
     </nav>
   </div>
-  <p class="also reveal d4">prebuilt binaries for macOS &amp; Linux on the <a href="https://github.com/colinsurprenant/director/releases">releases page</a> · works with Claude Code + OpenAI Codex</p>
+  <p class="also reveal d4">downloads a verified binary and wires Claude Code (pass <code>--codex</code> for Codex) · macOS, Linux, WSL · <code>go install</code> and <a href="https://github.com/colinsurprenant/director/releases">prebuilt binaries</a> also available</p>
 </header>
 
 <main>
