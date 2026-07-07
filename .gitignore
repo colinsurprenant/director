@@ -22,3 +22,4 @@
 # the Director LOG) and raw research data (contains author telemetry).
 /docs/handoff-*.md
 /docs/research/
+.gstack/
