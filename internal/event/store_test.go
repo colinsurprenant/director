@@ -1,6 +1,7 @@
 package event
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -182,6 +183,50 @@ func TestReadMissingLog(t *testing.T) {
 	}
 	if len(tail) != 0 {
 		t.Fatalf("Tail on missing log returned %d events, want 0", len(tail))
+	}
+}
+
+// TestReadProjectPathAsFileErrors: a <hub>/projects/<repoKey> path that exists as
+// a regular FILE (where the project directory belongs) must surface as a real
+// error, never as an empty log — a silently-empty read of the system-of-record
+// is the §9/LIE-TEST failure class. Portable classification via logTrulyAbsent:
+// unix Open hits ENOTDIR and fails loud already; Windows hits
+// ERROR_PATH_NOT_FOUND and, without the parent-dir re-check, would misread it as
+// "no log yet" (twin of fleet.TestDoneWorkstreamFleetPathAsFileErrors).
+func TestReadProjectPathAsFileErrors(t *testing.T) {
+	store := NewStore(t.TempDir(), "broken-repo")
+	projectDir := filepath.Dir(store.Path()) // <hub>/projects/broken-repo
+	if err := os.MkdirAll(filepath.Dir(projectDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(projectDir, []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.ReadAll(); err == nil {
+		t.Fatal("ReadAll on a project path that is a regular file must error, not read as empty")
+	}
+	if _, err := store.Tail(5); err == nil {
+		t.Fatal("Tail on a project path that is a regular file must error, not read as empty")
+	}
+}
+
+// TestReadProjectDirWithoutLogIsEmpty guards the other side of logTrulyAbsent's
+// parent-dir re-check: when the project directory exists but the log file has
+// not been written yet, the read is empty, not an error. A real, empty project
+// must not be misclassified as a broken surface.
+func TestReadProjectDirWithoutLogIsEmpty(t *testing.T) {
+	store := NewStore(t.TempDir(), "empty-project")
+	if err := os.MkdirAll(filepath.Dir(store.Path()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	all, err := store.ReadAll()
+	if err != nil {
+		t.Fatalf("ReadAll on an existing-but-empty project dir: %v", err)
+	}
+	if len(all) != 0 {
+		t.Fatalf("ReadAll returned %d events, want 0", len(all))
 	}
 }
 
