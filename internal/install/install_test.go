@@ -666,10 +666,16 @@ func TestBinSymlinkSharedWithCodex(t *testing.T) {
 		t.Errorf("CC uninstall removed the bin symlink a Codex install still references: %v", err)
 	}
 
-	// With the Codex install gone, the CC uninstall reclaims it (mirrors shims).
+	// With the CC entries already stripped, the codex uninstall itself reclaims
+	// the symlink alongside the shims — a codex-only machine keeps no residue.
 	if err := UninstallCodex(codexHooksPath); err != nil {
 		t.Fatalf("UninstallCodex: %v", err)
 	}
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Errorf("codex-only uninstall should reclaim the bin symlink with no CC install left (err=%v)", err)
+	}
+
+	// And the CC round-trip reclaims it the same way (mirrors shims).
 	if err := Install(path); err != nil {
 		t.Fatalf("re-Install: %v", err)
 	}
