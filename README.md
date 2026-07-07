@@ -64,18 +64,24 @@ The design in four ideas — the full argument, including honest comparisons, is
 
 ## Install
 
-Prebuilt binaries for macOS, Linux, and Windows (amd64/arm64) are published on the [releases page](https://github.com/colinsurprenant/director/releases); [`docs/getting-started.md`](docs/getting-started.md) covers install-from-release.
+One command downloads the right prebuilt binary for your platform (checksum-verified), installs it to `~/.local/bin`, and wires it into Claude Code. Installed and wired, no second step (it tells you if `~/.local/bin` isn't on your `PATH` yet):
 
-> **On Windows?** Use [WSL](https://learn.microsoft.com/windows/wsl/) with the Linux binary: everything works there, hooks included. Native Windows is CLI-only for now: the binary is built and CI-tested, and every manual verb (`emit`, `render`, `status`, `brief`, `show`, `resolve`, …) works from PowerShell, but the hook shims are bash, so the ambient layer — session-start injection, heartbeats, boundary nudges — is not yet wired natively.
+```bash
+curl -fsSL https://raw.githubusercontent.com/colinsurprenant/director/main/install.sh | sh
+```
 
-Or build the binary and put it on your `PATH`:
+Wire Codex instead with `sh -s -- --codex` (or `--both`); install the binary only with `sh -s -- --no-wire`.
+
+> **On Windows?** Run the one-liner inside [WSL](https://learn.microsoft.com/windows/wsl/) with the Linux binary: everything works there, hooks included. Native Windows is CLI-only for now: the binary is built and CI-tested, and every manual verb (`emit`, `render`, `status`, `brief`, `show`, `resolve`, …) works from PowerShell, but the hook shims are bash, so the ambient layer — session-start injection, heartbeats, boundary nudges — is not yet wired natively.
+
+**Other ways in:** prebuilt binaries for macOS, Linux, and Windows (amd64/arm64) are on the [releases page](https://github.com/colinsurprenant/director/releases) ([`docs/getting-started.md`](docs/getting-started.md) covers install-from-release), `go install github.com/colinsurprenant/director/cmd/director@latest` builds from source (Go 1.25+), or build it yourself:
 
 ```bash
 go build -o bin/director ./cmd/director
 sudo install bin/director /usr/local/bin/director   # or copy it anywhere on PATH
 ```
 
-Then wire it into your agent — Claude Code, Codex, or both.
+Then wire it into your agent. The one-liner already wired Claude Code; the sections below spell out what that does, and how to add Codex.
 
 ### Wire into Claude Code
 
