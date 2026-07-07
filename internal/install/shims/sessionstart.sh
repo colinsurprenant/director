@@ -10,8 +10,8 @@
 # session start (§13 t5).
 set -u
 
-# Resolve the director binary: DIRECTOR_BIN override, else PATH, else the repo's
-# conventional build output relative to this shim.
+# Resolve the director binary: DIRECTOR_BIN override, else PATH, else the
+# symlink `director install` drops next to this shim (../bin/director).
 director_bin="${DIRECTOR_BIN:-}"
 if [ -z "$director_bin" ]; then
   if command -v director >/dev/null 2>&1; then
