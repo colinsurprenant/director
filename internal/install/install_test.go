@@ -50,6 +50,10 @@ func writeFixture(t *testing.T, contents string) (path, hooksDir string) {
 	t.Setenv(codexSkillsDirEnv, filepath.Join(t.TempDir(), "skills"))
 	dir := t.TempDir()
 	path = filepath.Join(dir, "settings.json")
+	// Point the default CC settings at the fixture itself, so UninstallCodex's
+	// claudeInstallPresent probe sees the same install state the test builds
+	// (and never the developer's real ~/.claude/settings.json).
+	t.Setenv(settingsPathEnv, path)
 	if contents != "" {
 		if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
 			t.Fatal(err)
