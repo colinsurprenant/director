@@ -153,7 +153,7 @@ func codexInstallPresent() bool {
 	if err != nil {
 		return false
 	}
-	return managedEntriesPresent(hooksPath)
+	return ManagedEntriesPresent(hooksPath)
 }
 
 // codexSkillName maps an embedded command filename to its skill name:
