@@ -11,6 +11,19 @@ import (
 	"github.com/colinsurprenant/director/internal/install"
 )
 
+// skipUnixOnlyDoctor marks a test that exercises doctor's diagnose engine, which
+// models Unix hook resolution: executable shim bits and the install bin symlink
+// (writeBinSymlink no-ops on native Windows, and Go reports files without 0o111
+// there). Production `director doctor` short-circuits on native Windows before
+// diagnose, so these paths only ever run on Unix/WSL — matching install_test's
+// own bin-symlink skip.
+func skipUnixOnlyDoctor(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("doctor's diagnose engine is Unix/WSL-only; native Windows short-circuits before it")
+	}
+}
+
 // installedFixture performs a real `install.Install` into temp dirs (honoring the
 // DIRECTOR_* overrides) and returns doctorInputs describing that healthy state.
 // diagnose is then tested against genuine install output, not a hand-built mock —
@@ -19,6 +32,7 @@ import (
 // passes via the symlink without touching the ambient PATH.
 func installedFixture(t *testing.T) doctorInputs {
 	t.Helper()
+	skipUnixOnlyDoctor(t)
 	root := t.TempDir()
 	hooksDir := filepath.Join(root, "hooks")
 	t.Setenv("DIRECTOR_HOOKS_DIR", hooksDir)
@@ -190,6 +204,7 @@ func TestDoctorHubMissingIsOK(t *testing.T) {
 // TestRunDoctorSandboxed drives the full CLI wrapper through env overrides so no
 // real ~/.claude or ~/.director is touched, covering the exit codes.
 func TestRunDoctorSandboxed(t *testing.T) {
+	skipUnixOnlyDoctor(t)
 	root := t.TempDir()
 	settings := filepath.Join(root, "settings.json")
 	t.Setenv("DIRECTOR_HOOKS_DIR", filepath.Join(root, "hooks"))
@@ -219,6 +234,7 @@ func TestRunDoctorSandboxed(t *testing.T) {
 // (see TestRunDoctorSandboxed), so a flip to exit 1 can only come from doctor
 // reading the settings-level pin.
 func TestDoctorSettingsPinnedBinBroken(t *testing.T) {
+	skipUnixOnlyDoctor(t)
 	root := t.TempDir()
 	settings := filepath.Join(root, "settings.json")
 	t.Setenv("DIRECTOR_HOOKS_DIR", filepath.Join(root, "hooks"))
