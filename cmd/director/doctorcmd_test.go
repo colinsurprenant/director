@@ -1,8 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/colinsurprenant/director/internal/install"
@@ -207,5 +210,128 @@ func TestRunDoctorSandboxed(t *testing.T) {
 	}
 	if code := runDoctor([]string{"extra"}); code != 2 {
 		t.Fatalf("extra arg: runDoctor exit = %d, want 2", code)
+	}
+}
+
+// TestDoctorSettingsPinnedBinBroken is the P1 regression: a DIRECTOR_BIN pinned
+// ONLY in settings.json's env block (the documented desktop-app path, invisible
+// to the shell) must still be caught. Without the pin the install is healthy
+// (see TestRunDoctorSandboxed), so a flip to exit 1 can only come from doctor
+// reading the settings-level pin.
+func TestDoctorSettingsPinnedBinBroken(t *testing.T) {
+	root := t.TempDir()
+	settings := filepath.Join(root, "settings.json")
+	t.Setenv("DIRECTOR_HOOKS_DIR", filepath.Join(root, "hooks"))
+	t.Setenv("DIRECTOR_COMMANDS_DIR", filepath.Join(root, "commands"))
+	t.Setenv("DIRECTOR_SETTINGS_PATH", settings)
+	t.Setenv("DIRECTOR_CODEX_HOOKS_PATH", filepath.Join(root, "no-codex.json"))
+	t.Setenv("DIRECTOR_HUB", root)
+	t.Setenv("DIRECTOR_BIN", "") // NOT pinned in the shell
+	if err := install.Install(settings); err != nil {
+		t.Fatal(err)
+	}
+	pinSettingsEnv(t, settings, "DIRECTOR_BIN", filepath.Join(root, "not-a-binary"))
+	if code := runDoctor(nil); code != 1 {
+		t.Fatalf("a dead settings.json-pinned DIRECTOR_BIN must fail doctor: exit = %d, want 1", code)
+	}
+}
+
+// TestDoctorSettingsPinSourceLabeled locks the report wording: when the pin comes
+// from settings.json the failure names that source, so a user knows where to fix
+// it (the shell env vs the settings file are different edits).
+func TestDoctorSettingsPinSourceLabeled(t *testing.T) {
+	in := installedFixture(t)
+	in.directorBin = filepath.Join(t.TempDir(), "not-a-binary")
+	in.directorBinFromSettings = true
+	rep := diagnose(in)
+	if levelOf(t, rep, "binary") != levelFail {
+		t.Fatal("a broken settings-pinned DIRECTOR_BIN must FAIL")
+	}
+	for _, c := range rep.checks {
+		if c.title == "binary" {
+			if !strings.Contains(c.detail, "settings.json env") {
+				t.Errorf("binary detail should name the settings.json source, got: %s", c.detail)
+			}
+		}
+	}
+}
+
+// TestDoctorNativeWindowsIsCLIOnly: on native Windows the hooks are intentionally
+// unwired (install refuses), so doctor reports the CLI-only state and exits 0
+// rather than emitting failures whose only remedy also refuses. Usage errors
+// still win over the platform note.
+func TestDoctorNativeWindowsIsCLIOnly(t *testing.T) {
+	saved := installGOOS
+	installGOOS = "windows"
+	defer func() { installGOOS = saved }()
+	if code := runDoctor(nil); code != 0 {
+		t.Fatalf("native Windows doctor must exit 0 (CLI-only, not broken): got %d", code)
+	}
+	if code := runDoctor([]string{"extra"}); code != 2 {
+		t.Fatalf("usage error must return 2 even on Windows: got %d", code)
+	}
+}
+
+// TestNearestExistingDir exercises the ancestor walk behind the missing-hub
+// writability check deterministically, with no permission mutation.
+func TestNearestExistingDir(t *testing.T) {
+	root := t.TempDir()
+	deep := filepath.Join(root, "a", "b", "c", "d")
+	if got := nearestExistingDir(deep); got != root {
+		t.Fatalf("nearestExistingDir(%q) = %q, want %q", deep, got, root)
+	}
+	if got := nearestExistingDir(root); got != root {
+		t.Fatalf("nearestExistingDir(existing) = %q, want %q", got, root)
+	}
+}
+
+// TestDoctorHubUnwritableAncestorFails covers the P2 branch: a not-yet-created
+// hub whose nearest existing parent is unwritable must FAIL (the first write's
+// MkdirAll would fail). Guarded off Windows (which ignores unix perms) and root
+// (which bypasses them).
+func TestDoctorHubUnwritableAncestorFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix directory permissions; Windows ignores 0o555")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	root := t.TempDir()
+	locked := filepath.Join(root, "locked")
+	if err := os.Mkdir(locked, 0o555); err != nil { // read+execute, no write
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0o755) }) // let TempDir cleanup remove it
+	in := installedFixture(t)
+	in.hub = filepath.Join(locked, "hub") // missing; nearest ancestor is unwritable
+	if levelOf(t, diagnose(in), "hub") != levelFail {
+		t.Fatal("a missing hub under an unwritable parent must FAIL")
+	}
+}
+
+// pinSettingsEnv merges an env-var pin into a settings.json file's top-level
+// "env" block, mirroring the documented DIRECTOR_BIN pinning edit.
+func pinSettingsEnv(t *testing.T, path, key, val string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(data, &root); err != nil {
+		t.Fatal(err)
+	}
+	env, _ := root["env"].(map[string]any)
+	if env == nil {
+		env = map[string]any{}
+	}
+	env[key] = val
+	root["env"] = env
+	out, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, out, 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

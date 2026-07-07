@@ -63,13 +63,14 @@ func (r doctorReport) hasWarn() bool {
 // unit-testable against temp dirs, with no dependency on the real ~/.claude
 // layout or the ambient PATH.
 type doctorInputs struct {
-	directorBin  string                // DIRECTOR_BIN ("" if unset)
-	lookDirector func() (string, bool) // resolves `director` on PATH → (path, found)
-	settingsPath string                // ~/.claude/settings.json
-	hooksDir     string                // where the shims live
-	binPath      string                // the install symlink tier (<hooks root>/bin/director)
-	codexHooks   string                // ~/.codex/hooks.json
-	hub          string                // the coordination hub root
+	directorBin             string                // effective DIRECTOR_BIN the shim will see ("" if unset)
+	directorBinFromSettings bool                  // the value came from settings.json's env block, not the shell
+	lookDirector            func() (string, bool) // resolves `director` on PATH → (path, found)
+	settingsPath            string                // ~/.claude/settings.json
+	hooksDir                string                // where the shims live
+	binPath                 string                // the install symlink tier (<hooks root>/bin/director)
+	codexHooks              string                // ~/.codex/hooks.json
+	hub                     string                // the coordination hub root
 }
 
 // runDoctor is the CLI wrapper: resolve the environment, diagnose, print, and
@@ -82,6 +83,18 @@ func runDoctor(args []string) int {
 	if fs.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "usage: director doctor")
 		return 2
+	}
+
+	// On native Windows the hooks are intentionally not wired (install refuses —
+	// the shims are bash), so running the checks would report failures whose only
+	// remedy, `director install`, also refuses: a dead-end loop. Report the real
+	// state instead — CLI works, ambient layer needs WSL — and exit 0, since
+	// nothing is broken; it's the platform limitation.
+	if installGOOS == "windows" {
+		fmt.Println("director doctor: native Windows is CLI-only — the hook shims are bash scripts, so the ambient layer (session-start injection, heartbeats, boundary nudges) is not wired here.")
+		fmt.Println("  The manual verbs (emit, render, status, brief, show, resolve) work natively; run under WSL with the Linux binary for the full hook-driven layer.")
+		fmt.Println("  Details: https://github.com/colinsurprenant/director/blob/main/docs/getting-started.md")
+		return 0
 	}
 
 	in, err := doctorInputsFromEnv()
@@ -120,14 +133,30 @@ func doctorInputsFromEnv() (doctorInputs, error) {
 	if err != nil {
 		return doctorInputs{}, err
 	}
+	// Resolve the DIRECTOR_BIN the shim will actually see. A value exported in the
+	// current shell wins (a terminal-launched session inherits it), but the
+	// DOCUMENTED way to pin it — for desktop-app launches that get a bare PATH — is
+	// the "env" block in settings.json, which Claude Code injects into the hook and
+	// the shim uses exclusively. Reading only the shell env would blind doctor to a
+	// stale settings.json pin: it would fall through to PATH/symlink and report
+	// healthy while the real hook no-ops on the dead pin.
+	directorBin := os.Getenv("DIRECTOR_BIN")
+	fromSettings := false
+	if directorBin == "" {
+		if pinned, ok := install.SettingsDirectorBin(settingsPath); ok {
+			directorBin = pinned
+			fromSettings = true
+		}
+	}
 	return doctorInputs{
-		directorBin:  os.Getenv("DIRECTOR_BIN"),
-		lookDirector: func() (string, bool) { p, e := exec.LookPath("director"); return p, e == nil },
-		settingsPath: settingsPath,
-		hooksDir:     hooksDir,
-		binPath:      binPath,
-		codexHooks:   codexHooks,
-		hub:          hub,
+		directorBin:             directorBin,
+		directorBinFromSettings: fromSettings,
+		lookDirector:            func() (string, bool) { p, e := exec.LookPath("director"); return p, e == nil },
+		settingsPath:            settingsPath,
+		hooksDir:                hooksDir,
+		binPath:                 binPath,
+		codexHooks:              codexHooks,
+		hub:                     hub,
 	}, nil
 }
 
@@ -159,25 +188,38 @@ func binaryResolutionCheck(in doctorInputs) check {
 	// else, so a stale value is worse than an unset one: it disables the fallback
 	// tiers and coordination silently dies.
 	if in.directorBin != "" {
+		source := "the shell environment"
+		if in.directorBinFromSettings {
+			source = "settings.json env"
+		}
 		if binResolves(in.directorBin) {
-			return check{"binary", levelOK, fmt.Sprintf("hooks use DIRECTOR_BIN=%s (it overrides the PATH and symlink tiers)", in.directorBin)}
+			return check{"binary", levelOK, fmt.Sprintf("hooks use DIRECTOR_BIN=%s (from %s; it overrides the PATH and symlink tiers)", in.directorBin, source)}
 		}
 		return check{"binary", levelFail, fmt.Sprintf(
-			"DIRECTOR_BIN=%s is set but not executable — the shims use it and nothing else, so coordination silently no-ops. Unset it, or point it at a real director binary.", in.directorBin)}
+			"DIRECTOR_BIN=%s (from %s) is set but not executable — the shims use it and nothing else, so coordination silently no-ops. Unset it, or point it at a real director binary.", in.directorBin, source)}
 	}
 
+	// No DIRECTOR_BIN: the shim tries `director` on PATH FIRST, then falls back to
+	// the install symlink. Mirror that order in what we report. The verdict:
+	// resolvable everywhere (PATH covers a terminal, the symlink covers desktop-app
+	// launches with their bare PATH) → OK; PATH-only, no symlink → WARN (a terminal
+	// works but Dock/Launchpad launches miss it); symlink-only → OK (the shim falls
+	// through to it in every launch context); neither → FAIL.
 	pathBin, onPath := in.lookDirector()
 	symOK := isExecutable(in.binPath)
 	switch {
-	case symOK:
+	case onPath && symOK:
 		return check{"binary", levelOK, fmt.Sprintf(
-			"hooks resolve director via the install symlink %s — works from a terminal and from desktop-app (Dock/Launchpad) launches", in.binPath)}
+			"director resolves on your PATH (%s), and the install symlink %s backs desktop-app (Dock/Launchpad) launches — both launch contexts covered", pathBin, in.binPath)}
 	case onPath:
 		return check{"binary", levelWarn, fmt.Sprintf(
-			"director is on your PATH (%s) but the install symlink %s is missing — desktop-app launches get a bare PATH and may not find it. Re-run `director install` to drop the symlink.", pathBin, in.binPath)}
+			"director is on your PATH (%s) but the install symlink %s is missing or broken — desktop-app launches get a bare PATH and may not find it. Re-run `director install` to drop the symlink.", pathBin, in.binPath)}
+	case symOK:
+		return check{"binary", levelOK, fmt.Sprintf(
+			"director is not on your PATH; the hooks resolve it via the install symlink %s — works from a terminal and from desktop-app (Dock/Launchpad) launches", in.binPath)}
 	default:
 		return check{"binary", levelFail, fmt.Sprintf(
-			"director is not on your PATH and the install symlink %s is missing — the hooks will silently no-op. Re-run `director install` (or put director on your PATH).", in.binPath)}
+			"director is not on your PATH and the install symlink %s is missing or broken — the hooks will silently no-op. Re-run `director install` (or put director on your PATH).", in.binPath)}
 	}
 }
 
@@ -209,10 +251,18 @@ func codexHooksCheck(in doctorInputs) (check, bool) {
 }
 
 // hubCheck confirms coordination state can actually be written. A not-yet-created
-// hub is fine (it is made on first write); an unwritable one is fatal.
+// hub is fine (it is made on first write) — but only if the nearest existing
+// ancestor is writable, else the first write's MkdirAll fails and coordination is
+// dead while doctor would otherwise call it healthy. An existing-but-unwritable
+// hub is fatal.
 func hubCheck(hub string) check {
 	fi, err := os.Stat(hub)
 	if os.IsNotExist(err) {
+		anc := nearestExistingDir(filepath.Dir(hub))
+		if !dirWritable(anc) {
+			return check{"hub", levelFail, fmt.Sprintf(
+				"%s does not exist and its nearest existing parent %s is not writable — the first coordination write (MkdirAll) will fail.", hub, anc)}
+		}
 		return check{"hub", levelOK, fmt.Sprintf("%s does not exist yet — it is created on first write", hub)}
 	}
 	if err != nil {
@@ -278,6 +328,23 @@ func missingShims(hooksDir string) []string {
 		}
 	}
 	return missing
+}
+
+// nearestExistingDir walks up from p to the first ancestor that exists on disk.
+// It always terminates: the filesystem root always exists, and filepath.Dir is a
+// fixed point there. Used to find the directory MkdirAll would actually create
+// the hub under, so its writability can be probed before the first hub write.
+func nearestExistingDir(p string) string {
+	for {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return p // reached the root; nothing more to climb
+		}
+		p = parent
+	}
 }
 
 // dirWritable probes write access by creating and removing a temp file — the
