@@ -517,8 +517,13 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 // coordination. The shims' last tier already probes this exact path; install
 // just has to put a binary there.
 //
-// Rules: an existing symlink is replaced whatever it points at — the running
-// binary wins, so a stale link to a moved/deleted build can't shadow it. An
+// Rules: the link targets the EvalSymlinks-resolved physical path, not the
+// invoked one — this prevents a self-referential link when install is re-run
+// through the symlink itself, at the cost that a versioned-symlink distribution
+// (e.g. a Homebrew Cellar path) leaves the link dangling after an upgrade until
+// `director install` is re-run, which the docs already prescribe. An existing
+// symlink is replaced whatever it points at — the running binary wins, so a
+// stale link to a moved/deleted build can't shadow it. An
 // existing REGULAR file is never clobbered: that is a real binary the user
 // placed deliberately, and the shims will run it as-is (the CLI notes it in the
 // install output). Native Windows is a no-op — symlink creation needs
