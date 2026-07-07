@@ -58,7 +58,7 @@ func runInstall(args []string) int {
 		fmt.Fprintf(os.Stderr, "install: %v\n", err)
 		return 1
 	}
-	fmt.Printf("installed Director hooks into %s\n", path)
+	fmt.Printf("installed Director hooks into %s (set DIRECTOR_SETTINGS_PATH to override)\n", path)
 	hooksDir, err := install.DefaultHooksDir()
 	if err != nil {
 		// Install already resolved and wrote to this same dir, so this is unreachable

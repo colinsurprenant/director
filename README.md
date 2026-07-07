@@ -107,6 +107,7 @@ Install paths and runtime knobs, common to both agents unless a default says oth
 
 | Variable | Default | Selects |
 |---|---|---|
+| `DIRECTOR_SETTINGS_PATH` | `~/.claude/settings.json` | the Claude Code settings file `install` merges into (also the probe that decides whether an uninstall may reclaim the shared shims) |
 | `DIRECTOR_HOOKS_DIR` | `~/.claude/director/hooks` | where `install` writes the shims and the settings entries point; override to relocate them |
 | `DIRECTOR_COMMANDS_DIR` | `~/.claude/commands/director` | where `install` writes the `/director:*` slash commands |
 | `DIRECTOR_CODEX_HOOKS_PATH` | `~/.codex/hooks.json` | the Codex hooks file `install --codex` merges into |

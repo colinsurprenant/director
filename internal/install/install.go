@@ -318,7 +318,9 @@ func removeManagedEntries(path string) error {
 
 // claudeInstallPresent reports whether the default CC settings file still
 // carries Director-managed entries — the mirror image of codexInstallPresent,
-// and the signal UninstallCodex uses to spare the shared shims. Same fail-open
+// and one of the two signals UninstallCodex uses to spare the shared shims
+// (the other being codexInstallPresent itself, for the custom-`--settings`
+// form). Same fail-open
 // stance and KNOWN LIMIT as its mirror (see codexInstallPresent): a missing or
 // unreadable settings.json reads as "no CC install", so only a positive
 // managed-entry sighting spares the shims — anything else would leave a

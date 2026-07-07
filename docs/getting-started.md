@@ -71,7 +71,7 @@ director install
 ```
 
 ```text
-installed Director hooks into /Users/you/.claude/settings.json
+installed Director hooks into /Users/you/.claude/settings.json (set DIRECTOR_SETTINGS_PATH to override)
   shims written to /Users/you/.claude/director/hooks (set DIRECTOR_HOOKS_DIR to override)
   commands written to /Users/you/.claude/commands/director (/director:adopt, /director:complete, /director:handoff; set DIRECTOR_COMMANDS_DIR to override)
 ```
@@ -125,9 +125,9 @@ The rest of this guide uses the Claude Code command names (`/director:adopt` etc
 as its `$director-*` skill twin — same command, same behavior.
 
 `director uninstall --codex` removes only the tagged entries and the three skill directories. The hook
-shims are shared between the two agents: a `--codex` uninstall leaves them for a Claude Code install,
-and the plain `director uninstall` leaves them while a Codex install still references them — so
-uninstalling one agent never silently breaks the other.
+shims are shared between the two agents: either uninstall form leaves them in place while the other
+agent's install still references them, and reclaims them once neither does — so uninstalling one agent
+never silently breaks the other, and uninstalling the last one leaves no shim files behind.
 
 ---
 
