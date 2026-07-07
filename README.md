@@ -233,9 +233,9 @@ There are exactly four model-emitted semantic kinds. Pick by what the fact *is*:
 - **There is no `blocker` kind.** "Stuck, needs a human" is an `open-item` with `--risk escalate` — exactly the open-set that surfaces in `status`'s Needs-you band.
 - **`done` is not a semantic kind** — it is fleet-liveness only (a hook marks the session terminal). "What's done" belongs in a `handoff` body.
 
-## The protocol skill
+## The coordination protocol
 
-`skills/director/SKILL.md` is the model-facing coordination protocol. It teaches a session two load-bearing habits that no hook can perform for it:
+The SessionStart hook injects this protocol into every managed-repo session, so the emit habit is in context from turn one: pushed as injected state, not shipped as a lazy model-invoked skill, because an always-on habit only fires if it is already in the window. (`skills/director/SKILL.md` is the readable source of the same text.) It teaches a session two load-bearing habits that no hook can perform for it:
 
 - **Continuous boundary-flush** — emit durable state to the LOG *as you work* (the moment a decision is made or a loop is deferred, and a `handoff` at each natural boundary), never batched for the end of a session. Transient working state survives a compaction only if the model wrote it to the LOG during a turn.
 - **Ground Truth** — treat the CHARTER + digest injected at session start as the *authoritative current picture*: build on it, do not re-derive it by re-scanning the repo or re-reading the log.
@@ -246,7 +246,7 @@ A workstream's id is `<repo>-<branch>-<shortid>`, derived deterministically from
 
 ## Status & scope
 
-**In v1:** the hook-first coordination core (CLI write path, identity, event store, fleet/liveness, `render`/`brief`/`status`, hooks + the `_managedBy` installer, the protocol skill), **informed adoption** (`adopt` registers; `/director:adopt` drafts the CHARTER proposal and runs the triaged open-loop import — see [Adopt an existing repo](#adopt-an-existing-repo)), and a **Codex adapter**: `director install --codex` wires the same hooks into Codex's `hooks.json` (Codex asks you to trust them at the next session start; if you dismiss that prompt, run `/hooks` in the session) and installs the boundary commands as agent skills — `$director-adopt`, `$director-complete`, `$director-handoff`. Ground truth injection, liveness, and close-out work identically on both agents; the emit-guard and the context-fill handoff nudge are Claude Code-only for now (they read CC's transcript format and stay safely inert on Codex). Single-machine.
+**In v1:** the hook-first coordination core (CLI write path, identity, event store, fleet/liveness, `render`/`brief`/`status`, hooks + the `_managedBy` installer, the injected coordination protocol), **informed adoption** (`adopt` registers; `/director:adopt` drafts the CHARTER proposal and runs the triaged open-loop import — see [Adopt an existing repo](#adopt-an-existing-repo)), and a **Codex adapter**: `director install --codex` wires the same hooks into Codex's `hooks.json` (Codex asks you to trust them at the next session start; if you dismiss that prompt, run `/hooks` in the session) and installs the boundary commands as agent skills — `$director-adopt`, `$director-complete`, `$director-handoff`. Ground truth injection, liveness, and close-out work identically on both agents; the emit-guard and the context-fill handoff nudge are Claude Code-only for now (they read CC's transcript format and stay safely inert on Codex). Single-machine.
 
 **Deferred:** deeper brownfield analysis beyond the informed-adopt pass (doc living/record/rot reconciliation, an arc42 overview draft, back-dated decision records). `brief --synthesize` (model-narrated prose) is deferred — v1 ships the deterministic brief. A background monitor/reaper, notifications, and a freshness sweep come later.
 

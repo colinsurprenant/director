@@ -254,8 +254,9 @@ director show <ulid>      # read any event in full first — digest lines are ca
 
 ## 5. How the model uses Director
 
-You rarely run `emit`/`resolve` by hand — **the session does**, guided by
-[`../skills/director/SKILL.md`](../skills/director/SKILL.md). The protocol teaches two habits no hook can
+You rarely run `emit`/`resolve` by hand — **the session does**, guided by the coordination protocol the
+SessionStart hook injects into every managed-repo session (its readable source is
+[`../skills/director/SKILL.md`](../skills/director/SKILL.md)). The protocol teaches two habits no hook can
 perform for the model:
 
 - **Continuous boundary-flush** — emit durable state *as work happens* (a `decision` the moment it's made,
