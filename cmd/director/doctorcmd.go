@@ -227,6 +227,14 @@ func binaryResolutionCheck(in doctorInputs) check {
 // in settings.json AND the shims those entries point at actually exist.
 func claudeHooksCheck(in doctorInputs) check {
 	if !install.ManagedEntriesPresent(in.settingsPath) {
+		// ManagedEntriesPresent collapses a read/parse failure to the same false as
+		// "no managed entries", but the remedies differ: a malformed settings.json
+		// needs fixing (install would refuse to overwrite it), not a re-run. Split
+		// the two so the message points at the real fix.
+		if err := install.SettingsParseError(in.settingsPath); err != nil {
+			return check{"claude code hooks", levelFail, fmt.Sprintf(
+				"%s is unreadable or not valid JSON (%v) — fix the file, then re-run `director install`.", in.settingsPath, err)}
+		}
 		return check{"claude code hooks", levelFail, fmt.Sprintf("no Director hooks in %s — run `director install`.", in.settingsPath)}
 	}
 	if missing := missingShims(in.hooksDir); len(missing) > 0 {
@@ -294,8 +302,16 @@ func writeReport(w io.Writer, rep doctorReport) {
 	fmt.Fprintln(w, "  (For a repo's coordination state, run `director status`.)")
 }
 
-// binResolves mirrors the shims' `[ -x "$bin" ] || command -v "$bin"`: a value
-// with a path separator must be an executable file; a bare name must be on PATH.
+// binResolves models how the shims resolve DIRECTOR_BIN (`[ -x "$bin" ] ||
+// command -v "$bin"`): a value with a path separator must be an executable file;
+// a bare name must be on PATH. It deliberately does NOT replicate the shims'
+// cwd-relative `-x` for a bare name — that resolves against the HOOK's working
+// directory (Claude Code's, the project dir), which doctor, run from a different
+// cwd, cannot know; matching it here would probe the wrong directory and could
+// report healthy when the hook is dead. Depending on a cwd-relative binary for a
+// hook is unsupportable anyway (it breaks under every other cwd), and Go's
+// exec.LookPath excludes cwd for exactly that footgun. PATH is the portable,
+// cwd-independent contract.
 func binResolves(v string) bool {
 	if strings.ContainsRune(v, filepath.Separator) || strings.Contains(v, "/") {
 		return isExecutable(v)

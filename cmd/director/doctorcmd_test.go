@@ -256,6 +256,27 @@ func TestDoctorSettingsPinSourceLabeled(t *testing.T) {
 	}
 }
 
+// TestDoctorMalformedSettingsReported: a settings.json that can't be parsed must
+// report as unreadable/malformed with the right remedy, not as "no hooks — run
+// director install" (which would refuse on a malformed file).
+func TestDoctorMalformedSettingsReported(t *testing.T) {
+	in := installedFixture(t)
+	bad := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(bad, []byte("{ this is not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	in.settingsPath = bad
+	rep := diagnose(in)
+	if levelOf(t, rep, "claude code hooks") != levelFail {
+		t.Fatal("a malformed settings.json must FAIL the hooks check")
+	}
+	for _, c := range rep.checks {
+		if c.title == "claude code hooks" && !strings.Contains(c.detail, "not valid JSON") {
+			t.Errorf("malformed settings should be reported as such, got: %s", c.detail)
+		}
+	}
+}
+
 // TestDoctorNativeWindowsIsCLIOnly: on native Windows the hooks are intentionally
 // unwired (install refuses), so doctor reports the CLI-only state and exits 0
 // rather than emitting failures whose only remedy also refuses. Usage errors

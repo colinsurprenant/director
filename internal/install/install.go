@@ -442,6 +442,17 @@ func SettingsDirectorBin(path string) (string, bool) {
 	return "", false
 }
 
+// SettingsParseError returns the error from reading and parsing the settings file
+// at path, or nil when the file is absent, empty, or valid JSON. It lets a caller
+// (`director doctor`) tell "the file is fine but carries no Director hooks" apart
+// from "the file is unreadable or malformed" — two states ManagedEntriesPresent
+// collapses to the same false, but whose remedies differ (run install vs. fix the
+// file, which install itself would refuse to overwrite).
+func SettingsParseError(path string) error {
+	_, err := loadSettings(path)
+	return err
+}
+
 // writeShims materializes the embedded hook shims into hooksDir, creating the dir
 // and overwriting any existing shims so they always match THIS binary. Writing is
 // idempotent (re-install reproduces the same files) and atomic per file (temp +
