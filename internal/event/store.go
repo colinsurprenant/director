@@ -199,19 +199,31 @@ func (s *Store) scan(fn func(Event) error) error {
 // regular FILE also reports not-exist (ERROR_PATH_NOT_FOUND), where unix reports
 // ENOTDIR and fails loud. A silently-empty read of the system-of-record is the
 // §9 "silence reads as healthy" / LIE-TEST failure class, so a not-exist openErr
-// is only a precondition: the log is genuinely absent only if its parent
-// resolves to a real directory (or is itself absent). A parent that exists as a
-// non-directory is a broken surface and must fail loud on both platforms. Stat,
-// not Lstat, classifies the parent because Open follows symlinks — a symlinked
-// project directory is a valid parent, not a broken one. This is the file-open
-// twin of fleet.dirTrulyAbsent, which does the same for a directory read.
+// is only a precondition: the log is genuinely absent only if its parent is a
+// real directory (reachable through symlinks) or nothing at all. A parent that
+// exists as a non-directory — a regular file, or a dangling symlink — is a
+// broken surface and must fail loud on both platforms.
+//
+// Stat (which follows symlinks) classifies a present parent, so a symlinked
+// project directory stays valid. When Stat itself reports not-exist, an Lstat
+// tiebreak separates a genuinely-absent parent from a dangling symlink (Lstat
+// does not follow the link): a link whose target is gone is a broken surface,
+// not an absent one. This mirrors fleet.dirTrulyAbsent's treatment of dangling
+// symlinks, adapted from a directory read to a file open.
 func logTrulyAbsent(path string, openErr error) bool {
 	if !os.IsNotExist(openErr) {
 		return false
 	}
-	info, err := os.Stat(filepath.Dir(path))
-	if err != nil {
-		return os.IsNotExist(err)
+	parent := filepath.Dir(path)
+	info, err := os.Stat(parent)
+	if err == nil {
+		return info.IsDir()
 	}
-	return info.IsDir()
+	if !os.IsNotExist(err) {
+		return false
+	}
+	if _, lerr := os.Lstat(parent); lerr == nil {
+		return false // link exists, target gone → broken surface, fail loud
+	}
+	return true // nothing there at all → genuinely fresh
 }

@@ -3,10 +3,21 @@ package event
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 )
+
+// skipIfNoSymlinks skips a test that must create a symlink: on Windows that
+// needs privileges, so the symlink-classification branches are verified on unix
+// only (the regular-file branch, which needs no symlink, still runs everywhere).
+func skipIfNoSymlinks(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs privileges on Windows")
+	}
+}
 
 // newEvent builds a minimally-valid note event for store tests. It reuses the
 // mustID helper defined in event_test.go (same package).
@@ -224,6 +235,54 @@ func TestReadProjectDirWithoutLogIsEmpty(t *testing.T) {
 	all, err := store.ReadAll()
 	if err != nil {
 		t.Fatalf("ReadAll on an existing-but-empty project dir: %v", err)
+	}
+	if len(all) != 0 {
+		t.Fatalf("ReadAll returned %d events, want 0", len(all))
+	}
+}
+
+// TestReadProjectPathAsDanglingSymlinkErrors: a <hub>/projects/<repoKey> that is
+// a symlink to a nonexistent target is a broken surface, not an absent log —
+// it must error, never read as empty. os.Stat follows the link and reports
+// not-exist; logTrulyAbsent's Lstat tiebreak keeps it failing loud (mirroring
+// fleet.dirTrulyAbsent's dangling-symlink stance).
+func TestReadProjectPathAsDanglingSymlinkErrors(t *testing.T) {
+	skipIfNoSymlinks(t)
+	store := NewStore(t.TempDir(), "dangling-repo")
+	projectDir := filepath.Dir(store.Path())
+	if err := os.MkdirAll(filepath.Dir(projectDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(t.TempDir(), "gone"), projectDir); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.ReadAll(); err == nil {
+		t.Fatal("ReadAll on a project path that is a dangling symlink must error, not read as empty")
+	}
+	if _, err := store.Tail(5); err == nil {
+		t.Fatal("Tail on a project path that is a dangling symlink must error, not read as empty")
+	}
+}
+
+// TestReadProjectPathAsSymlinkedDirIsEmpty guards the valid-symlink branch: a
+// project dir reached through a symlink to a REAL, empty directory is a fresh
+// project and reads empty, not an error — the case a naive Lstat classification
+// would wrongly fail loud.
+func TestReadProjectPathAsSymlinkedDirIsEmpty(t *testing.T) {
+	skipIfNoSymlinks(t)
+	store := NewStore(t.TempDir(), "symlinked-repo")
+	projectDir := filepath.Dir(store.Path())
+	if err := os.MkdirAll(filepath.Dir(projectDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), projectDir); err != nil {
+		t.Fatal(err)
+	}
+
+	all, err := store.ReadAll()
+	if err != nil {
+		t.Fatalf("ReadAll through a symlinked project dir: %v", err)
 	}
 	if len(all) != 0 {
 		t.Fatalf("ReadAll returned %d events, want 0", len(all))
