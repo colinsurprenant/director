@@ -85,6 +85,12 @@ func InstallCodex(hooksPath string) error {
 	if err := writeShims(hooksDir); err != nil {
 		return err
 	}
+	// The bin symlink travels with the shims (their PATH-independent fallback
+	// tier probes it), so the Codex form provisions it too — a Codex-only
+	// machine gets the same guarantee.
+	if err := writeBinSymlink(hooksDir); err != nil {
+		return err
+	}
 	skillsDir, err := DefaultCodexSkillsDir()
 	if err != nil {
 		return err
@@ -97,12 +103,13 @@ func InstallCodex(hooksPath string) error {
 
 // UninstallCodex removes Director's tagged entries from hooksPath and the
 // Director-owned skill directories. A missing hooks file means no Codex install
-// to undo — touch nothing, mirroring the CC Uninstall. The shared shims are
-// spared while EITHER default install still references them: the default CC
-// settings.json carrying Director-managed entries (the mirror of the CC
-// Uninstall's codexInstallPresent gate), or the default Codex hooks.json still
-// carrying them — a custom `--settings <path>` uninstall must not strand the
-// default install's shims. On the default-path uninstall the entries were just
+// to undo — touch nothing, mirroring the CC Uninstall. The shared shims (and
+// the bin symlink that travels with them) are spared while EITHER default
+// install still references them: the default CC settings.json carrying
+// Director-managed entries (the mirror of the CC Uninstall's
+// codexInstallPresent gate), or the default Codex hooks.json still carrying
+// them — a custom `--settings <path>` uninstall must not strand the default
+// install's shims. On the default-path uninstall the entries were just
 // stripped above, so the codex probe reads "absent" and the reclaim proceeds.
 // Without the reclaim, a Codex-only machine would keep the shim files forever:
 // the CC uninstall form no-ops on its missing settings.json, so nothing else
@@ -120,6 +127,7 @@ func UninstallCodex(hooksPath string) error {
 	if !claudeInstallPresent() && !codexInstallPresent() {
 		if hooksDir, err := DefaultHooksDir(); err == nil {
 			removeShims(hooksDir)
+			removeBinSymlink(hooksDir)
 		}
 	}
 	return nil

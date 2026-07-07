@@ -49,6 +49,7 @@ func runInstall(args []string) int {
 		if skillsDir, err := install.DefaultCodexSkillsDir(); err == nil {
 			fmt.Printf("  skills written to %s ($director-adopt, $director-complete, $director-handoff; set DIRECTOR_CODEX_SKILLS_DIR to override)\n", skillsDir)
 		}
+		printBinLine()
 		fmt.Println("  Codex will ask you to trust the three Director hooks at your next session start.")
 		fmt.Println("  If you dismiss or interrupt that prompt (an Esc is enough), run /hooks in the session to review and trust them.")
 		return 0
@@ -75,7 +76,33 @@ func runInstall(args []string) int {
 		return 0
 	}
 	fmt.Printf("  commands written to %s (/director:adopt, /director:complete, /director:handoff; set DIRECTOR_COMMANDS_DIR to override)\n", commandsDir)
+	printBinLine()
 	return 0
+}
+
+// printBinLine reports what install left at the shim-fallback binary path
+// (~/.claude/director/bin/director). Normally that is the symlink to the
+// running binary, which keeps the hooks working when Claude Code desktop is
+// launched from the Dock and its launchd PATH misses `director`
+// (anthropics/claude-code#44649). Install deliberately never clobbers a
+// regular file already at that path (a binary the user placed there), so that
+// case is called out instead — with the DIRECTOR_BIN env var as the explicit
+// way to pin a different binary.
+func printBinLine() {
+	binPath, err := install.DefaultBinPath()
+	if err != nil {
+		return // install already succeeded against this same root; nothing useful to add
+	}
+	fi, err := os.Lstat(binPath)
+	if err != nil {
+		return // nothing materialized (e.g. non-default GOOS seam); stay quiet
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		fmt.Printf("  note: %s already exists and is not a symlink — left in place; the hook shims will run it.\n", binPath)
+		fmt.Println("        To pin a specific binary instead, set the DIRECTOR_BIN env var (e.g. via \"env\" in settings.json).")
+		return
+	}
+	fmt.Printf("  binary symlinked at %s (hook fallback when director is not on PATH, e.g. desktop app launches)\n", binPath)
 }
 
 // runUninstall removes only Director's tagged hook entries, leaving hand-rolled
