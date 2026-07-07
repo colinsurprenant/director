@@ -10,8 +10,9 @@ import (
 // codex_test.go exercises the Codex delivery target: the same tagged merge
 // against ~/.codex/hooks.json (reusing the CC fixture — the two files share the
 // {"hooks": {...}} structure), the skill materialization with its naming and
-// cross-reference transforms, and the asymmetric uninstall (skills removed,
-// shared shims left for a possible CC install).
+// cross-reference transforms, and the conditional uninstall (skills removed,
+// shared shims spared only while a CC or default Codex install still
+// references them, reclaimed once neither does).
 
 // codexFixture pins the coexistence guarantee on a hooks.json that already
 // carries a user's own hook.
@@ -35,7 +36,10 @@ const codexFixture = `{
 // isolated — to a path with NO file behind it, so the baseline is a codex-only
 // machine (UninstallCodex's claudeInstallPresent probe must never read the
 // developer's real ~/.claude/settings.json); tests that want a coexisting CC
-// install write one at os.Getenv(settingsPathEnv).
+// install write one at os.Getenv(settingsPathEnv). The default Codex hooks
+// path is pinned to the returned hooksPath (never the developer's real
+// ~/.codex/hooks.json), so these tests exercise the default-path uninstall;
+// the custom --settings form points UninstallCodex at a different file.
 func setupCodex(t *testing.T, fixture string) (hooksPath, hooksDir, skillsDir string) {
 	t.Helper()
 	hooksDir = filepath.Join(t.TempDir(), "hooks")
@@ -45,6 +49,7 @@ func setupCodex(t *testing.T, fixture string) (hooksPath, hooksDir, skillsDir st
 	t.Setenv(settingsPathEnv, filepath.Join(t.TempDir(), "settings.json"))
 	t.Setenv(commandsDirEnv, filepath.Join(t.TempDir(), "commands"))
 	hooksPath = filepath.Join(t.TempDir(), "hooks.json")
+	t.Setenv(codexHooksPathEnv, hooksPath)
 	if fixture != "" {
 		if err := os.WriteFile(hooksPath, []byte(fixture), 0o644); err != nil {
 			t.Fatal(err)
@@ -224,6 +229,29 @@ func TestUninstallCodexReclaimsShimsWhenCCSettingsHasNoManagedEntries(t *testing
 	}
 	if string(b) != codexFixture {
 		t.Errorf("codex uninstall mutated the CC settings file it only probes:\n%s", b)
+	}
+}
+
+// TestUninstallCodexSparesShimsWhenDefaultCodexInstallPresent: a custom
+// `--settings <path>` uninstall while the DEFAULT hooks.json still carries a
+// Director install (and no CC install exists) must leave the shared shims —
+// removing them would strand the default install's trusted entries. Only the
+// default-path uninstall, which strips those entries first, reclaims.
+func TestUninstallCodexSparesShimsWhenDefaultCodexInstallPresent(t *testing.T) {
+	defaultPath, hooksDir, _ := setupCodex(t, "")
+	if err := InstallCodex(defaultPath); err != nil {
+		t.Fatalf("InstallCodex (default path): %v", err)
+	}
+	customPath := filepath.Join(t.TempDir(), "custom-hooks.json")
+	if err := InstallCodex(customPath); err != nil {
+		t.Fatalf("InstallCodex (custom path): %v", err)
+	}
+
+	if err := UninstallCodex(customPath); err != nil {
+		t.Fatalf("UninstallCodex: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(hooksDir, "sessionstart.sh")); err != nil {
+		t.Errorf("custom-path uninstall removed shims the default codex install still references: %v", err)
 	}
 }
 
