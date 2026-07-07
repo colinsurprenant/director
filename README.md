@@ -113,10 +113,10 @@ Install paths and runtime knobs, common to both agents unless a default says oth
 | `DIRECTOR_CODEX_HOOKS_PATH` | `~/.codex/hooks.json` | the Codex hooks file `install --codex` merges into |
 | `DIRECTOR_CODEX_SKILLS_DIR` | `~/.agents/skills` | where `install --codex` writes the `$director-*` agent skills |
 | `DIRECTOR_HUB` | `~/.director` | the central hub that holds all cross-repo coordination state |
-| `DIRECTOR_BIN` | (PATH) | which `director` binary the shims invoke (defaults to `director` on `PATH`, then the `~/.claude/director/bin/director` symlink `install` drops) |
+| `DIRECTOR_BIN` | (PATH) | which `director` binary the shims invoke (defaults to `director` on `PATH`, then the symlink `install` drops next to the shims at `<hooks dir>/../bin/director` — `~/.claude/director/bin/director` by default) |
 | `DIRECTOR_HANDOFF_NUDGE_TOKENS` | (unset) | the context-fill handoff nudge (Claude Code-only for now): an absolute token threshold at which sessions are nudged toward `/director:handoff`; unset or `0` disables it. Fires once per crossing and re-arms only after context falls below half the threshold (a compaction or a context clear) |
 
-> **The binary must be findable.** The shims resolve `director` via `DIRECTOR_BIN` → `PATH` → the `~/.claude/director/bin/director` symlink `install` drops; if all three miss they exit 0 (fail-safe) and coordination silently no-ops. The symlink tier covers the Claude Code **desktop app**, whose Dock/Launchpad launches get the bare launchd `PATH` ([anthropics/claude-code#44649](https://github.com/anthropics/claude-code/issues/44649)). To pin a specific binary explicitly, set `DIRECTOR_BIN` via `"env"` in `~/.claude/settings.json`.
+> **The binary must be findable.** The shims resolve `director` via `DIRECTOR_BIN` → `PATH` → the symlink `install` drops next to them at `<hooks dir>/../bin/director` (`~/.claude/director/bin/director` by default; a `DIRECTOR_HOOKS_DIR` override moves it too); if all three miss they exit 0 (fail-safe) and coordination silently no-ops. The symlink tier covers the Claude Code **desktop app**, whose Dock/Launchpad launches get the bare launchd `PATH` ([anthropics/claude-code#44649](https://github.com/anthropics/claude-code/issues/44649)). To pin a specific binary explicitly, set `DIRECTOR_BIN` via `"env"` in `~/.claude/settings.json`.
 
 ## Adopt an existing repo
 

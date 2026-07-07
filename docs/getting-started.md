@@ -94,8 +94,9 @@ director status
 # (no live workstreams)        ← expected before you adopt anything / open a session
 ```
 
-> **Keep `director` on `PATH`.** The shims invoke it via `DIRECTOR_BIN` → `PATH` →
-> `~/.claude/director/bin/director`. If the binary isn't found, the shims exit 0 (fail-safe) and
+> **Keep `director` on `PATH`.** The shims invoke it via `DIRECTOR_BIN` → `PATH` → the symlink
+> `install` drops next to them at `<hooks dir>/../bin/director` (`~/.claude/director/bin/director`
+> by default; a `DIRECTOR_HOOKS_DIR` override moves it too). If the binary isn't found, the shims exit 0 (fail-safe) and
 > coordination silently no-ops — nothing breaks, but nothing coordinates. After rebuilding the binary,
 > re-run `director install` to refresh the shims.
 >
@@ -111,7 +112,8 @@ director status
 > ```
 >
 > Install never overwrites a **regular file** already sitting at
-> `~/.claude/director/bin/director` — a binary you placed there yourself stays, and the shims run it.
+> `~/.claude/director/bin/director` — a binary you placed there yourself stays, and the shims run it
+> as long as it is executable.
 
 ### Using OpenAI Codex?
 

@@ -81,7 +81,8 @@ func runInstall(args []string) int {
 }
 
 // printBinLine reports what install left at the shim-fallback binary path
-// (~/.claude/director/bin/director). Normally that is the symlink to the
+// (install.DefaultBinPath — `<hooks root>/bin/director`, which follows a
+// DIRECTOR_HOOKS_DIR override). Normally that is the symlink to the
 // running binary, which keeps the hooks working when Claude Code desktop is
 // launched from the Dock and its launchd PATH misses `director`
 // (anthropics/claude-code#44649). Install deliberately never clobbers a
@@ -98,7 +99,7 @@ func printBinLine() {
 		return // nothing materialized (e.g. non-default GOOS seam); stay quiet
 	}
 	if fi.Mode()&os.ModeSymlink == 0 {
-		fmt.Printf("  note: %s already exists and is not a symlink — left in place; the hook shims will run it.\n", binPath)
+		fmt.Printf("  note: %s already exists and is not a symlink — left in place; the hook shims will run it if it is executable.\n", binPath)
 		fmt.Println("        To pin a specific binary instead, set the DIRECTOR_BIN env var (e.g. via \"env\" in settings.json).")
 		return
 	}

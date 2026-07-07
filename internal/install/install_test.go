@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -609,6 +610,30 @@ func TestInstallAndUninstallPreserveUserBinFile(t *testing.T) {
 	}
 	if _, err := os.Stat(userBin); err != nil {
 		t.Errorf("Uninstall removed a user-placed bin file: %v", err)
+	}
+}
+
+// TestInstallFailsOnNonRegularBinPath: something at the bin path that is
+// neither a symlink nor a regular file (here a directory) must fail the
+// install loudly — the fallback tier cannot resolve through it, and skipping
+// silently would recreate the silent-absence the symlink exists to close.
+func TestInstallFailsOnNonRegularBinPath(t *testing.T) {
+	skipIfNoSymlinks(t)
+	path, hooksDir := writeFixture(t, "")
+	link := filepath.Join(filepath.Dir(hooksDir), "bin", "director")
+	if err := os.MkdirAll(link, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Install(path)
+	if err == nil {
+		t.Fatal("Install succeeded over a directory at the bin path; want an error")
+	}
+	if !strings.Contains(err.Error(), "neither a symlink nor a regular file") {
+		t.Errorf("Install error does not name the bin-path conflict: %v", err)
+	}
+	if fi, statErr := os.Lstat(link); statErr != nil || !fi.IsDir() {
+		t.Errorf("Install disturbed the directory at the bin path: fi=%v err=%v", fi, statErr)
 	}
 }
 
