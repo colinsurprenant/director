@@ -40,7 +40,9 @@ INSTALL_DIR="${DIRECTOR_INSTALL_DIR:-}"
 # Progress goes to stderr; the wired `director install` writes its own
 # confirmations to stdout.
 info() { printf '%s\n' "$*" >&2; }
-err() { printf 'director install: %s\n' "$*" >&2; }
+# "director installer" (not "director install"): the script's own errors must be
+# distinguishable from the `director install` subcommand it invokes to wire.
+err() { printf 'director installer: %s\n' "$*" >&2; }
 die() {
 	err "$*"
 	exit 1
@@ -151,7 +153,11 @@ asset="director_${VERSION}_${os}_${arch}.tar.gz"
 base="https://github.com/$REPO/releases/download/$VERSION"
 
 # --- download + verify + extract ----------------------------------------
-tmp="$(mktemp -d)"
+# Explicit template: the universally-portable form across GNU, BSD/macOS, and
+# busybox mktemp (bare `mktemp -d` works on current macOS but the template removes
+# any BSD-variant doubt at zero cost). %/ strips a trailing slash from TMPDIR.
+tmpdir="${TMPDIR:-/tmp}"
+tmp="$(mktemp -d "${tmpdir%/}/director-install.XXXXXX")" || die "cannot create a temporary directory"
 staged="" # same-dir staging copy of the binary; removed if we die mid-install
 cleanup() {
 	rm -rf "$tmp"
