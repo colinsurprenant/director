@@ -296,8 +296,19 @@ func TestSessionStartInjectsGroundTruth(t *testing.T) {
 	if !strings.Contains(ctx, "▸ Director:") {
 		t.Errorf("adopted-repo injection missing the startup acknowledgment banner:\n%s", ctx)
 	}
+	// The banner must ride the HEAD (after the preamble, before the protocol):
+	// a harness persisted-output preview keeps only the first ~2KB, and the
+	// banner is useless for the first reply if it sits in the dropped tail.
+	if b, p := strings.Index(ctx, "## Acknowledge on entry"), strings.Index(ctx, "## Director protocol"); b < 0 || p < 0 || b > p {
+		t.Errorf("acknowledgment banner must precede the emit protocol (banner@%d, protocol@%d):\n%s", b, p, ctx)
+	}
 	if !strings.Contains(ctx, "Resume point") {
 		t.Errorf("injection missing the resume-point anchor for the current workstream:\n%s", ctx)
+	}
+	// The resume point references the digest above it, so it must FOLLOW the
+	// digest — it is the one banner-adjacent block that stays in the tail.
+	if r, d := strings.Index(ctx, "## Resume point"), strings.Index(ctx, "# director render"); r < 0 || d < 0 || r < d {
+		t.Errorf("resume point must follow the render digest it references (resume@%d, digest@%d):\n%s", r, d, ctx)
 	}
 	if !strings.Contains(ctx, "commitment to act") {
 		t.Errorf("injected protocol should clarify that emit RECORDS (not a commitment to act):\n%s", ctx)
@@ -340,6 +351,15 @@ func TestSessionStartProtocolScopedToAdopted(t *testing.T) {
 	}
 	if strings.Contains(got, "## Director protocol") {
 		t.Errorf("un-adopted repo must NOT get the emit protocol (would nag unrelated repos):\n%s", got)
+	}
+	// The banner and resume point are managed-gated for the same reason as the
+	// protocol; lock their absence too so a refactor can't move their writes
+	// outside the managed guard unnoticed.
+	if strings.Contains(got, "## Acknowledge on entry") {
+		t.Errorf("un-adopted repo must NOT get the acknowledgment banner:\n%s", got)
+	}
+	if strings.Contains(got, "## Resume point") {
+		t.Errorf("un-adopted repo must NOT get a resume point:\n%s", got)
 	}
 }
 
@@ -447,6 +467,11 @@ func TestSessionStartCodexCommandNames(t *testing.T) {
 	if strings.Contains(got, "/director:complete") || strings.Contains(got, "/director:handoff") {
 		t.Errorf("codex session must not be told CC command names:\n%s", got)
 	}
+	// This fixture is managed (seeded note) but has NO handoff for the
+	// workstream — the resume-point block must be absent, not empty-headed.
+	if strings.Contains(got, "## Resume point") {
+		t.Errorf("no handoff for this workstream, so no resume point should be injected:\n%s", got)
+	}
 
 	// The same start with a CC-shaped transcript path keeps the CC names.
 	inCC := `{"session_id":"s-cc","transcript_path":"/Users/u/.claude/projects/x/transcript.jsonl","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
@@ -493,6 +518,13 @@ func TestSessionStartCloseOutNudgeForGoneSibling(t *testing.T) {
 	gitIn(t, repo, "worktree", "remove", "--force", wtDir)
 	gitIn(t, repo, "branch", "-D", "feature")
 
+	// Give the MAIN workstream a handoff so this fixture carries both tail
+	// blocks (resume + nudge) and can lock their relative order.
+	mainWS := mustResolve(t, repo)
+	if _, err := event.Emit(store, mainWS.ID, event.EmitParams{Type: event.KindHandoff, Area: "x", Body: "doing X, next Y"}); err != nil {
+		t.Fatalf("seed main handoff: %v", err)
+	}
+
 	in2 := `{"session_id":"s-main","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
 	var out bytes.Buffer
 	if code := Dispatch(EventSessionStart, strings.NewReader(in2), &out, hub); code != 0 {
@@ -507,6 +539,11 @@ func TestSessionStartCloseOutNudgeForGoneSibling(t *testing.T) {
 	}
 	if !strings.Contains(got, "1 open item(s)") {
 		t.Errorf("nudge should carry the sibling's open count:\n%s", got)
+	}
+	// Within the tail, survival order still applies: the session-critical
+	// resume anchor must precede the advisory (and per-sibling growing) nudge.
+	if r, n := strings.Index(got, "## Resume point"), strings.Index(got, "## Close-out pending"); r < 0 || n < 0 || r > n {
+		t.Errorf("resume point must precede the close-out nudge (resume@%d, nudge@%d):\n%s", r, n, got)
 	}
 }
 
@@ -665,6 +702,42 @@ func TestEmitGuardAllowsWhenEmitted(t *testing.T) {
 	}
 	if out.Len() != 0 {
 		t.Fatalf("expected allow (no output) when an emit tool_use is present, got %q", out.String())
+	}
+}
+
+// TestStopAlreadyArchivedRowIsQuietSuccess: a repeated Stop with no tool call
+// in between (the daily steady state — the previous Stop already archived the
+// row) must land in health/ as ok=true, never as failure spam. The first Stop
+// archives the live row; the second finds nothing and stays quiet.
+func TestStopAlreadyArchivedRowIsQuietSuccess(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	transcript := writeTranscript(t, assistantLine("Nothing notable this turn."))
+
+	ws, err := identity.Resolve(repo)
+	if err != nil {
+		t.Fatalf("identity.Resolve: %v", err)
+	}
+	// Same uuid as stopInput's session_id, so both Stops target this row.
+	if err := fleet.Heartbeat(hub, ws.ID, "s-real", time.Now()); err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+
+	in := stopInput(repo, transcript, false)
+	for i := 0; i < 2; i++ {
+		var out bytes.Buffer
+		if code := Dispatch(EventStop, strings.NewReader(in), &out, hub); code != 0 {
+			t.Fatalf("stop %d: exit code = %d, want 0", i+1, code)
+		}
+	}
+	health := readHealth(t, hub)
+	// Exactly once: the first Stop must find and archive the live row (no quiet
+	// line), only the second hits the benign no-row path.
+	if n := strings.Count(health, "fleet done: no live row"); n != 1 {
+		t.Fatalf("quiet no-live-row line count = %d, want 1; health log:\n%s", n, health)
+	}
+	if strings.Contains(health, "ok=false") {
+		t.Errorf("a benign repeated stop must not produce failure lines, got:\n%s", health)
 	}
 }
 

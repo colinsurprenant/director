@@ -92,7 +92,9 @@ func Heartbeat(hub, workstream, uuid string, now time.Time) error {
 	} else if err != nil {
 		return err
 	}
-	row.Heartbeat = now.Format(heartbeatLayout)
+	// Normalized to UTC at the write boundary so rows never carry mixed-offset
+	// timestamps, regardless of what zone the caller's clock is in.
+	row.Heartbeat = now.UTC().Format(heartbeatLayout)
 	return writeRow(path, row)
 }
 
@@ -117,7 +119,7 @@ func Done(hub, workstream, uuid string, now time.Time) error {
 func archiveRow(hub, src string, row Row, now time.Time) error {
 	row.Status = StatusDone
 
-	destDir := filepath.Join(hub, fleetDir, archiveDir, now.Format(archiveDateLayout))
+	destDir := filepath.Join(hub, fleetDir, archiveDir, now.UTC().Format(archiveDateLayout))
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return fmt.Errorf("fleet: create archive dir: %w", err)
 	}

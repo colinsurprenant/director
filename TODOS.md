@@ -18,6 +18,7 @@ v1 = visibility-first CLI (see `docs/specs/2026-06-03-director-coordination-desi
 ## When it grows / when sync is needed
 - **Multi-machine sync** — shard one NDJSON per repo×machine (git-merge-clean), push/pull the hub repo; SessionStart warns on foreign-host hub.
   - *Why:* v1 is single-machine ("one primary, rare other"); per-machine sharding keeps appends conflict-free. (Eng spec §15.2.)
+  - *Reference:* basic-memory (basicmachines-co) ships rclone-based two-way sync with conflict resolution for a local plain-text store — a working implementation to study first. Deep dive: `docs/research/2026-07-02-memory-landscape/source-5.json`.
 - **Log snapshotting** — fold old events into a materialized snapshot; render = snapshot + tail.
   - *Why:* v1 uses read-tail + archive, which suffices until a single repo's log is very large.
 
@@ -32,5 +33,10 @@ v1 = visibility-first CLI (see `docs/specs/2026-06-03-director-coordination-desi
 - **Brownfield adoption tool (B)** — ✅ core shipped as `/director:adopt` (informed adoption: CHARTER proposal + triaged open-loop import; see `docs/specs/2026-07-03-informed-adoption-design.md`). Remaining someday: doc living/record/rot classification and an arc42 overview draft.
 
 ## Later
+- **ADR-promotion affordance** — surface decision events that keep being re-asserted across sessions as ADR candidates, and draft the MADR file from the event chain (the superseded events *are* the alternatives-considered; the chain's headlines are the context). Optionally the reverse link too: an emitted decision referencing the ADR it was promoted into, so the fast layer knows the fact was ratified upward.
+  - *Why:* mechanizes the durability gradient's "truth flows up" rule — today promotion is manual and invisible, so durable decisions fossilize in the log instead of graduating. Deep dive: `docs/research/2026-07-02-memory-landscape/source-7.json`.
 - **CHARTER freshness sweep** — `area→doc` join flags living docs stale vs decisions touching their area.
 - **Notifications + cron monitor** — a single periodic digest (not per-event pings); a reaper for long-dormant or `gone` workstreams.
+- **MCP behavior hints** — if a Director MCP surface is ever built (none planned; surface frozen per `01KWHS2M7A`), copy basic-memory's readOnlyHint/destructiveHint/idempotentHint/openWorldHint pattern for progressive tool discovery. Deep dive: `docs/research/2026-07-02-memory-landscape/source-5.json`.
+- **Cross-branch state resolution (reference)** — Backlog.md ships config (`checkActiveBranches`, `remoteOperations`, `activeBranchDays`) that scans active branches to compute a task's true latest status, machinery it needs because its task files are mutable-in-place and diverge across parallel worktrees.
+  - *Why keep it:* (a) design validation — Director's append-only log makes this whole problem class structurally impossible (worktrees append to one shared log; nothing diverges), a concrete argument for `why-director.md`; (b) a working reference if branch-aware liveness (e.g. branch-gone targeting) ever needs to reason about which branches are active. Deep dive: `docs/research/2026-07-02-memory-landscape/source-6.json`.
