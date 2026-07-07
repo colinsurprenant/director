@@ -90,6 +90,8 @@ func run(args []string) int {
 		return runInstall(rest)
 	case "uninstall":
 		return runUninstall(rest)
+	case "doctor":
+		return runDoctor(rest)
 	case "_hook":
 		return runHook(rest)
 	case "version", "--version":
@@ -134,6 +136,8 @@ adoption & install:
   install     idempotent merge of Director hooks into settings.json
               (--codex: Codex's hooks.json + $director-* agent skills instead)
   uninstall   remove only Director-managed hook entries (--codex: Codex's)
+  doctor      check the install is healthy: hooks wired and the binary reachable
+              the way the shims resolve it (exits non-zero if not)
 
 misc:
   version     print the director version

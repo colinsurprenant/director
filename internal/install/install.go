@@ -361,15 +361,16 @@ func claudeInstallPresent() bool {
 	if err != nil {
 		return false
 	}
-	return managedEntriesPresent(settingsPath)
+	return ManagedEntriesPresent(settingsPath)
 }
 
-// managedEntriesPresent reports whether the hooks file at path carries any
-// Director-managed command object — the shared scan behind codexInstallPresent
-// and claudeInstallPresent. Read errors and foreign shapes read as "not
-// present": both callers want the fail-open direction (see codexInstallPresent
-// for why fail-safe would make shim removal permanently leaky).
-func managedEntriesPresent(path string) bool {
+// ManagedEntriesPresent reports whether the hooks file at path carries any
+// Director-managed command object — the shared scan behind codexInstallPresent,
+// claudeInstallPresent, and `director doctor`. Read errors and foreign shapes
+// read as "not present": the uninstall callers want the fail-open direction (see
+// codexInstallPresent for why fail-safe would make shim removal permanently leaky),
+// and doctor treats an unreadable/absent hooks file the same as "not wired".
+func ManagedEntriesPresent(path string) bool {
 	root, err := loadSettings(path)
 	if err != nil {
 		return false
@@ -400,6 +401,24 @@ func managedEntriesPresent(path string) bool {
 		}
 	}
 	return false
+}
+
+// ExpectedShims returns the basenames of the hook shim scripts install writes
+// into the hooks dir. The embedded shims/ dir is the single source of truth, so a
+// consumer that verifies an install (`director doctor`) checks exactly the set
+// install materializes — no drift between what is written and what is checked.
+func ExpectedShims() []string {
+	entries, err := fs.ReadDir(shimFS, "shims")
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() {
+			names = append(names, e.Name())
+		}
+	}
+	return names
 }
 
 // writeShims materializes the embedded hook shims into hooksDir, creating the dir
