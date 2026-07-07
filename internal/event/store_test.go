@@ -289,6 +289,30 @@ func TestReadProjectPathAsSymlinkedDirIsEmpty(t *testing.T) {
 	}
 }
 
+// TestReadLogFileAsDanglingSymlinkErrors: the log file itself being a symlink to
+// a nonexistent target is a broken surface, not an absent log. Open follows the
+// link to a missing target (not-exist) and the parent is a real directory, so
+// logTrulyAbsent must Lstat the log path itself to catch the dangling link and
+// fail loud — parity with fleet.dirTrulyAbsent, which Lstats its exact target.
+func TestReadLogFileAsDanglingSymlinkErrors(t *testing.T) {
+	skipIfNoSymlinks(t)
+	store := NewStore(t.TempDir(), "dangling-log-repo")
+	logPath := store.Path()
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(t.TempDir(), "gone"), logPath); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.ReadAll(); err == nil {
+		t.Fatal("ReadAll on a log file that is a dangling symlink must error, not read as empty")
+	}
+	if _, err := store.Tail(5); err == nil {
+		t.Fatal("Tail on a log file that is a dangling symlink must error, not read as empty")
+	}
+}
+
 // TestAppendRejectsInvalid confirms the store validates before writing: an
 // invalid event must surface the error and leave the log empty (no partial line).
 func TestAppendRejectsInvalid(t *testing.T) {
