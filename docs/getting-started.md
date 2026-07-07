@@ -74,6 +74,7 @@ director install
 installed Director hooks into /Users/you/.claude/settings.json (set DIRECTOR_SETTINGS_PATH to override)
   shims written to /Users/you/.claude/director/hooks (set DIRECTOR_HOOKS_DIR to override)
   commands written to /Users/you/.claude/commands/director (/director:adopt, /director:complete, /director:handoff; set DIRECTOR_COMMANDS_DIR to override)
+  binary symlinked at /Users/you/.claude/director/bin/director (hook fallback when director is not on PATH, e.g. desktop app launches)
 ```
 
 `director install` is **self-contained and idempotent**:
@@ -93,9 +94,24 @@ director status
 # (no live workstreams)        ← expected before you adopt anything / open a session
 ```
 
-> **Keep `director` on `PATH`.** The shims invoke it via `DIRECTOR_BIN` → `PATH`. If the binary isn't
-> found, the shims exit 0 (fail-safe) and coordination silently no-ops — nothing breaks, but nothing
-> coordinates. After rebuilding the binary, re-run `director install` to refresh the shims.
+> **Keep `director` on `PATH`.** The shims invoke it via `DIRECTOR_BIN` → `PATH` →
+> `~/.claude/director/bin/director`. If the binary isn't found, the shims exit 0 (fail-safe) and
+> coordination silently no-ops — nothing breaks, but nothing coordinates. After rebuilding the binary,
+> re-run `director install` to refresh the shims.
+>
+> The last tier is what the install's **bin symlink** provisions, and it matters more than it looks:
+> the Claude Code **desktop app** launched from the Dock/Launchpad inherits the bare launchd `PATH`
+> (no `/opt/homebrew/bin`, `/usr/local/bin`, or `~/go/bin` —
+> [anthropics/claude-code#44649](https://github.com/anthropics/claude-code/issues/44649)), so the
+> `PATH` tier misses there even when your terminal finds `director` fine. The explicit alternative is
+> pinning the binary via `DIRECTOR_BIN` in `~/.claude/settings.json`:
+>
+> ```json
+> { "env": { "DIRECTOR_BIN": "/absolute/path/to/director" } }
+> ```
+>
+> Install never overwrites a **regular file** already sitting at
+> `~/.claude/director/bin/director` — a binary you placed there yourself stays, and the shims run it.
 
 ### Using OpenAI Codex?
 
@@ -275,7 +291,8 @@ what `brief` shows and what the next session starts from.
 | Symptom | Cause & fix |
 |---|---|
 | **Hooks don't seem to fire** | Confirm `director install` ran and `director` is on `PATH` (`command -v director`). Check the shims exist: `ls $DIRECTOR_HOOKS_DIR` (default `~/.claude/director/hooks`). Re-run `director install` after moving/rebuilding the binary. |
-| **Coordination silently does nothing** | The shims fail-safe to exit 0 when the binary is missing. Ensure `DIRECTOR_BIN` (or `PATH`) resolves `director`. |
+| **Coordination silently does nothing** | The shims fail-safe to exit 0 when the binary is missing. Ensure `DIRECTOR_BIN` (or `PATH`, or the `~/.claude/director/bin/director` symlink a re-run of `director install` refreshes) resolves `director`. |
+| **Works in the terminal, dead in the desktop app** | Dock/Launchpad launches get the bare launchd `PATH` ([anthropics/claude-code#44649](https://github.com/anthropics/claude-code/issues/44649)), so the shims' `PATH` tier misses. Re-run `director install` (it drops the `~/.claude/director/bin/director` symlink the shims fall back to), or pin the binary explicitly with `DIRECTOR_BIN` via `"env"` in `settings.json`. |
 | **State is in the wrong place** | All cross-repo state lives under `DIRECTOR_HUB` (default `~/.director`). If you set it for one command, set it for all — sessions and your CLI must agree. |
 | **A hook seems broken** | Hooks are fail-safe by design — a failure never blocks a session, it logs. Read `$DIRECTOR_HUB/health/hook.log` (one line per outcome, `ok=false` marks failures). |
 | **`director _hook ...`** | Internal — invoked by the shims, never run by hand. |

@@ -469,6 +469,193 @@ func TestUninstallMissingFileNoop(t *testing.T) {
 	}
 }
 
+// runningBinary resolves what writeBinSymlink must point the symlink at: the
+// EvalSymlinks-resolved path of the current executable (under `go test`, the
+// test binary itself).
+func runningBinary(t *testing.T) string {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolved
+}
+
+// skipIfNoSymlinks skips the bin-symlink tests on native Windows: symlink
+// creation needs privileges there, writeBinSymlink is deliberately a no-op, and
+// the CLI refuses the install before it would matter.
+func skipIfNoSymlinks(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("bin symlink is unix-only (writeBinSymlink no-ops on native Windows)")
+	}
+}
+
+// TestInstallWritesBinSymlinkAndUninstallRemovesIt: Install drops
+// <root>/bin/director as a symlink to the resolved running binary — the shims'
+// PATH-independent fallback, closing the desktop-app launchd-PATH gap
+// (anthropics/claude-code#44649) — and Uninstall reclaims it along with the
+// shims, pruning the emptied bin dir.
+func TestInstallWritesBinSymlinkAndUninstallRemovesIt(t *testing.T) {
+	skipIfNoSymlinks(t)
+	path, hooksDir := writeFixture(t, "")
+	link := filepath.Join(filepath.Dir(hooksDir), "bin", "director")
+
+	if err := Install(path); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("bin symlink not written by Install: %v", err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("bin path is not a symlink (mode %v)", fi.Mode())
+	}
+	got, err := os.Readlink(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := runningBinary(t); got != want {
+		t.Errorf("bin symlink target = %s, want the running binary %s", got, want)
+	}
+	// Re-install with the link already correct is a no-op, not an error.
+	if err := Install(path); err != nil {
+		t.Fatalf("re-Install over an up-to-date bin symlink: %v", err)
+	}
+
+	if err := Uninstall(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Errorf("Uninstall left the bin symlink in place (err=%v)", err)
+	}
+	if _, err := os.Stat(filepath.Dir(link)); !os.IsNotExist(err) {
+		t.Errorf("Uninstall did not prune the now-empty bin dir")
+	}
+}
+
+// TestInstallReplacesStaleBinSymlink: an existing symlink pointing elsewhere is
+// replaced — the running binary wins, so a link left by a moved or deleted
+// build can't shadow the install.
+func TestInstallReplacesStaleBinSymlink(t *testing.T) {
+	skipIfNoSymlinks(t)
+	path, hooksDir := writeFixture(t, "")
+	binDir := filepath.Join(filepath.Dir(hooksDir), "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(t.TempDir(), "old-director")
+	if err := os.WriteFile(stale, []byte("old build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(binDir, "director")
+	if err := os.Symlink(stale, link); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Install(path); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.Readlink(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := runningBinary(t); got != want {
+		t.Errorf("stale bin symlink not replaced: target = %s, want %s", got, want)
+	}
+}
+
+// TestInstallAndUninstallPreserveUserBinFile: a REGULAR file at the bin path is
+// a real binary the user placed there deliberately — Install must not clobber
+// it (and must still succeed), and Uninstall must not remove it (nor the dir it
+// keeps alive). Same touch-only-our-artifacts discipline as the foreign-command
+// guard above.
+func TestInstallAndUninstallPreserveUserBinFile(t *testing.T) {
+	skipIfNoSymlinks(t)
+	path, hooksDir := writeFixture(t, "")
+	binDir := filepath.Join(filepath.Dir(hooksDir), "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	userBin := filepath.Join(binDir, "director")
+	if err := os.WriteFile(userBin, []byte("user-placed binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Install(path); err != nil {
+		t.Fatalf("Install over a user-placed bin file must succeed: %v", err)
+	}
+	fi, err := os.Lstat(userBin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("Install replaced a user-placed regular file with a symlink")
+	}
+	got, err := os.ReadFile(userBin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "user-placed binary" {
+		t.Errorf("Install rewrote the user-placed bin file: %q", got)
+	}
+
+	if err := Uninstall(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(userBin); err != nil {
+		t.Errorf("Uninstall removed a user-placed bin file: %v", err)
+	}
+}
+
+// TestBinSymlinkSharedWithCodex: the bin symlink follows the shims' shared
+// lifecycle exactly — the Codex form provisions it too, a CC uninstall spares
+// it while a Codex install remains, and it is reclaimed once no install
+// references the shims.
+func TestBinSymlinkSharedWithCodex(t *testing.T) {
+	skipIfNoSymlinks(t)
+	path, hooksDir := writeFixture(t, "")
+	link := filepath.Join(filepath.Dir(hooksDir), "bin", "director")
+	codexHooksPath := os.Getenv(codexHooksPathEnv)
+
+	// A Codex-only install provisions the symlink on its own.
+	if err := InstallCodex(codexHooksPath); err != nil {
+		t.Fatalf("InstallCodex: %v", err)
+	}
+	if _, err := os.Lstat(link); err != nil {
+		t.Fatalf("InstallCodex did not write the bin symlink: %v", err)
+	}
+
+	// A CC uninstall while the Codex install remains must spare it.
+	if err := Install(path); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if err := Uninstall(path); err != nil {
+		t.Fatalf("Uninstall: %v", err)
+	}
+	if _, err := os.Lstat(link); err != nil {
+		t.Errorf("CC uninstall removed the bin symlink a Codex install still references: %v", err)
+	}
+
+	// With the Codex install gone, the CC uninstall reclaims it (mirrors shims).
+	if err := UninstallCodex(codexHooksPath); err != nil {
+		t.Fatalf("UninstallCodex: %v", err)
+	}
+	if err := Install(path); err != nil {
+		t.Fatalf("re-Install: %v", err)
+	}
+	if err := Uninstall(path); err != nil {
+		t.Fatalf("final Uninstall: %v", err)
+	}
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Errorf("with no Codex install left, CC uninstall should remove the bin symlink (err=%v)", err)
+	}
+}
+
 // TestUninstallSparesShimsWhenCodexPresent: the shims are shared between the
 // two delivery targets, so the CC uninstall leaves them in place while a Codex
 // hooks.json still carries Director-managed entries — removing them would
