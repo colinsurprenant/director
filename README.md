@@ -47,6 +47,16 @@ $ claude
 
 *The same three facts on both sides of the gap: recorded as the session works, injected when the next one starts.*
 
+That is one workstream. `director status` is the whole portfolio at a glance:
+
+```text
+acme-api-main-7c21e9d4 · active · just now · blocked(1): timezone edge case before the backfill merges
+billing-worker-main-3f8a1c2d · idle · 6h ago · ok
+docs-site-main-9d2e5b71 · dormant · 13d ago · ok
+```
+
+*One human, many workstreams: which are live, which are parked between blocks, and the one line that needs you.*
+
 > **Scope:** single-machine for now, single-human by design; multi-machine sync is on the roadmap (see [Status & scope](#status--scope)).
 >
 > **New here?** [`docs/getting-started.md`](docs/getting-started.md) is the task-oriented first-run guide (install → adopt → first session → cockpit), plus how the model uses Director and a troubleshooting section. This README is the reference.

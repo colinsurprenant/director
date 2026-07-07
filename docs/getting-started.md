@@ -227,8 +227,9 @@ director status
 ```
 
 ```text
-some-project-main-1a2b3c4d · active · just now · blocked(1): pick the rate-limit backend
-other-repo-main-9f8e7d6c   · dormant · 3d ago  · ok
+acme-api-main-7c21e9d4 · active · just now · blocked(1): timezone edge case before the backfill merges
+billing-worker-main-3f8a1c2d · idle · 6h ago · ok
+docs-site-main-9d2e5b71 · dormant · 13d ago · ok
 ```
 
 One line per live workstream: handle · liveness (`active`/`idle`/`dormant`/`gone`, derived from heartbeat age and branch existence)
@@ -242,6 +243,27 @@ director brief --project <repo-key>  # one project
 `brief` composes the outlook (from each CHARTER), the latest handoff per workstream, the carried-forward
 open items, and recent decisions — the moving narrative between the stable CHARTER and the per-session
 handoff. It's fully deterministic: you read the same picture a fresh session reads.
+
+```text
+# project: acme-api
+
+## outlook
+# CHARTER: acme-api-main-7c21e9d4
+
+- **Goal:** Ship cursor-based pagination across the public API without breaking existing clients.
+- **Non-goals:** No offset fallback; no response-shape changes beyond the added cursor field.
+- **Risk line:** Never run the backfill against production without a verified dry-run first.
+
+## where we are
+- [acme-api-main-7c21e9d4] cursor rework done · next: the backfill script · watch the p99
+
+## carried forward
+- [risk:escalate] timezone edge case before the backfill merges
+- drop the legacy /v1/list alias once dashboards migrate
+
+## decisions
+- cursor pagination, not offset; offsets break under deletes
+```
 
 When an item in the Needs-you band is yours to decide, make the call in the session, then close the loop:
 
@@ -264,10 +286,6 @@ perform for the model:
   end. Transient working state survives a compaction only if it was written to the LOG during a turn.
 - **Ground Truth** — treat the injected CHARTER + digest as authoritative: build on it, don't re-derive it
   by re-scanning the repo or re-reading the log.
-
-This is what those habits look like live, with the model's actual `director` calls visible:
-
-![Director demo: a session emits decisions, open items, and a handoff as it works; three weeks later a cold session rehydrates from the log with brief and status, then closes the loop with resolve](assets/director-demo.gif)
 
 There are exactly four event kinds: `decision`, `open-item` (the home for "documented, not dropped";
 `--risk escalate` is the "needs a human" subset that surfaces in `status`), `handoff`, and `note`. There is
