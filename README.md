@@ -74,6 +74,8 @@ Wire Codex instead with `sh -s -- --codex` (or `--both`); install the binary onl
 
 > **On Windows?** Run the one-liner inside [WSL](https://learn.microsoft.com/windows/wsl/) with the Linux binary: everything works there, hooks included. Native Windows is CLI-only for now: the binary is built and CI-tested, and every manual verb (`emit`, `render`, `status`, `brief`, `show`, `resolve`, …) works from PowerShell, but the hook shims are bash, so the ambient layer — session-start injection, heartbeats, boundary nudges — is not yet wired natively.
 
+> **One machine for now.** Director's hub lives on the machine you install it on; there is no cross-machine sync yet. Work a repo from two machines (a laptop and a desktop, say) and each keeps its own separate hub: neither sees the other's decisions, open loops, or handoffs. Multi-machine sync is the one distribution mode on the roadmap (see [Status & scope](#status--scope)); until then, drive a given repo's Director state from a single machine.
+
 **Other ways in:** prebuilt binaries for macOS, Linux, and Windows (amd64/arm64) are on the [releases page](https://github.com/colinsurprenant/director/releases) ([`docs/getting-started.md`](docs/getting-started.md) covers install-from-release), `go install github.com/colinsurprenant/director/cmd/director@latest` builds from source (Go 1.25+), or build it yourself:
 
 ```bash
