@@ -162,7 +162,7 @@ func (s *Store) Tail(n int) ([]Event, error) {
 func (s *Store) scan(fn func(Event) error) error {
 	f, err := os.Open(s.Path())
 	if err != nil {
-		if os.IsNotExist(err) {
+		if logTrulyAbsent(s.Path(), err) {
 			return nil
 		}
 		return fmt.Errorf("store: open log %s: %w", s.Path(), err)
@@ -191,4 +191,27 @@ func (s *Store) scan(fn func(Event) error) error {
 		return fmt.Errorf("store: read log %s: %w", s.Path(), err)
 	}
 	return nil
+}
+
+// logTrulyAbsent reports whether a failed Open(path) means the log file does not
+// exist yet — the only case scan may treat as an empty log. os.IsNotExist alone
+// is not portable: on Windows, Open through a path component that exists as a
+// regular FILE also reports not-exist (ERROR_PATH_NOT_FOUND), where unix reports
+// ENOTDIR and fails loud. A silently-empty read of the system-of-record is the
+// §9 "silence reads as healthy" / LIE-TEST failure class, so a not-exist openErr
+// is only a precondition: the log is genuinely absent only if its parent
+// resolves to a real directory (or is itself absent). A parent that exists as a
+// non-directory is a broken surface and must fail loud on both platforms. Stat,
+// not Lstat, classifies the parent because Open follows symlinks — a symlinked
+// project directory is a valid parent, not a broken one. This is the file-open
+// twin of fleet.dirTrulyAbsent, which does the same for a directory read.
+func logTrulyAbsent(path string, openErr error) bool {
+	if !os.IsNotExist(openErr) {
+		return false
+	}
+	info, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		return os.IsNotExist(err)
+	}
+	return info.IsDir()
 }
