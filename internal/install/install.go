@@ -60,6 +60,12 @@ const hooksDirEnv = "DIRECTOR_HOOKS_DIR"
 // markdown is materialized. When unset, DefaultCommandsDir is used.
 const commandsDirEnv = "DIRECTOR_COMMANDS_DIR"
 
+// settingsPathEnv lets a caller (and the tests) redirect the default CC
+// settings.json, mirroring DIRECTOR_CODEX_HOOKS_PATH. The CLI's --settings flag
+// already overrides the install/uninstall target; this env var additionally
+// redirects the cross-target claudeInstallPresent probe.
+const settingsPathEnv = "DIRECTOR_SETTINGS_PATH"
+
 // managedEntry describes one hook Director installs: which CC event it attaches
 // to, the matcher (empty = all), and the shim filename under the hooks dir.
 type managedEntry struct {
@@ -79,9 +85,13 @@ var directorEntries = []managedEntry{
 }
 
 // DefaultSettingsPath resolves the standard user settings file,
-// ~/.claude/settings.json. Callers that want a different target (a project
-// settings file, a test fixture) pass an explicit path to Install/Uninstall.
+// ~/.claude/settings.json. DIRECTOR_SETTINGS_PATH overrides the location.
+// Callers that want a different target (a project settings file, a test
+// fixture) pass an explicit path to Install/Uninstall.
 func DefaultSettingsPath() (string, error) {
+	if p := os.Getenv(settingsPathEnv); p != "" {
+		return p, nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("install: resolve home dir: %w", err)
@@ -304,6 +314,59 @@ func removeManagedEntries(path string) error {
 		root["hooks"] = hooks
 	}
 	return writeSettings(path, root)
+}
+
+// claudeInstallPresent reports whether the default CC settings file still
+// carries Director-managed entries — the mirror image of codexInstallPresent,
+// and the signal UninstallCodex uses to spare the shared shims. Same fail-open
+// stance and KNOWN LIMIT as its mirror (see codexInstallPresent): a missing or
+// unreadable settings.json reads as "no CC install", so only a positive
+// managed-entry sighting spares the shims — anything else would leave a
+// Codex-only machine leaking shim files forever.
+func claudeInstallPresent() bool {
+	settingsPath, err := DefaultSettingsPath()
+	if err != nil {
+		return false
+	}
+	return managedEntriesPresent(settingsPath)
+}
+
+// managedEntriesPresent reports whether the hooks file at path carries any
+// Director-managed command object — the shared scan behind codexInstallPresent
+// and claudeInstallPresent. Read errors and foreign shapes read as "not
+// present": both callers want the fail-open direction (see codexInstallPresent
+// for why fail-safe would make shim removal permanently leaky).
+func managedEntriesPresent(path string) bool {
+	root, err := loadSettings(path)
+	if err != nil {
+		return false
+	}
+	hooks, ok := typedMap(root, "hooks")
+	if !ok {
+		return false
+	}
+	for event := range hooks {
+		groups, ok := typedArray(hooks, event)
+		if !ok {
+			continue
+		}
+		for _, g := range groups {
+			group := asMap(g)
+			if group == nil {
+				continue
+			}
+			cmds, ok := typedArray(group, "hooks")
+			if !ok {
+				continue
+			}
+			for _, c := range cmds {
+				if isManaged(c) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // writeShims materializes the embedded hook shims into hooksDir, creating the dir

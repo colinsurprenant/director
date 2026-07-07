@@ -80,8 +80,9 @@ func runInstall(args []string) int {
 
 // runUninstall removes only Director's tagged hook entries, leaving hand-rolled
 // and other-plugin (GSD) hooks intact (§5.4), plus the Director-owned shims
-// (CC) or skill directories (--codex). The shared shims survive a --codex uninstall:
-// a Claude Code install may still reference them.
+// (CC) or skill directories (--codex). The shared shims survive either uninstall
+// form only while the OTHER agent's install still references them; once neither
+// does, they are reclaimed.
 func runUninstall(args []string) int {
 	path, codex, code := installTargetFlags("uninstall", args)
 	if path == "" {

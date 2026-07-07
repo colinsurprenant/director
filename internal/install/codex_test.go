@@ -31,13 +31,19 @@ const codexFixture = `{
 
 // setupCodex points the installer's Codex skills target at a throwaway dir and
 // returns a fresh hooks.json path (missing until InstallCodex creates it) plus
-// the shims/skills dirs for assertions.
+// the shims/skills dirs for assertions. The default CC settings.json is also
+// isolated — to a path with NO file behind it, so the baseline is a codex-only
+// machine (UninstallCodex's claudeInstallPresent probe must never read the
+// developer's real ~/.claude/settings.json); tests that want a coexisting CC
+// install write one at os.Getenv(settingsPathEnv).
 func setupCodex(t *testing.T, fixture string) (hooksPath, hooksDir, skillsDir string) {
 	t.Helper()
 	hooksDir = filepath.Join(t.TempDir(), "hooks")
 	t.Setenv(hooksDirEnv, hooksDir)
 	skillsDir = filepath.Join(t.TempDir(), "skills")
 	t.Setenv(codexSkillsDirEnv, skillsDir)
+	t.Setenv(settingsPathEnv, filepath.Join(t.TempDir(), "settings.json"))
+	t.Setenv(commandsDirEnv, filepath.Join(t.TempDir(), "commands"))
 	hooksPath = filepath.Join(t.TempDir(), "hooks.json")
 	if fixture != "" {
 		if err := os.WriteFile(hooksPath, []byte(fixture), 0o644); err != nil {
@@ -124,8 +130,11 @@ func TestInstallCodexWritesSkills(t *testing.T) {
 }
 
 // TestUninstallCodexRemovesOnlyItsOwn: uninstall strips the tagged entries and
-// the skill dirs but preserves the user's hook, foreign skills, and — unlike
-// the CC uninstall — the shared shims, which a CC install may still reference.
+// the skill dirs but preserves the user's hook and foreign skills. This is the
+// codex-ONLY machine (no CC settings.json exists), so the shared shims are
+// reclaimed too — nothing references them anymore, and the CC uninstall form
+// no-ops on its missing settings.json, so leaving them would strand the three
+// shim files forever.
 func TestUninstallCodexRemovesOnlyItsOwn(t *testing.T) {
 	hooksPath, hooksDir, skillsDir := setupCodex(t, codexFixture)
 	if err := InstallCodex(hooksPath); err != nil {
@@ -160,8 +169,61 @@ func TestUninstallCodexRemovesOnlyItsOwn(t *testing.T) {
 	if _, err := os.Stat(foreign); err != nil {
 		t.Errorf("foreign skill removed by uninstall: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(hooksDir, "sessionstart.sh")); !os.IsNotExist(err) {
+		t.Errorf("codex-only machine: uninstall must reclaim the shared shims (err=%v)", err)
+	}
+}
+
+// TestUninstallCodexSparesShimsWhenCCPresent is the coexistence half of the
+// shim reclaim: while the default CC settings.json still carries
+// Director-managed entries, the codex uninstall leaves the shared shims in
+// place — removing them would silently kill coordination on Claude Code (the
+// mirror of TestUninstallSparesShimsWhenCodexPresent).
+func TestUninstallCodexSparesShimsWhenCCPresent(t *testing.T) {
+	hooksPath, hooksDir, _ := setupCodex(t, "")
+	if err := Install(os.Getenv(settingsPathEnv)); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if err := InstallCodex(hooksPath); err != nil {
+		t.Fatalf("InstallCodex: %v", err)
+	}
+
+	if err := UninstallCodex(hooksPath); err != nil {
+		t.Fatalf("UninstallCodex: %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(hooksDir, "sessionstart.sh")); err != nil {
-		t.Errorf("shared shims must survive a codex uninstall (CC may reference them): %v", err)
+		t.Errorf("codex uninstall removed shims a CC install still references: %v", err)
+	}
+}
+
+// TestUninstallCodexReclaimsShimsWhenCCSettingsHasNoManagedEntries: a CC
+// settings.json that EXISTS but carries no Director-managed entries (Claude
+// Code in use, Director never installed there — or already uninstalled) must
+// not spare the shims; only a positive managed-entry sighting does.
+func TestUninstallCodexReclaimsShimsWhenCCSettingsHasNoManagedEntries(t *testing.T) {
+	hooksPath, hooksDir, _ := setupCodex(t, "")
+	settings := os.Getenv(settingsPathEnv)
+	if err := os.WriteFile(settings, []byte(codexFixture), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := InstallCodex(hooksPath); err != nil {
+		t.Fatalf("InstallCodex: %v", err)
+	}
+
+	if err := UninstallCodex(hooksPath); err != nil {
+		t.Fatalf("UninstallCodex: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(hooksDir, "sessionstart.sh")); !os.IsNotExist(err) {
+		t.Errorf("settings.json without managed entries must not spare the shims (err=%v)", err)
+	}
+	// The foreign settings.json itself is untouched — the reclaim only ever
+	// READS it.
+	b, err := os.ReadFile(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != codexFixture {
+		t.Errorf("codex uninstall mutated the CC settings file it only probes:\n%s", b)
 	}
 }
 
