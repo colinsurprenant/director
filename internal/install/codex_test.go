@@ -3,6 +3,7 @@ package install
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -199,8 +200,10 @@ func TestUninstallCodexSparesShimsWhenCCPresent(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(hooksDir, "sessionstart.sh")); err != nil {
 		t.Errorf("codex uninstall removed shims a CC install still references: %v", err)
 	}
-	if _, err := os.Lstat(filepath.Join(filepath.Dir(hooksDir), "bin", "director")); err != nil {
-		t.Errorf("codex uninstall removed the bin symlink a CC install still references: %v", err)
+	if runtime.GOOS != "windows" { // the bin symlink is unix-only (writeBinSymlink no-ops on windows)
+		if _, err := os.Lstat(filepath.Join(filepath.Dir(hooksDir), "bin", "director")); err != nil {
+			t.Errorf("codex uninstall removed the bin symlink a CC install still references: %v", err)
+		}
 	}
 }
 
@@ -256,8 +259,10 @@ func TestUninstallCodexSparesShimsWhenDefaultCodexInstallPresent(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(hooksDir, "sessionstart.sh")); err != nil {
 		t.Errorf("custom-path uninstall removed shims the default codex install still references: %v", err)
 	}
-	if _, err := os.Lstat(filepath.Join(filepath.Dir(hooksDir), "bin", "director")); err != nil {
-		t.Errorf("custom-path uninstall removed the bin symlink the default codex install still references: %v", err)
+	if runtime.GOOS != "windows" { // the bin symlink is unix-only (writeBinSymlink no-ops on windows)
+		if _, err := os.Lstat(filepath.Join(filepath.Dir(hooksDir), "bin", "director")); err != nil {
+			t.Errorf("custom-path uninstall removed the bin symlink the default codex install still references: %v", err)
+		}
 	}
 }
 
