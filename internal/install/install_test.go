@@ -637,6 +637,56 @@ func TestInstallFailsOnNonRegularBinPath(t *testing.T) {
 	}
 }
 
+// TestInstallBinSymlinkWithTrailingSlashHooksDir: a DIRECTOR_HOOKS_DIR
+// override routinely arrives with a trailing slash (tab-completion residue).
+// The bin dir must still derive as the hooks dir's SIBLING — the exact path
+// the shims probe as "$here/../bin/director" — not as a hooks/bin child, or
+// install reports success while the fallback tier silently never fires.
+func TestInstallBinSymlinkWithTrailingSlashHooksDir(t *testing.T) {
+	skipIfNoSymlinks(t)
+	path, hooksDir := writeFixture(t, "")
+	t.Setenv(hooksDirEnv, hooksDir+string(os.PathSeparator))
+
+	if err := Install(path); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(filepath.Dir(hooksDir), "bin", "director")
+	if _, err := os.Lstat(link); err != nil {
+		t.Errorf("trailing-slash DIRECTOR_HOOKS_DIR shifted the bin symlink off the shims' probe path %s: %v", link, err)
+	}
+	if _, err := os.Lstat(filepath.Join(hooksDir, "bin", "director")); !os.IsNotExist(err) {
+		t.Errorf("bin symlink was written under the hooks dir itself (err=%v)", err)
+	}
+}
+
+// TestInstallBinPathInspectErrorIsLoud: an Lstat failure that is NOT
+// not-exist (here: an unsearchable bin dir) must fail the install with the
+// inspect error, not fall through and mis-attribute the failure to symlink
+// creation — not-exist and cannot-look are different facts.
+func TestInstallBinPathInspectErrorIsLoud(t *testing.T) {
+	skipIfNoSymlinks(t)
+	if os.Geteuid() == 0 {
+		t.Skip("chmod-based access denial is ineffective as root")
+	}
+	path, hooksDir := writeFixture(t, "")
+	binDir := filepath.Join(filepath.Dir(hooksDir), "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(binDir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(binDir, 0o755) })
+
+	err := Install(path)
+	if err == nil {
+		t.Fatal("Install succeeded despite an unsearchable bin dir; want an inspect error")
+	}
+	if !strings.Contains(err.Error(), "inspect bin path") {
+		t.Errorf("Install error does not name the inspect failure: %v", err)
+	}
+}
+
 // TestBinSymlinkSharedWithCodex: the bin symlink follows the shims' shared
 // lifecycle exactly — the Codex form provisions it too, a CC uninstall spares
 // it while a Codex install remains, and it is reclaimed once no install
