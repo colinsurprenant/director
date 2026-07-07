@@ -51,7 +51,7 @@ sudo install bin/director /usr/local/bin/director   # or copy anywhere on PATH
 ```
 
 Confirm the binary resolves with `director version`. A release or `go install` binary prints its
-version (e.g. `director v1.4.0`); a `go build` from a git clone prints the version Go derives from
+version (e.g. `director v1.7.0`); a `go build` from a git clone prints the version Go derives from
 the checkout (a tag or pseudo-version, `+dirty` if modified); `director dev` appears only when no
 VCS metadata is available.
 
@@ -63,6 +63,12 @@ Linux. On native Windows the CLI itself works (build and tests run in CI on `win
 native Windows cannot execute, so the ambient layer (session-start injection, heartbeats, boundary
 nudges) is not wired there yet. You can still use the manual verbs (`emit`, `render`, `status`, `brief`, `show`,
 `resolve`) from PowerShell.
+
+**Single-machine note.** Director's hub lives on the machine you install it on; there is no
+cross-machine sync yet. If you work a repo from two machines (a laptop and a desktop, say), each keeps
+its own separate hub, and neither sees the other's decisions, open loops, or handoffs. Multi-machine
+sync is on the roadmap (see [`../README.md`](../README.md) "Status & scope"); until then, drive a
+given repo's Director state from a single machine.
 
 ### Wire the hooks
 
