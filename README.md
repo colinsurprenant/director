@@ -11,7 +11,7 @@ Memory tools answer *"what does the agent know?"* Director answers *"what is the
 
 Three weeks after you park a project, a new session starts already knowing all of this: injected at session start as ground truth, not recalled by similarity.
 
-You work with a coding agent (Claude Code, OpenAI Codex, or both) across several projects, in blocks: days or weeks deep in one, an afternoon in another, back to the first, sometimes a few parallel worktree sessions in a burst. The state of the work is exactly what nothing else carries across those boundaries, so the human becomes the message bus, re-explaining last month's decision to this morning's session. Director moves you from **message bus** to **reviewer**. It is a standalone Go CLI built around a shared, durable, **append-only event log** per repo:
+Every session with a coding agent starts fresh on the state of the work: what was decided and why, which loops you left open on purpose, where the last block stopped. Most people carry that across by hand (a CLAUDE.md, a notes file, a "write a handoff for the next one" before they stop), and that instinct is right; a hand-kept record just rides on you remembering, has no open-vs-closed lifecycle, and doesn't survive two sessions at once. **The session boundary is where the state leaks**: one repo or many, whether it's a compaction, a session ending, a week away, or a parallel worktree. Director closes that leak and moves you from **message bus** to **reviewer**. You don't operate it: it wires into Claude Code and Codex through hooks, the session emits as it works, and that state is injected into the next one as ground truth. It is built around a shared, durable, **append-only event log** per repo:
 
 - Sessions **`emit`** typed events as they work (`decision` · `open-item` · `handoff` · `note`) and **`resolve`** open loops when they truly close.
 - A deterministic fold collapses the log into **`render`** (the machine digest), **`brief`** (the human re-orientation view), and **`status`** (the one-line-per-workstream cockpit).
@@ -47,7 +47,7 @@ $ claude
 
 *The same three facts on both sides of the gap: recorded as the session works, injected when the next one starts.*
 
-That is one workstream. `director status` is the whole portfolio at a glance:
+That is one workstream. When several are in flight, `director status` is the whole board at a glance:
 
 ```text
 acme-api-main-7c21e9d4 · active · just now · blocked(1): timezone edge case before the backfill merges
