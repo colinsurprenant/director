@@ -272,7 +272,7 @@ handoff. It's fully deterministic: you read the same picture a fresh session rea
 # project: acme-api
 
 ## outlook
-# CHARTER: acme-api-main-7c21e9d4
+# CHARTER: acme-api
 
 - **Goal:** Ship cursor-based pagination across the public API without breaking existing clients.
 - **Non-goals:** No offset fallback; no response-shape changes beyond the added cursor field.
