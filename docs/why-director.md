@@ -6,15 +6,17 @@
 
 ## The problem
 
-You work with coding agents across several projects. Not all at once, but in **blocks**: a few days or weeks deep in one project, an afternoon in another, back to the first. Some blocks overlap; occasionally you run two or three sessions in parallel worktrees. Over weeks, that adds up to a real fleet of workstreams, most of them dormant at any given moment, all of them still *yours*.
+Every session with a coding agent starts fresh on the state of the work. Most people carry it across by hand: a CLAUDE.md, a notes file, a "write a handoff for the next one" before they stop. That instinct is right, but a hand-kept record rides on you remembering, has no open-vs-closed lifecycle, and doesn't survive two sessions at once. **The session boundary is where the state leaks**: one repo or many, whether a compaction, a session ending, a week away, or a parallel worktree.
 
-Every session starts amnesiac about exactly the layer that matters across those boundaries. Native agent memory has gotten good at *facts*: what the project is, how the build works, your preferences. What nothing carries is the **coordination narrative**: what was decided and why, which loops were deliberately deferred, where the work stopped when the block ended, and what still needs *you*. So the human becomes the message bus, re-explaining last month's decision to this morning's session, re-discovering their own open loops by grepping git history, relaying context by hand between a worktree session and the main one.
+And it compounds. Work in **blocks** over weeks (a few days deep in one project, an afternoon in another, back to the first, occasionally two or three sessions in parallel worktrees) and that adds up to a real fleet of workstreams, most dormant at any given moment, all of them still *yours*.
+
+The leak is specific. Native agent memory has gotten good at *facts*: what the project is, how the build works, your preferences. What nothing carries is the **coordination narrative**: what was decided and why, which loops were deliberately deferred, where the work stopped when the block ended, and what still needs *you*. So you become the message bus, re-explaining last month's decision to this morning's session, re-discovering your own open loops by grepping git history, relaying context by hand between a worktree session and the main one.
 
 Director exists to move you from **message bus** to **reviewer**.
 
 ## What Director is
 
-A standalone Go CLI (single static binary, no daemon, no database, no cloud) that gives your sessions a shared, durable, **append-only event log** per repo, plus **deterministic projections** over it:
+You don't operate Director; your agents do. It installs into Claude Code and Codex as hooks, so the writing happens as sessions work and the state is there waiting when the next one starts. What it maintains is a shared, durable, **append-only event log** per repo (one static Go binary: no daemon, no database, no cloud), plus **deterministic projections** over it:
 
 - Sessions **emit** typed events as they work, using exactly four kinds (`decision`, `open-item`, `handoff`, `note`), and **resolve** open-items when they are truly closed.
 - A deterministic, non-LLM fold collapses the log into three views: `render` (the machine digest), `brief` (the human re-orientation view), and `status` (the one-line-per-workstream cockpit with a *Needs-you* band).

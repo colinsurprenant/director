@@ -1,12 +1,12 @@
 # Getting started with Director
 
-You work with a coding agent (Claude Code, OpenAI Codex, or both) across several projects in blocks: days or weeks deep in one repo, an afternoon
-in another, back to the first, sometimes a burst of parallel worktree sessions. Director keeps that
-portfolio coordinated without you being the message bus. Sessions write durable coordination state
-(decisions, open loops, handoffs) to a shared append-only LOG; every new session starts from that record
-instead of from git archaeology, so re-entering a project you haven't touched in weeks picks up exactly
-where the last block left off. You read deterministic projections (`status`, `brief`) and step in
-only where a human is actually needed.
+Every session with a coding agent starts fresh on the state of the work: what was decided, which loops
+are open, where the last one stopped. **The session boundary is where the state leaks**, whether you
+have one repo or many. Director closes the leak: sessions write durable coordination state (decisions,
+open loops, handoffs) to a shared append-only LOG as they work, and every new session starts from that
+record instead of from git archaeology, so re-entering a project you haven't touched in weeks picks up
+exactly where the last block left off. You don't operate it: you read the projections (`status`,
+`brief`) and step in only where a human is actually needed.
 
 This guide walks the first run end to end, written in Claude Code terms with the Codex differences
 called out where they exist (see "Using OpenAI Codex?" in section 1). Go is only needed for the
