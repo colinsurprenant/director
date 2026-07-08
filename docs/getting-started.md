@@ -57,7 +57,7 @@ VCS metadata is available.
 
 **Windows note.** This guide, including the `director install` step above, assumes a unix-like
 environment: macOS, Linux, or Windows via [WSL](https://learn.microsoft.com/windows/wsl/), which is
-the recommended Windows setup — with the Linux binary, install and hooks work there exactly as on
+the recommended Windows setup: with the Linux binary, install and hooks work there exactly as on
 Linux. On native Windows the CLI itself works (build and tests run in CI on `windows-latest`), but
 `director install` refuses to run there: the hook shims are bash scripts, which Claude Code on
 native Windows cannot execute, so the ambient layer (session-start injection, heartbeats, boundary
@@ -89,14 +89,14 @@ installed Director hooks into /Users/you/.claude/settings.json (set DIRECTOR_SET
   There is no manual copy step.
 - It merges three hooks into `~/.claude/settings.json` (`SessionStart`, `PostToolUse`, `Stop`), each tagged
   `"_managedBy":"director"` so they coexist with GSD and any hand-rolled hooks. Re-running changes nothing.
-- It materializes the three slash commands: `/director:adopt` (informed adoption — see section 3),
+- It materializes the three slash commands: `/director:adopt` (informed adoption, see section 3),
   `/director:handoff` (pause a workstream, record the resume point) and `/director:complete` (close out a finished,
   merged workstream). More on the boundary pair in section 5.
 
 Verify it took. `director doctor` is the thorough check: it walks the same binary-resolution ladder
 the hooks walk and reports each link (binary, Claude Code hooks, Codex hooks if present, hub), so a
 broken install becomes loud instead of a silent no-op. It exits non-zero when the install is broken,
-and warns (without failing) on a partial one — such as a terminal-only install the desktop app would miss.
+and warns (without failing) on a partial one, such as a terminal-only install the desktop app would miss.
 
 ```bash
 director doctor
@@ -118,17 +118,17 @@ director status
 # (no live workstreams)        ← expected before you adopt anything / open a session
 ```
 
-> **Keep `director` on `PATH`.** With `DIRECTOR_BIN` set, the shims use it and nothing else — a
+> **Keep `director` on `PATH`.** With `DIRECTOR_BIN` set, the shims use it and nothing else: a
 > stale value exits 0 without ever trying `PATH` or the symlink. Unset, they fall back to `director`
 > on `PATH`, then to the symlink `install` drops next to them at `<hooks dir>/../bin/director`
 > (`~/.claude/director/bin/director` by default; a `DIRECTOR_HOOKS_DIR` override moves it too).
 > If the binary isn't found, the shims exit 0 (fail-safe) and
-> coordination silently no-ops — nothing breaks, but nothing coordinates. After rebuilding the binary,
+> coordination silently no-ops: nothing breaks, but nothing coordinates. After rebuilding the binary,
 > re-run `director install` to refresh the shims.
 >
 > The last tier is what the install's **bin symlink** provisions, and it matters more than it looks:
 > the Claude Code **desktop app** launched from the Dock/Launchpad inherits the bare launchd `PATH`
-> (no `/opt/homebrew/bin`, `/usr/local/bin`, or `~/go/bin` —
+> (no `/opt/homebrew/bin`, `/usr/local/bin`, or `~/go/bin`,
 > [anthropics/claude-code#44649](https://github.com/anthropics/claude-code/issues/44649)), so the
 > `PATH` tier misses there even when your terminal finds `director` fine. The explicit alternative is
 > pinning the binary via `DIRECTOR_BIN` in `~/.claude/settings.json`:
@@ -138,7 +138,7 @@ director status
 > ```
 >
 > Install never overwrites a **regular file** already sitting at the fallback path
-> (`<hooks dir>/../bin/director`) — a binary you placed there yourself stays, and the shims run it
+> (`<hooks dir>/../bin/director`). A binary you placed there yourself stays, and the shims run it
 > as long as it is executable.
 
 ### Using OpenAI Codex?
@@ -151,7 +151,7 @@ Codex's hook contract mirrors Claude Code's, so the same shims serve both agents
 merges the three hooks into `~/.codex/hooks.json` (never your `config.toml`) and installs the boundary
 commands as **agent skills** under `~/.agents/skills`: invoke them as `$director-adopt`,
 `$director-complete`, `$director-handoff` (or find them in the `/skills` browser). Skills are the
-surface Codex recommends — its older `~/.codex/prompts` custom prompts are deprecated upstream. Two
+surface Codex recommends; its older `~/.codex/prompts` custom prompts are deprecated upstream. Two
 Codex-specific notes:
 
 - **Trust the hooks once.** Codex asks you to review and trust the three hook definitions at your next
@@ -161,16 +161,16 @@ Codex-specific notes:
   and the context-fill handoff nudge are Claude Code-only for now (they read CC's transcript format and
   stay safely inert on Codex).
 - Codex exposes no session id to shell commands, so a hand-run `director done` (including
-  `$director-complete`'s final step) may report "row not found" there — not a failure: the Stop hook
+  `$director-complete`'s final step) may report "row not found" there, not a failure: the Stop hook
   archives the session's row at turn end, and everything durable was already written. Targeted
   `done --workstream <id>` is unaffected.
 
 The rest of this guide uses the Claude Code command names (`/director:adopt` etc.); on Codex, read each
-as its `$director-*` skill twin — same command, same behavior.
+as its `$director-*` skill twin: same command, same behavior.
 
 `director uninstall --codex` removes only the tagged entries and the three skill directories. The hook
 shims are shared between the two agents: either uninstall form leaves them in place while the other
-agent's install still references them, and reclaims them once neither does — so uninstalling one agent
+agent's install still references them, and reclaims them once neither does, so uninstalling one agent
 never silently breaks the other, and uninstalling the last one leaves no shim files behind.
 
 ---
@@ -189,7 +189,7 @@ adopted some-project-main-1a2b3c4d
   CHARTER scaffolded at ~/.director/projects/<repo-key>/CHARTER.md — fill in goal / non-goals / risk-line, or run /director:adopt in a session to draft it from the repo's docs
 ```
 
-A bare `adopt` **registers** — the fast, deterministic floor: it derives a **stable workstream identity**
+A bare `adopt` **registers** (the fast, deterministic floor): it derives a **stable workstream identity**
 (handles worktrees, remotes, forks), creates `projects/<repo-key>/` in the hub, scaffolds a ~3-line
 **CHARTER stub**, and registers the workstream. Re-adopting never clobbers an edited CHARTER.
 
@@ -198,20 +198,20 @@ session. It starts with the same `director adopt`, then fans out read-only agent
 (docs and planning files, code TODOs read *in context*, git state, the repo's self-descriptions) and brings
 back two things for your confirmation:
 
-- a **CHARTER proposal** — every claim cited, inferences marked, plus the questions only you can answer —
+- a **CHARTER proposal** (every claim cited, inferences marked, plus the questions only you can answer),
   so adoption starts from an informed draft instead of a blank template;
 - the repo's open loops **triaged**: genuinely **in-flight** work (imported as `open-item` events after your
   confirm; git state must corroborate the prose, which keeps this bucket small), **backlog** (stays in your
   tracker and TODO docs), **doc-stamps** (feed the CHARTER), and **fossils**. Every bucket's count is
   reported; nothing is imported silently.
 
-Re-run `/director:adopt` anytime — on an adopted repo it refreshes a stale CHARTER (shown as a diff) and
+Re-run `/director:adopt` anytime: on an adopted repo it refreshes a stale CHARTER (shown as a diff) and
 triages only loops the log doesn't already carry.
 
-### The CHARTER — where you steer
+### The CHARTER: where you steer
 
 `adopt` scaffolds `~/.director/projects/<repo-key>/CHARTER.md` with placeholders. Intent isn't in the code,
-so the content comes from you — but you don't have to write it from scratch: run **`/director:adopt`** and
+so the content comes from you, but you don't have to write it from scratch: run **`/director:adopt`** and
 confirm the proposal it drafts from the repo's own docs (the recommended path), or hand-edit the stub (the
 fallback, and still the way to steer it afterwards):
 
@@ -234,7 +234,7 @@ Just start Claude Code (or Codex) in the adopted repo as usual. Director's `Sess
 
 - registers/refreshes the workstream's liveness row, and
 - injects the **CHARTER + a deterministic digest** of the LOG as the session's *authoritative current
-  state* ("Ground Truth"). The digest is an index of capped headlines — `director show <ulid>` prints
+  state* ("Ground Truth"). The digest is an index of capped headlines; `director show <ulid>` prints
   any entry in full.
 
 You don't run anything. The session is now coordinating. As it works, its `PostToolUse` hook keeps the
@@ -257,7 +257,7 @@ docs-site-main-9d2e5b71 · dormant · 13d ago · ok
 ```
 
 One line per live workstream: handle · liveness (`active`/`idle`/`dormant`/`gone`, derived from heartbeat age and branch existence)
-· heartbeat recency · the **Needs-you band** (its open `escalate` items — what's waiting on *you*).
+· heartbeat recency · the **Needs-you band** (its open `escalate` items, what's waiting on *you*).
 
 ```bash
 director brief                       # whole-fleet bigger picture
@@ -265,7 +265,7 @@ director brief --project <repo-key>  # one project
 ```
 
 `brief` composes the outlook (from each CHARTER), the latest handoff per workstream, the carried-forward
-open items, and recent decisions — the moving narrative between the stable CHARTER and the per-session
+open items, and recent decisions: the moving narrative between the stable CHARTER and the per-session
 handoff. It's fully deterministic: you read the same picture a fresh session reads.
 
 ```text
@@ -300,21 +300,21 @@ director show <ulid>      # read any event in full first — digest lines are ca
 
 ## 5. How the model uses Director
 
-You rarely run `emit`/`resolve` by hand — **the session does**, guided by the coordination protocol the
+You rarely run `emit`/`resolve` by hand; **the session does**, guided by the coordination protocol the
 SessionStart hook injects into every managed-repo session (its readable source is
 [`../skills/director/SKILL.md`](../skills/director/SKILL.md)). The protocol teaches two habits no hook can
 perform for the model:
 
-- **Continuous boundary-flush** — emit durable state *as work happens* (a `decision` the moment it's made,
+- **Continuous boundary-flush**: emit durable state *as work happens* (a `decision` the moment it's made,
   an `open-item` the moment a loop is deferred, a `handoff` at each natural boundary), never batched for the
   end. Transient working state survives a compaction only if it was written to the LOG during a turn.
-- **Ground Truth** — treat the injected CHARTER + digest as authoritative: build on it, don't re-derive it
+- **Ground Truth**: treat the injected CHARTER + digest as authoritative: build on it, don't re-derive it
   by re-scanning the repo or re-reading the log.
 
 There are exactly four event kinds: `decision`, `open-item` (the home for "documented, not dropped";
 `--risk escalate` is the "needs a human" subset that surfaces in `status`), `handoff`, and `note`. There is
-no `blocker` kind and `done` is fleet-liveness only. Your job is to **review** — read `status`/`brief`,
-answer the escalations, edit CHARTERs to steer — not to relay.
+no `blocker` kind and `done` is fleet-liveness only. Your job is to **review**: read `status`/`brief`,
+answer the escalations, edit CHARTERs to steer, not to relay.
 
 At block boundaries, two slash commands (installed by `director install`) mark workstream lifecycle:
 
@@ -323,7 +323,7 @@ At block boundaries, two slash commands (installed by `director install`) mark w
   weeks later) rehydrates from the parked handoff instead of re-deriving state.
 - **`/director:complete`** when a workstream is done and merged. It closes out the workstream's open loops
   with your confirmation and archives its fleet row. Nothing auto-resolves; close-out is human-confirmed.
-  It also takes a workstream id — `/director:complete <id>` — to close out a *dead sibling*: a worktree
+  It also takes a workstream id (`/director:complete <id>`) to close out a *dead sibling*: a worktree
   that merged and was deleted before anyone ran the close-out. Its branch reads `gone` in `status`, and
   if it still owns open items, the next session you start on that repo will surface a "close-out pending"
   nudge naming it; you don't have to hunt for corpses yourself.
@@ -344,14 +344,14 @@ would not fire. The table covers the specifics.
 | **Hooks don't seem to fire** | Confirm `director install` ran and `director` is on `PATH` (`command -v director`). Check the shims exist: `ls $DIRECTOR_HOOKS_DIR` (default `~/.claude/director/hooks`). Re-run `director install` after moving/rebuilding the binary. |
 | **Coordination silently does nothing** | The shims fail-safe to exit 0 when the binary is missing. Ensure `DIRECTOR_BIN` (or `PATH`, or the `~/.claude/director/bin/director` symlink a re-run of `director install` refreshes) resolves `director`. |
 | **Works in the terminal, dead in the desktop app** | Dock/Launchpad launches get the bare launchd `PATH` ([anthropics/claude-code#44649](https://github.com/anthropics/claude-code/issues/44649)), so the shims' `PATH` tier misses. Re-run `director install` (it drops the `~/.claude/director/bin/director` symlink the shims fall back to), or pin the binary explicitly with `DIRECTOR_BIN` via `"env"` in `settings.json`. |
-| **State is in the wrong place** | All cross-repo state lives under `DIRECTOR_HUB` (default `~/.director`). If you set it for one command, set it for all — sessions and your CLI must agree. |
-| **A hook seems broken** | Hooks are fail-safe by design — a failure never blocks a session, it logs. Read `$DIRECTOR_HUB/health/hook.log` (one line per outcome, `ok=false` marks failures). |
-| **`director _hook ...`** | Internal — invoked by the shims, never run by hand. |
+| **State is in the wrong place** | All cross-repo state lives under `DIRECTOR_HUB` (default `~/.director`). If you set it for one command, set it for all: sessions and your CLI must agree. |
+| **A hook seems broken** | Hooks are fail-safe by design: a failure never blocks a session, it logs. Read `$DIRECTOR_HUB/health/hook.log` (one line per outcome, `ok=false` marks failures). |
+| **`director _hook ...`** | Internal: invoked by the shims, never run by hand. |
 | **A row reads `idle` or `dormant` though the session is active** | Liveness is derived from heartbeat age. `PostToolUse` refreshes it on every tool call, so a session making no tool calls can age to `idle` (after 4h) then `dormant` (after 2d). Dormant is the normal between-blocks state, not an error. |
 | **A row reads `gone` despite a fresh heartbeat** | Liveness also checks that the workstream's branch still exists. A branch that no longer exists reads `gone` by design (merged away and deleted, or the whole worktree directory is gone: any failed branch check counts), meaning the workstream looks complete: close it out with `/director:complete <workstream-id>` from any session on the repo. `status` shows its open-item count, and new sessions on the repo are nudged about it at start while it still owns open items. Rows without branch/dir info fail open and age out by TTL only. |
 | **`status` shows "N unreadable fleet row(s) skipped"** | One or more row files under `$DIRECTOR_HUB/fleet/` are corrupt; the cockpit skips them rather than failing. Inspect/remove the bad files there. |
-| **`adopt` imported nothing** | By design — the CLI registers only (identity + CHARTER stub + fleet row). The import path is `/director:adopt` in an agent session: it triages the repo's real open loops and imports only what you confirm. |
-| **`install` refused** | Your `~/.claude/settings.json` has a malformed (non-object) `hooks` value. Director won't overwrite data it doesn't understand — fix the file, then re-run. |
+| **`adopt` imported nothing** | By design: the CLI registers only (identity + CHARTER stub + fleet row). The import path is `/director:adopt` in an agent session: it triages the repo's real open loops and imports only what you confirm. |
+| **`install` refused** | Your `~/.claude/settings.json` has a malformed (non-object) `hooks` value. Director won't overwrite data it doesn't understand: fix the file, then re-run. |
 
 ---
 
