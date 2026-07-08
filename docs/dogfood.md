@@ -1,9 +1,9 @@
-# Director dogfood — validate before building
+# Director dogfood: validate before building
 
-> **SUPERSEDED (2026-06-08) — do not run.** The *value* question ("does this surface what I'd otherwise lose?") was settled by lived experience; the *schema* question this exercise would have hardened is now locked by decision in `docs/specs/2026-06-03-director-coordination-design.md` §17. Kept for provenance only. The 5 kinds below are superseded by the canonical 4 — **decision · open-item · handoff · note** — where `done` is fleet-liveness (not a semantic kind) and `blocker` folds into `open-item` + `risk: escalate`.
+> **SUPERSEDED (2026-06-08): do not run.** The *value* question ("does this surface what I'd otherwise lose?") was settled by lived experience; the *schema* question this exercise would have hardened is now locked by decision in `docs/specs/2026-06-03-director-coordination-design.md` §17. Kept for provenance only. The 5 kinds below are superseded by the canonical 4 (**decision · open-item · handoff · note**), where `done` is fleet-liveness (not a semantic kind) and `blocker` folds into `open-item` + `risk: escalate`.
 
 Goal: confirm the 5 event kinds capture the info that actually matters, before writing any Go.
-(The Assignment from the product doc — do this first.)
+(The Assignment from the product doc: do this first.)
 
 For ~3 days, while working in any session, append one line per moment to `~/director-dogfood/<repo>.log`:
 
@@ -19,4 +19,4 @@ End of day: `cat ~/director-dogfood/*.log` and ask:
 - **Yes** → the soul is validated. Build the CLI (see `docs/specs/2026-06-03-…md` §15 + the product doc's "Next Steps").
 - **No** → the event kinds/schema are wrong. Fix that before any code.
 
-By hand, skip JSON/fields — format is the CLI's job. You're testing information value only.
+By hand, skip JSON/fields: format is the CLI's job. You're testing information value only.
