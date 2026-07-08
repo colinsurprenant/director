@@ -24,9 +24,10 @@ curl -fsSL https://raw.githubusercontent.com/colinsurprenant/director/main/insta
 ```
 
 One command downloads the right prebuilt binary for your platform (checksum-verified), installs it to
-`~/.local/bin`, and runs `director install` to wire Claude Code (wire Codex instead with `sh -s -- --codex`,
-or `--both`; install the binary only with `sh -s -- --no-wire`). **Already ran it?** The binary is in
-place: run `director doctor` to confirm the wiring, then skip to section 2.
+`~/.local/bin`, and runs `director install` to wire Claude Code (wire Codex instead with
+`… | sh -s -- --codex`, or `--both`; install the binary only with `… | sh -s -- --no-wire`).
+**Already ran it?** The binary is in place: run `director doctor` to confirm the wiring, then skip
+to section 2.
 
 Prefer to place the binary yourself? Any of the three paths below gets `director` onto your `PATH`;
 then run `director install` (the "Wire the hooks" step below).

@@ -45,7 +45,7 @@ $ claude
 01KWJ4W8…  decision   cursor pagination, not offset; offsets break under deletes
 ```
 
-*The same three facts on both sides of the gap: recorded as the session works, injected when the next one starts ("need-you" counts the open items waiting on a human call).*
+*The same three facts on both sides of the gap: recorded as the session works, injected when the next one starts ("need-you" counts the `[risk:escalate]` open items, the ones waiting on a human call).*
 
 That is one workstream. When several are in flight, `director status` is the whole board at a glance:
 
@@ -80,7 +80,7 @@ One command downloads the right prebuilt binary for your platform (checksum-veri
 curl -fsSL https://raw.githubusercontent.com/colinsurprenant/director/main/install.sh | sh
 ```
 
-Wire Codex instead with `sh -s -- --codex` (or `--both`); install the binary only with `sh -s -- --no-wire`.
+Wire Codex instead with `… | sh -s -- --codex` (or `--both`); install the binary only with `… | sh -s -- --no-wire`.
 
 > **On Windows?** Run the one-liner inside [WSL](https://learn.microsoft.com/windows/wsl/) with the Linux binary: everything works there, hooks included. Native Windows is CLI-only for now: the binary is built and CI-tested, and every manual verb (`emit`, `render`, `status`, `brief`, `show`, `resolve`, …) works from PowerShell, but the hook shims are bash, so the ambient layer (session-start injection, heartbeats, boundary nudges) is not yet wired natively.
 
