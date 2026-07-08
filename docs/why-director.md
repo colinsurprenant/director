@@ -16,14 +16,14 @@ Director exists to move you from **message bus** to **reviewer**.
 
 ## What Director is
 
-You don't operate Director; your agents do. It installs into Claude Code and Codex as hooks, so the writing happens as sessions work and the state is there waiting when the next one starts. What it maintains is a shared, durable, **append-only event log** per repo (one static Go binary: no daemon, no database, no cloud), plus **deterministic projections** over it:
+You don't operate Director; your agents do. It installs into Claude Code and Codex as hooks, so the writing happens as sessions work and the state is there waiting when the next one starts. What it maintains is a shared, durable, **append-only event log** per repo (one static Go binary: no daemon, no database, no cloud, no telemetry), plus **deterministic projections** over it:
 
 - Sessions **emit** typed events as they work, using exactly four kinds (`decision`, `open-item`, `handoff`, `note`), and **resolve** open-items when they are truly closed.
-- A deterministic, non-LLM fold collapses the log into three views: `render` (the machine digest), `brief` (the human re-orientation view), and `status` (the one-line-per-workstream cockpit with a *Needs-you* band).
-- A SessionStart hook **injects** the project CHARTER plus the folded digest into every new session as authoritative ground truth. Push, not pull: a protocol the model must remember to invoke is a protocol that never fires.
+- The log collapses deterministically (no LLM in the loop) into three views: `render` (the machine digest), `brief` (the human re-orientation view), and `status` (the one-line-per-workstream cockpit with a *Needs-you* band).
+- A SessionStart hook **injects** the project CHARTER plus the digest into every new session as authoritative ground truth. Push, not pull: a protocol the model must remember to invoke is a protocol that never fires.
 - Boundary commands mark workstream lifecycle: `/director:handoff` when pausing (records the resume point), `/director:complete` when a workstream is done and merged (human-confirmed close-out of its open loops).
 
-The log is NDJSON: plain, greppable, git-trackable text. If Director disappeared tomorrow, your coordination history would still be readable with `cat`.
+The log is NDJSON: plain, greppable, git-trackable text. If Director disappeared tomorrow, your coordination history would still be readable, no tooling required.
 
 The shortest honest description: **a coordination ledger your agents actually keep.** Engineers have known for decades that an append-only, timestamped, never-rewritten journal (the engineering daybook) beats a curated wiki for recovering context. Director mechanizes that practice for a portfolio of agent sessions, and adds the two things a daybook can't do: lifecycle (a loop stays open until consciously resolved; a decision is superseded, never lost) and deterministic projections that answer "what's open, everywhere, right now."
 
@@ -74,7 +74,7 @@ The slow layer independently validates the design. Nygard's original ADR discipl
 
 ## Steering is a hat, not a daemon
 
-Director has **no master session.** The big picture, the thing every "orchestrator" architecture centralizes in a coordinator that must stay alive, is here a *durable projection owned by nobody*. Any session (or the human, directly) can wear the steering hat for a moment by reading `brief` and `status`. The integrator is the fold, not a process.
+Director has **no master session.** The big picture, the thing every "orchestrator" architecture centralizes in a coordinator that must stay alive, is here a *durable projection owned by nobody*. Any session (or the human, directly) can wear the steering hat for a moment by reading `brief` and `status`. The integrator is the fold of the log into its projections, not a process.
 
 The design test: **if a session dying loses real information, that's a liability, not an architecture.** A long-lived "cockpit" session is fine as a convenience, but it must hold no privileged knowledge; everything it knows is in the stream, so losing it costs only scrollback. Corollary: if you feel you need a master session, the stream isn't rich enough. Fix the stream, don't anoint an owner.
 
@@ -111,7 +111,7 @@ Non-goals, stated as firmly as the goals:
 - **Not a methodology.** Invariants, not process (see above).
 - **Not semantic memory.** No embeddings, no vector DB, no retrieval ranking. The record is small enough to read because emission is deliberate, and legible because it's typed prose.
 - **Not multi-user.** Single-human by design: Director externalizes *one* developer's in-flight working memory. Sessions are plural, machines are plural, humans are not. In-flight fast-band context is inherently singular in every org shape; teams sync through the slow layers (PRs, tickets, ADRs), so the cross-human interface is `promote`, never a shared log. Succession still works for free: the log is a portable file plus a deterministic fold, and an inheritor rehydrates exactly like your own next session would.
-- **No database, no daemon, no cloud.** Durable state is NDJSON files in a directory you own. The binary runs and exits.
+- **No database, no daemon, no cloud, no telemetry.** Durable state is NDJSON files in a directory you own. The binary runs, never opens a network connection, and exits.
 - **No autonomy.** Close-out is human-confirmed; nothing auto-resolves your open loops; nudges never write on your behalf.
 
 ## The honest caveats

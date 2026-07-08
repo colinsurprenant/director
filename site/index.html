@@ -311,13 +311,13 @@
 <span class="hd">## decisions</span>
 <span class="id">01KWJ4W8…</span>  <span class="cyan">decision</span>   cursor pagination, not offset; offsets break under deletes</code></pre>
     </div>
-    <figcaption class="term-cap">the same three facts on both sides of the gap: recorded as the session works, injected when the next one starts</figcaption>
+    <figcaption class="term-cap">the same three facts on both sides of the gap: recorded as the session works, injected when the next one starts · need-you counts what waits on a human call</figcaption>
   </figure>
 </div>
 
 <section class="wrap">
   <p class="kicker">how it works</p>
-  <h2>An append-only log per repo. A deterministic fold. A push at session start.</h2>
+  <h2>An append-only log per repo. Deterministic projections. A push at session start.</h2>
   <div class="grid">
     <div class="cell">
       <h3><span class="p">$</span> director emit</h3>
@@ -329,7 +329,7 @@
     </div>
     <div class="cell">
       <h3><span class="p">$</span> director brief</h3>
-      <p>A deterministic fold collapses the log into the machine digest, the human brief, and the fleet cockpit. Every session and the human read the <em>same</em> picture, byte-identical, verifiable.</p>
+      <p>The log collapses deterministically into the machine digest, the human brief, and the fleet cockpit. Every session and the human read the <em>same</em> picture, byte-identical, verifiable.</p>
     </div>
     <div class="cell">
       <h3>SessionStart hook</h3>
@@ -352,14 +352,14 @@
     </div>
     <div>
       <dt>vs a markdown file</dt>
-      <dd>Append-only integrity under concurrent writers, a byte-identical verifiable fold, lifecycle semantics, push-injection. Willpower is not a file format.</dd>
+      <dd>Append-only integrity under concurrent writers, byte-identical verifiable views, lifecycle semantics, push-injection. Willpower is not a file format.</dd>
     </div>
   </dl>
 </section>
 </main>
 
 <footer class="wrap">
-  <p class="foot-line">A single static Go binary. No daemon, no database, no cloud. The log is plain NDJSON you could read with <code>cat</code>.</p>
+  <p class="foot-line">A single static Go binary. No daemon, no database, no cloud, no telemetry: it never opens a network connection. The log is plain NDJSON.</p>
   <nav class="foot-links" aria-label="Footer">
     <a href="https://github.com/colinsurprenant/director">GitHub</a>
     <a href="https://github.com/colinsurprenant/director/blob/main/docs/getting-started.md">Getting started</a>

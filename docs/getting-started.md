@@ -17,9 +17,21 @@ called out where they exist (see "Using OpenAI Codex?" in section 1). Go is only
 
 ## 1. Install (one time)
 
-Get the `director` binary onto your `PATH` by any of the three paths below, then run `director install`.
+### The one-liner (recommended)
 
-### From a release (recommended)
+```bash
+curl -fsSL https://raw.githubusercontent.com/colinsurprenant/director/main/install.sh | sh
+```
+
+One command downloads the right prebuilt binary for your platform (checksum-verified), installs it to
+`~/.local/bin`, and runs `director install` to wire Claude Code (wire Codex instead with `sh -s -- --codex`,
+or `--both`; install the binary only with `sh -s -- --no-wire`). **Already ran it?** The binary is in
+place: run `director doctor` to confirm the wiring, then skip to section 2.
+
+Prefer to place the binary yourself? Any of the three paths below gets `director` onto your `PATH`;
+then run `director install` (the "Wire the hooks" step below).
+
+### From a release
 
 Each tagged release publishes prebuilt binaries for macOS, Linux, and Windows (amd64 and arm64) as
 `director_<tag>_<os>_<arch>.tar.gz` (`.zip` for Windows), plus a `checksums.txt`, on the
