@@ -7,18 +7,18 @@
 
 **[The two-minute tour: colinsurprenant.github.io/director](https://colinsurprenant.github.io/director/)**
 
-Memory tools answer *"what does the agent know?"* Director answers *"what is the state of the work?"*: what was decided and why, which loops were deliberately deferred, where the work stopped when the block ended, and what still needs *you*. Facts accumulate; loops open and close. Nothing in a memory store ever *closes*. That lifecycle is the difference. Run both: they don't overlap.
+Every session with a coding agent starts fresh on the state of the work: what was decided and why, which loops you left open on purpose, where the last block stopped. Most people carry that across by hand (a CLAUDE.md, a notes file, a "write a handoff for the next one" before they stop), and that instinct is right. But a hand-kept record rides on you remembering, has no open-vs-closed lifecycle, and doesn't survive two sessions at once. **The session boundary is where the state leaks**: one repo or many, whether it's a compaction, a session ending, a week away, or a parallel worktree.
 
-Three weeks after you park a project, a new session starts already knowing all of this: injected at session start as ground truth, not recalled by similarity.
-
-Every session with a coding agent starts fresh on the state of the work: what was decided and why, which loops you left open on purpose, where the last block stopped. Most people carry that across by hand (a CLAUDE.md, a notes file, a "write a handoff for the next one" before they stop), and that instinct is right; a hand-kept record just rides on you remembering, has no open-vs-closed lifecycle, and doesn't survive two sessions at once. **The session boundary is where the state leaks**: one repo or many, whether it's a compaction, a session ending, a week away, or a parallel worktree. Director closes that leak and moves you from **message bus** to **reviewer**. You don't operate it: it wires into Claude Code and Codex through hooks, the session emits as it works, and that state is injected into the next one as ground truth. It is built around a shared, durable, **append-only event log** per repo:
+Director closes that leak, and you don't operate it: it wires into Claude Code and Codex through hooks, the session emits as it works, and that state is injected into the next one as ground truth. It moves you from **message bus** to **reviewer**, built around a shared, durable, **append-only event log** per repo:
 
 - Sessions **`emit`** typed events as they work (`decision` · `open-item` · `handoff` · `note`) and **`resolve`** open loops when they truly close.
-- A deterministic fold collapses the log into **`render`** (the machine digest), **`brief`** (the human re-orientation view), and **`status`** (the one-line-per-workstream cockpit).
-- A SessionStart hook **injects** the CHARTER + digest into every new session as ground truth, so a cold re-entry starts from your parked handoff instead of from git archaeology.
+- The log collapses deterministically into **`render`** (the machine digest), **`brief`** (the human re-orientation view), and **`status`** (the one-line-per-workstream cockpit).
+- A SessionStart hook **injects** the CHARTER + digest into every new session as ground truth, so a cold re-entry (three weeks after the last block) starts from your parked handoff instead of from git archaeology.
 - The log is **model-agnostic**: the next session can be you tomorrow, you after a compaction, or a stronger model you escalate a stuck problem to, with the tried-and-failed hypotheses traveling along. Escalate with context, not with amnesia.
 
-The LOG (plus the deliberately-edited living docs) is the only system of record; sessions and every rendered view are disposable caches reconstructible from it. Director wires natively into **Claude Code and OpenAI Codex**: same hooks, same log, same boundary commands, either agent alone or both side by side. A single static binary, stdlib-first, one vetted build-time dependency (`github.com/oklog/ulid/v2`). No daemon, no database, no cloud: the log is plain NDJSON you could read with `cat`.
+Memory tools answer *"what does the agent know?"* Director answers *"what is the state of the work?"*: what was decided and why, which loops were deliberately deferred, and what still needs *you*. Facts accumulate; loops open and close, and nothing in a memory store ever *closes*. That lifecycle is the difference, and so is the delivery: pushed at session start, not recalled by similarity. Run both: they don't overlap.
+
+The LOG (plus the deliberately-edited living docs) is the only system of record; sessions and every rendered view are disposable caches reconstructible from it. Director wires natively into **Claude Code and OpenAI Codex**: same hooks, same log, same boundary commands, either agent alone or both side by side. A single static binary, stdlib-first, one vetted build-time dependency (`github.com/oklog/ulid/v2`). No daemon, no database, no cloud, no telemetry: the binary never opens a network connection, and the log is plain NDJSON.
 
 ```text
 $ claude
@@ -45,7 +45,7 @@ $ claude
 01KWJ4W8…  decision   cursor pagination, not offset; offsets break under deletes
 ```
 
-*The same three facts on both sides of the gap: recorded as the session works, injected when the next one starts.*
+*The same three facts on both sides of the gap: recorded as the session works, injected when the next one starts ("need-you" counts the open items waiting on a human call).*
 
 That is one workstream. When several are in flight, `director status` is the whole board at a glance:
 
@@ -70,7 +70,7 @@ The design in four ideas (the full argument, including honest comparisons, is [`
 - **The durability gradient.** Director owns only the fast layer (coordination in flight); plans and architecture docs own the slower ones. One home per fact; truth flows up, never sideways.
 - **Steering is a hat, not a daemon.** No master session: the big picture is a durable projection owned by nobody, and any session wears the steering hat by reading `brief` + `status`. If a session dying loses real information, that's a liability, not an architecture.
 
-**How it compares, in one line each** ([full versions](docs/why-director.md#how-it-compares)): memory tools answer *"what does the agent know?"* while Director answers *"what is in flight?"*; issue trackers (beads et al.) hold the work items while Director holds **the narrative between tasks**; native multi-session features (Agent Teams) are session-scoped by design while Director is the durable, git-adjacent layer *underneath* them; and versus a markdown file plus discipline, Director adds append-only integrity under concurrent writers, a byte-identical verifiable fold, `resolve` lifecycle semantics, and push-injection that doesn't depend on the model remembering to read a file.
+**How it compares, in one line each** ([full versions](docs/why-director.md#how-it-compares)): memory tools answer *"what does the agent know?"* while Director answers *"what is in flight?"*; issue trackers (beads et al.) hold the work items while Director holds **the narrative between tasks**; native multi-session features (Agent Teams) are session-scoped by design while Director is the durable, git-adjacent layer *underneath* them; and versus a markdown file plus discipline, Director adds append-only integrity under concurrent writers, byte-identical verifiable views, `resolve` lifecycle semantics, and push-injection that doesn't depend on the model remembering to read a file.
 
 ## Install
 
@@ -222,7 +222,7 @@ director resolve <ulid>
 director promote <ulid> [<ulid>...] --to <doc>
 ```
 
-`promote` is the grooming ceremony that keeps the digest tracking **current work, not project age**. Once a batch of aged-but-durable decisions' rationale has been written into a living doc (an ADR, an architecture overview), `promote` appends one **promote-marker**: a `decision` with `status: promoted`, `refs` naming the promoted decisions, and `promoted_to` carrying the doc path. The fold drops the promoted decisions from the active projection; the marker stays as a one-line doc pointer, and `director show <ulid>` still serves every original in full. Nothing is lost, the rationale just changed address (and since Director is single-human by design, promotion into the slow layer is also the cross-human interface).
+`promote` is the grooming ceremony that keeps the digest tracking **current work, not project age**. Once a batch of aged-but-durable decisions' rationale has been written into a living doc (an ADR, an architecture overview), `promote` appends one **promote-marker**: a `decision` with `status: promoted`, `refs` naming the promoted decisions, and `promoted_to` carrying the doc path. The fold that builds the projections drops the promoted decisions from the active view; the marker stays as a one-line doc pointer, and `director show <ulid>` still serves every original in full. Nothing is lost, the rationale just changed address (and since Director is single-human by design, promotion into the slow layer is also the cross-human interface).
 
 Validation is `resolve`-parity: every target must be a decision the CLI surfaced, not superseded by an ordinary decision, and not already claimed by a *live* promote-marker. Invented ids, non-decisions, already-promoted and superseded targets are refused, and one bad target rejects the whole batch (nothing is written). A mispointed promotion is recoverable: supersede the bad marker with an ordinary decision (`emit --refs <marker-ulid>`), then re-promote to the correct address. Only *live* markers hold the already-promoted claim.
 
@@ -236,7 +236,7 @@ Validation is `resolve`-parity: every target must be a decision the CLI surfaced
 | `brief [--project <key>]` | human | the on-demand bigger-picture re-orientation view (outlook from CHARTER, latest handoff per workstream, open/escalate items, recent decisions), at project or whole-fleet altitude. |
 | `status` | human | the one-line-per-workstream fleet cockpit: handle · liveness · heartbeat recency · the **Needs-you** band (open `escalate` items). |
 
-`brief` and `render` share the same byte-identical fold: the human reads the same picture a fresh session reads. A fourth, narrower projection, `open-items`, lists a workstream's unresolved open-items (ULID + body); it exists to feed `resolve` and `/director:complete`. It defaults to the current workstream; `--workstream <id>` retargets it at a sibling: the close-out path for a workstream whose session is already gone.
+`brief` and `render` share the same byte-identical fold of the log: the human reads the same picture a fresh session reads. A fourth, narrower projection, `open-items`, lists a workstream's unresolved open-items (ULID + body); it exists to feed `resolve` and `/director:complete`. It defaults to the current workstream; `--workstream <id>` retargets it at a sibling: the close-out path for a workstream whose session is already gone.
 
 The digest is deliberately an *index*: every line is capped to a headline so the injection stays small as a project's log grows, and nothing is lost: `show <ulid>` prints any single event in full (body verbatim, as recorded), one deterministic hop from any headline. When even the capped digest would overrun the injection budget, the decisions section collapses to a count-plus-pointer line and the overflow lands in `health/` as a grooming signal; the open-set and the latest handoff are never cut. The grooming verbs that keep that headroom are `resolve` (compacts the open-set), supersession via `--refs`, and `promote` (compacts the decision set into the docs).
 
