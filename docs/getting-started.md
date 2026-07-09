@@ -186,6 +186,22 @@ shims are shared between the two agents: either uninstall form leaves them in pl
 agent's install still references them, and reclaims them once neither does, so uninstalling one agent
 never silently breaks the other, and uninstalling the last one leaves no shim files behind.
 
+### Using Gemini / Antigravity CLI?
+
+```bash
+director install --gemini    # or: director install --antigravity
+```
+
+This installs Director into Gemini's global customization config (`~/.gemini/config`):
+* Appends Director's coordination rules directly to `~/.gemini/config/AGENTS.md`. These rules instruct the agent to run `director brief` at session startup to load Ground Truth, and to continuously log its activities.
+* Materializes the `director` skill under `~/.gemini/config/skills/director/SKILL.md`.
+
+To uninstall, run:
+```bash
+director uninstall --gemini  # or: director uninstall --antigravity
+```
+This strips the Director rule block from `AGENTS.md` and deletes the `skills/director` directory.
+
 ---
 
 ## 2. Adopt a repo
