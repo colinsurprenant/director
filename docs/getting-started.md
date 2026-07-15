@@ -319,8 +319,9 @@ SessionStart hook injects into every managed-repo session (its readable source i
 perform for the model:
 
 - **Continuous boundary-flush**: emit durable state *as work happens* (a `decision` the moment it's made,
-  an `open-item` the moment a loop is deferred, a `handoff` at each natural boundary), never batched for the
-  end. Transient working state survives a compaction only if it was written to the LOG during a turn.
+  an `open-item` the moment a loop is deferred, a `handoff` at each natural boundary: current task, next
+  action, hypotheses, and the dead ends already tried), never batched for the end. Transient working state
+  survives a compaction only if it was written to the LOG during a turn.
 - **Ground Truth**: treat the injected CHARTER + digest as authoritative: build on it, don't re-derive it
   by re-scanning the repo or re-reading the log.
 
@@ -333,7 +334,9 @@ At block boundaries, two slash commands (installed by `director install`) mark w
 
 - **`/director:handoff`** when pausing work you will resume. It flushes pending decisions and open items
   and emits a self-sufficient handoff: a checkpoint written to your future self, so the next block (even
-  weeks later) rehydrates from the parked handoff instead of re-deriving state.
+  weeks later) rehydrates from the parked handoff instead of re-deriving state. It is also the right first
+  move when a session has degraded (you keep repeating the same correction): hand off the distilled state,
+  then `/clear` — a fresh session resuming from the checkpoint beats pushing a rotten context forward.
 - **`/director:complete`** when a workstream is done and merged. It closes out the workstream's open loops
   with your confirmation and archives its fleet row. Nothing auto-resolves; close-out is human-confirmed.
   It also takes a workstream id (`/director:complete <id>`) to close out a *dead sibling*: a worktree

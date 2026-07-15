@@ -252,7 +252,7 @@ There are exactly four model-emitted semantic kinds. Pick by what the fact *is*:
 |---|---|---|
 | `decision` | a choice + what it affects | active → superseded (a later decision's `--refs`) or promoted (via `promote`); carries `--risk low\|escalate` |
 | `open-item` | an open loop / follow-up / deferred item, the canonical home for "documented, not dropped" | open → closed (via `resolve`) |
-| `handoff` | a positional snapshot: current task · next action · hypotheses | none |
+| `handoff` | a positional snapshot: current task · next action · hypotheses · dead ends (tried X, failed: Y) | none |
 | `note` | FYI / context for a parallel or future session | none |
 
 - **There is no `blocker` kind.** "Stuck, needs a human" is an `open-item` with `--risk escalate`, exactly the open-set that surfaces in `status`'s Needs-you band.
