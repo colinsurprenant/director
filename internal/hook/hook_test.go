@@ -1451,17 +1451,18 @@ func TestSessionStartBudgetCollapsesAllWhenKeptBandOverflows(t *testing.T) {
 
 	store := event.NewStore(hub, ws.RepoKey)
 	// Bulk the ACTIONABLE section close to the budget so rung 1's ~2KB kept
-	// band (10 × ~200B lines) still overflows while rung 2 fits: ~40 open-items
-	// × ~300-char bodies ≈ 13KB of open-set + ~2.5KB fixed blocks.
+	// band (10 × ~200B lines) still overflows while rung 2 fits: ~38 open-items
+	// × ~300-char bodies (+13B date tag each) ≈ 12.7KB of open-set + ~2.5KB
+	// fixed blocks.
 	//
-	// Measured margins (2026-07-06): full ≈ 20.8KB, rung 1 ≈ 17.9KB (~1.5KB
-	// over, as required), rung 2 ≈ 15.9KB — only ~512B of headroom under the
-	// 16,384B budget. If this test starts failing with "STILL over budget"
-	// after a fixed block (emitProtocol, preamble, banner) grows, the FIXTURE
-	// has drifted out of its window — re-tune the open-item count downward;
-	// don't suspect the ladder.
+	// Measured margins (2026-07-15, after date tags widened every line): full
+	// ≈ 20.7KB, rung 1 ≈ 17.8KB (~1.4KB over, as required), rung 2 ≈ 15.8KB —
+	// ~590B of headroom under the 16,384B budget. If this test starts failing
+	// with "STILL over budget" after a fixed block (emitProtocol, preamble,
+	// banner) grows, the FIXTURE has drifted out of its window — re-tune the
+	// open-item count downward; don't suspect the ladder.
 	openBody := strings.Repeat("open loop ", 29) // ~290 chars, under the 300-rune cap
-	for i := 0; i < 40; i++ {
+	for i := 0; i < 38; i++ {
 		if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindOpenItem, Area: "sync", Body: openBody}); err != nil {
 			t.Fatalf("seed open-item %d: %v", i, err)
 		}

@@ -31,8 +31,8 @@ import (
 // truncates the digest (the harness's inline hook-output budget, a human
 // skimming) costs deferrable decision rationale, never the open loops or the
 // latest handoff:
-//   - open-set, with risk:escalate marked (ULID order)
-//   - latest handoff per workstream (sorted by workstream key)
+//   - open-set, each line date-tagged, with risk:escalate marked (ULID order)
+//   - latest handoff per workstream, each line date-tagged (sorted by workstream key)
 //   - active decisions (ULID order)
 //
 // Empty sections still print their header with a "(none)" line so the absence of
@@ -100,7 +100,7 @@ func digest(proj Projection, repoKey string, keepDecisions int) string {
 		b.WriteString("(none)\n")
 	} else {
 		for _, o := range proj.OpenItems {
-			fmt.Fprintf(&b, "- %s %s%s\n", o.ID, escalateTag(o.Risk), headline(o.Body, openItemBodyRunes))
+			fmt.Fprintf(&b, "- %s %s%s%s\n", o.ID, dateTag(o.TS), escalateTag(o.Risk), headline(o.Body, openItemBodyRunes))
 		}
 	}
 
@@ -110,7 +110,7 @@ func digest(proj Projection, repoKey string, keepDecisions int) string {
 	} else {
 		for _, ws := range sortedKeys(proj.LatestHandoff) {
 			h := proj.LatestHandoff[ws]
-			fmt.Fprintf(&b, "- %s [%s] %s\n", h.ID, ws, headline(h.Body, handoffBodyRunes))
+			fmt.Fprintf(&b, "- %s %s[%s] %s\n", h.ID, dateTag(h.TS), ws, headline(h.Body, handoffBodyRunes))
 		}
 	}
 
@@ -198,6 +198,30 @@ func sortedKeys(m map[string]event.Event) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// dateTag renders an entry's emission date — "(2026-07-07) " — onto the two
+// ground-truth sections (open-items, handoffs) so a reading session can weigh
+// staleness instead of taking every entry as equally current: stale state
+// re-entering as apparent ground truth is the poisoning failure mode the LIE
+// TEST guards against. The date is the event's own stamped ts, never the
+// clock, so the digest stays a pure function of the event set (§13 t4) —
+// relative ages ("12d") would break that. A missing or malformed ts renders
+// nothing: the tag degrades, it never guesses.
+func dateTag(ts string) string {
+	if len(ts) < 10 {
+		return ""
+	}
+	for i, r := range ts[:10] {
+		if i == 4 || i == 7 {
+			if r != '-' {
+				return ""
+			}
+		} else if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	return "(" + ts[:10] + ") "
 }
 
 // escalateTag prefixes the needs-you marker onto an open-item line when its risk

@@ -39,7 +39,7 @@ type Kind string
 const (
 	KindDecision Kind = "decision"  // a choice + what it affects
 	KindOpenItem Kind = "open-item" // open loop / follow-up / deferred (open→closed)
-	KindHandoff  Kind = "handoff"   // current task · next action · hypotheses
+	KindHandoff  Kind = "handoff"   // current task · next action · hypotheses · dead ends
 	KindNote     Kind = "note"      // FYI / context for a parallel or future session
 )
 

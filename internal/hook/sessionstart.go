@@ -49,12 +49,12 @@ const emitProtocol = "## Director protocol — keep this current as you work\n" 
 	"You coordinate with other sessions only through the LOG (digested below), written ONLY via the `director` CLI (never Edit/Write a log file). Emit as you work, not batched at the end — state you don't write during a turn is lost on compaction or a fresh start. Emitting RECORDS a fact; it is NOT a commitment to act and does NOT need the human's approval first — record the decision/loop the moment it exists, then ask or act if needed:\n" +
 	"- a decision the moment you make one — `director emit --type decision --area <area> \"<what + why>\"`\n" +
 	"- an open-item the moment you defer a loop — `director emit --type open-item --area <area> --risk <low|escalate> \"<loop>\"`\n" +
-	"- a handoff at each natural boundary (sub-task done, switching focus, wrapping up) — `director emit --type handoff --area <area> \"current task · next · hypotheses\"`\n" +
+	"- a handoff at each natural boundary (sub-task done, switching focus, wrapping up) — `director emit --type handoff --area <area> \"current task · next · hypotheses · dead ends (tried X, failed: Y)\"`\n" +
 	"- when you FINISH an open-item, close it — `director resolve <ulid>` (use a ULID from the open-items listed below; resolve only when it is truly done — there is no reopen)\n" +
 	"The digest below is an INDEX: entries are capped headlines, not full text. `director show <ulid>` prints any event in full — before touching an area, pull the full bodies of its listed decisions rather than guessing past a headline.\n" +
 	"At a WORKSTREAM boundary, suggest the matching close-out command to the human — the two are not interchangeable:\n" +
 	"- work DONE and merged → suggest `/director:complete`, BEFORE the branch/worktree is deleted — it reviews this workstream's open-items with the human, resolves the finished ones, and archives the workstream\n" +
-	"- PAUSING work that will resume (session ending mid-task, switching focus, context filling up) → suggest `/director:handoff` — it flushes unrecorded state and writes a self-sufficient resume point\n" +
+	"- PAUSING work that will resume (session ending mid-task, switching focus, context filling up, a degraded session about to be reset) → suggest `/director:handoff` — it flushes unrecorded state and writes a self-sufficient resume point\n" +
 	"Never hand off a finished workstream: a handoff there plants a phantom resume point that keeps a dead workstream surfacing as resumable — done+merged always takes `/director:complete`.\n" +
 	"This is load-bearing — treat it as a standing instruction, not a suggestion.\n"
 

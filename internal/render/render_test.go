@@ -370,3 +370,63 @@ func TestDigestPromotion(t *testing.T) {
 		t.Errorf("doc pointer (full address) missing from digest:\n%s", got)
 	}
 }
+
+// TestDigestDates locks the staleness signal on the ground-truth sections: an
+// open-item or handoff line carries its emission date derived from the event's
+// own stamped ts (never the clock — determinism must hold), a decision index
+// line carries none, and a missing or malformed ts renders no tag rather than
+// a wrong one.
+func TestDigestDates(t *testing.T) {
+	events := []event.Event{
+		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Body: "dated loop", TS: "2026-07-07T20:59:33Z"},
+		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Risk: event.RiskEscalate, Body: "dated escalation", TS: "2026-07-08T09:00:00Z"},
+		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Body: "undated loop"},
+		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Body: "mangled loop", TS: "07-15 nonsense"},
+		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindHandoff, Workstream: "ws1", Body: "dated handoff", TS: "2026-07-15T01:02:03Z"},
+		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Body: "dated decision", TS: "2026-07-15T01:02:03Z"},
+	}
+	d := Digest(Fold(events), "widget")
+
+	if !strings.Contains(d, "(2026-07-07) dated loop") {
+		t.Errorf("open-item line missing its date tag:\n%s", d)
+	}
+	// The date sits between the ULID and the risk marker, so scanners keyed on
+	// "[risk:escalate]" keep working and the escalate marker stays adjacent to
+	// the body.
+	if !strings.Contains(d, "(2026-07-08) [risk:escalate] dated escalation") {
+		t.Errorf("escalated open-item must render date-then-risk-then-body:\n%s", d)
+	}
+	if !strings.Contains(d, "(2026-07-15) [ws1] dated handoff") {
+		t.Errorf("handoff line missing its date tag:\n%s", d)
+	}
+	if !strings.Contains(d, " undated loop") || strings.Contains(d, ") undated loop") {
+		t.Errorf("ts-less open-item must render without a date tag:\n%s", d)
+	}
+	if !strings.Contains(d, " mangled loop") || strings.Contains(d, ") mangled loop") {
+		t.Errorf("malformed ts must render the line with no tag, not a wrong one (or drop it):\n%s", d)
+	}
+	if !strings.Contains(d, " dated decision") || strings.Contains(d, ") dated decision") {
+		t.Errorf("decision index lines carry no date tag:\n%s", d)
+	}
+	// Boundary shapes the validator must keep accepting as-is: a date-only ts
+	// (exactly 10 chars) tags, and a non-UTC RFC3339 offset tags its date
+	// verbatim — no parsing, no timezone normalization, ever (a time.Parse
+	// "simplification" would silently change both).
+	dOnly := Digest(Fold([]event.Event{
+		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Body: "date-only ts", TS: "2026-07-15"},
+		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Body: "offset ts", TS: "2026-07-15T23:59:00+02:00"},
+	}), "widget")
+	if !strings.Contains(dOnly, "(2026-07-15) date-only ts") {
+		t.Errorf("date-only ts (exactly 10 chars) must tag:\n%s", dOnly)
+	}
+	if !strings.Contains(dOnly, "(2026-07-15) offset ts") {
+		t.Errorf("offset ts must tag its date verbatim, without normalization:\n%s", dOnly)
+	}
+
+	// Determinism holds with dates present: same set, any order, same bytes.
+	for _, seed := range []int64{1, 7, 99} {
+		if got := Digest(Fold(shuffled(events, seed)), "widget"); got != d {
+			t.Fatalf("dated digest changed under input shuffle seed %d", seed)
+		}
+	}
+}

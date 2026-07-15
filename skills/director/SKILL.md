@@ -27,14 +27,16 @@ Emit durable state to the LOG **as you work** — do not batch it for the end of
   An item written immediately survives an unexpected compaction; an item you were "going to log
   at the end" is exactly what gets lost.
 - At each **natural boundary** (finishing a sub-task, switching focus, pausing, wrapping up),
-  emit a `handoff`: **current task · next action · hypotheses**. This is the positional snapshot
-  a fresh session (you, after compaction, or a peer) reads to pick up where you left off.
+  emit a `handoff`: **current task · next action · hypotheses · dead ends**. This is the positional
+  snapshot a fresh session (you, after compaction, or a peer) reads to pick up where you left off.
+  Dead ends ride along ("tried X, failed because Y") — negative results are what stop the next
+  session from re-walking a path this one already burned.
 - A deferred loop is its **own `open-item` event** — do **not** pack it into the handoff body.
   The handoff carries *position*; open-items carry *carried-forward loops*. `brief`/`render`
   join the two. Packing them together duplicates state, and duplication goes stale.
 
 Prefer **flush-often, then start fresh at a boundary** over riding a session up into the
-degradation zone. Because you flush continuously, a fresh start is already covered — there is no
+degradation zone (a reliable degradation signal: the human giving you the same correction twice). Because you flush continuously, a fresh start is already covered — there is no
 need to hand-compose a big handoff at the last second.
 
 ## 2. The four event kinds — when to use each
@@ -45,7 +47,7 @@ There are exactly four model-emitted kinds. Pick by what the fact *is*:
 |---|---|---|
 | `decision` | a choice + what it affects (carries `--risk low\|escalate`) | `director emit --type decision --area auth --risk low "Use ULID not UUID for event ids — sortable, matches log fold"` |
 | `open-item` | an open loop / follow-up / deferred item — the canonical home for "documented, not dropped" | `director emit --type open-item --area render "Resolve cross-machine ULID tie-break before multi-machine sync"` |
-| `handoff` | current task · next action · hypotheses (positional snapshot at a boundary) | `director emit --type handoff --area store "Done: NDJSON append. Next: wire emit dispatch. Hypothesis: O_APPEND is line-atomic on POSIX"` |
+| `handoff` | current task · next action · hypotheses · dead ends (positional snapshot at a boundary) | `director emit --type handoff --area store "Done: NDJSON append. Next: wire emit dispatch. Hypothesis: O_APPEND is line-atomic on POSIX. Dead end: fsync-per-line, 30x too slow"` |
 | `note` | FYI / context for a parallel or future session | `director emit --type note --to @next-on-hooks --area hooks "settings.json merge is _managedBy-tagged — don't strip GSD entries"` |
 
 Routing rule: an **open loop you carry forward** → an `open-item` event (its one home).
