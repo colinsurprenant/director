@@ -244,3 +244,83 @@ func TestFoldDuplicatePromoteMarkers(t *testing.T) {
 		t.Error("duplicate-marker fold is order-dependent")
 	}
 }
+
+// TestFoldConcludedHandoffs locks the conclusion rule (decision 01KXMAZSKV,
+// fixing the 01KWZ6212N LIE-TEST gap): a note whose Refs name a handoff
+// concludes that workstream's trail up to and including it. Concluded
+// handoffs stay in Handoffs (history) but leave LatestHandoff — and,
+// crucially, an OLDER handoff never resurfaces as the resume point when the
+// newest one is concluded.
+func TestFoldConcludedHandoffs(t *testing.T) {
+	h1 := mint(t)     // ws1 older position
+	h2 := mint(t)     // ws1 final position — explicitly concluded
+	hOther := mint(t) // ws2, live and untouched
+	open := mint(t)   // ws1 open-item the note also refs (cross-kind guard)
+	note := mint(t)
+	events := []event.Event{
+		{ID: h1, SchemaVersion: event.SchemaVersion, Type: event.KindHandoff, Workstream: "ws1", Body: "older position"},
+		{ID: h2, SchemaVersion: event.SchemaVersion, Type: event.KindHandoff, Workstream: "ws1", Body: "final position"},
+		{ID: hOther, SchemaVersion: event.SchemaVersion, Type: event.KindHandoff, Workstream: "ws2", Body: "live position"},
+		{ID: open, SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Body: "carried loop"},
+		{ID: note, SchemaVersion: event.SchemaVersion, Type: event.KindNote, Workstream: "ws1", Refs: []string{h2, open}, Body: "ws1 complete — PR merged"},
+	}
+
+	proj := Fold(events)
+	if _, ok := proj.LatestHandoff["ws1"]; ok {
+		t.Errorf("concluded workstream still has a latest handoff (older one resurfaced?): %+v", proj.LatestHandoff["ws1"])
+	}
+	if got := proj.LatestHandoff["ws2"].ID; got != hOther {
+		t.Errorf("unrelated workstream's latest handoff = %s, want %s", got, hOther)
+	}
+	if len(proj.Handoffs) != 3 {
+		t.Errorf("conclusion must not erase history: %d handoffs, want 3", len(proj.Handoffs))
+	}
+	// The manifest view lists exactly the EXPLICITLY concluded id — not the
+	// older handoff the high-water mark also retires, and never the note's
+	// non-handoff refs.
+	if !reflect.DeepEqual(proj.ConcludedHandoffs, []string{h2}) {
+		t.Errorf("ConcludedHandoffs = %v, want [%s]", proj.ConcludedHandoffs, h2)
+	}
+	// A note ref must not act as a close-marker: the open-item stays open.
+	if !containsID(proj.OpenItems, open) {
+		t.Error("note ref closed an open-item — conclusion must be handoff-only")
+	}
+
+	for _, seed := range []int64{1, 7, 99} {
+		if !reflect.DeepEqual(Fold(shuffled(events, seed)), proj) {
+			t.Fatalf("concluded-handoff fold is order-dependent (seed %d)", seed)
+		}
+	}
+}
+
+// TestFoldConclusionHighWaterMark pins the mark's direction: concluding an
+// OLDER handoff leaves a newer position untouched (a handoff emitted after
+// the conclusion is a genuinely new resume point and surfaces normally), and
+// multiple explicit conclusions list ULID-ascending regardless of Refs order.
+func TestFoldConclusionHighWaterMark(t *testing.T) {
+	h1 := mint(t)
+	h2 := mint(t)
+	events := []event.Event{
+		{ID: h1, SchemaVersion: event.SchemaVersion, Type: event.KindHandoff, Workstream: "ws1", Body: "old position"},
+		{ID: h2, SchemaVersion: event.SchemaVersion, Type: event.KindHandoff, Workstream: "ws1", Body: "new position"},
+		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindNote, Workstream: "ws1", Refs: []string{h1}, Body: "concludes only the old position"},
+	}
+	proj := Fold(events)
+	if got := proj.LatestHandoff["ws1"].ID; got != h2 {
+		t.Errorf("handoff above the mark must stay latest: got %s, want %s", got, h2)
+	}
+	if !reflect.DeepEqual(proj.ConcludedHandoffs, []string{h1}) {
+		t.Errorf("ConcludedHandoffs = %v, want [%s]", proj.ConcludedHandoffs, h1)
+	}
+
+	// Both concluded, refs listed newest-first: the workstream leaves
+	// LatestHandoff and the manifest view is still ULID-ascending.
+	events[2].Refs = []string{h2, h1}
+	proj = Fold(events)
+	if _, ok := proj.LatestHandoff["ws1"]; ok {
+		t.Error("fully concluded workstream still has a latest handoff")
+	}
+	if !reflect.DeepEqual(proj.ConcludedHandoffs, []string{h1, h2}) {
+		t.Errorf("ConcludedHandoffs = %v, want ULID-ascending [%s %s]", proj.ConcludedHandoffs, h1, h2)
+	}
+}

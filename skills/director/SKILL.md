@@ -50,6 +50,11 @@ There are exactly four model-emitted kinds. Pick by what the fact *is*:
 | `handoff` | current task · next action · hypotheses · dead ends (positional snapshot at a boundary) | `director emit --type handoff --area store "Done: NDJSON append. Next: wire emit dispatch. Hypothesis: O_APPEND is line-atomic on POSIX. Dead end: fsync-per-line, 30x too slow"` |
 | `note` | FYI / context for a parallel or future session | `director emit --type note --to @next-on-hooks --area hooks "settings.json merge is _managedBy-tagged — don't strip GSD entries"` |
 
+One **reserved ref meaning**: a `note` whose `--refs` names a **handoff** CONCLUDES it — that
+handoff (and the workstream's older ones) leaves the digest's resume points, staying in the log.
+`/director:complete` uses this to retire a dead workstream's last handoff. Never ref a handoff
+from a note casually; refs to decisions and open-items carry no such effect.
+
 Routing rule: an **open loop you carry forward** → an `open-item` event (its one home).
 **Durable structured knowledge** (intent, architecture, a decision's full rationale) → the living
 docs (CHARTER, README, ADRs), with the `decision`/`open-item` body holding a short pointer, not

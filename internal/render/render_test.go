@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -434,5 +435,49 @@ func TestDigestDates(t *testing.T) {
 		if got := Digest(Fold(shuffled(events, seed)), "widget"); got != d {
 			t.Fatalf("dated digest changed under input shuffle seed %d", seed)
 		}
+	}
+}
+
+// TestDigestConcludedHandoffs pins the user-visible outcome of conclusion at
+// the digest and manifest levels (the fold rule itself is locked in
+// fold_test.go): a concluded workstream's handoff line leaves ## handoffs, a
+// live sibling's stays, the section degrades to "(none)" when every
+// workstream is concluded, and the manifest records what was retired.
+func TestDigestConcludedHandoffs(t *testing.T) {
+	hDead := mint(t)
+	hLive := mint(t)
+	note := mint(t)
+	events := []event.Event{
+		{ID: hDead, SchemaVersion: event.SchemaVersion, Type: event.KindHandoff, Workstream: "ws-dead", Body: "READY FOR MERGE, awaiting user go"},
+		{ID: hLive, SchemaVersion: event.SchemaVersion, Type: event.KindHandoff, Workstream: "ws-live", Body: "mid-task position"},
+		{ID: note, SchemaVersion: event.SchemaVersion, Type: event.KindNote, Workstream: "ws-dead", Refs: []string{hDead}, Body: "ws-dead complete — PR merged"},
+	}
+	proj := Fold(events)
+	d := Digest(proj, "widget")
+
+	if strings.Contains(d, "[ws-dead]") || strings.Contains(d, "READY FOR MERGE") {
+		t.Errorf("concluded workstream's handoff still in the digest — the phantom resume point survives:\n%s", d)
+	}
+	if !strings.Contains(d, "[ws-live] mid-task position") {
+		t.Errorf("live workstream's handoff missing from the digest:\n%s", d)
+	}
+
+	m := BuildManifest(proj, "widget", "/some/log.ndjson", events)
+	if !reflect.DeepEqual(m.ConcludedHandoffs, []string{hDead}) {
+		t.Errorf("manifest concluded_handoffs = %v, want [%s]", m.ConcludedHandoffs, hDead)
+	}
+	if !reflect.DeepEqual(m.Workstreams, []string{"ws-live"}) {
+		t.Errorf("manifest workstreams = %v, want [ws-live]", m.Workstreams)
+	}
+
+	// Every workstream concluded → the section is an explicit "(none)", never
+	// a missing header.
+	all := Digest(Fold(events[:1:1]), "widget") // dead handoff alone, un-concluded control
+	if !strings.Contains(all, "[ws-dead]") {
+		t.Fatalf("control digest missing the un-concluded handoff:\n%s", all)
+	}
+	solo := Digest(Fold([]event.Event{events[0], events[2]}), "widget")
+	if !strings.Contains(solo, "## handoffs\n(none)\n") {
+		t.Errorf("fully concluded log must render an explicit empty handoffs section:\n%s", solo)
 	}
 }
