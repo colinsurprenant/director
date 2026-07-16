@@ -382,6 +382,7 @@ func TestDigestDates(t *testing.T) {
 		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Risk: event.RiskEscalate, Body: "dated escalation", TS: "2026-07-08T09:00:00Z"},
 		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Body: "undated loop"},
 		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Body: "mangled loop", TS: "07-15 nonsense"},
+		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Body: "impossible loop", TS: "2026-99-99T12:00:00Z"},
 		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindHandoff, Workstream: "ws1", Body: "dated handoff", TS: "2026-07-15T01:02:03Z"},
 		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Body: "dated decision", TS: "2026-07-15T01:02:03Z"},
 	}
@@ -405,13 +406,18 @@ func TestDigestDates(t *testing.T) {
 	if !strings.Contains(d, " mangled loop") || strings.Contains(d, ") mangled loop") {
 		t.Errorf("malformed ts must render the line with no tag, not a wrong one (or drop it):\n%s", d)
 	}
+	// Shape-valid but calendar-impossible (corrupt/hand-edited log): no tag —
+	// an authoritative-looking "(2026-99-99)" would weaken every real tag.
+	if !strings.Contains(d, " impossible loop") || strings.Contains(d, ") impossible loop") {
+		t.Errorf("impossible calendar date must render the line with no tag:\n%s", d)
+	}
 	if !strings.Contains(d, " dated decision") || strings.Contains(d, ") dated decision") {
 		t.Errorf("decision index lines carry no date tag:\n%s", d)
 	}
 	// Boundary shapes the validator must keep accepting as-is: a date-only ts
 	// (exactly 10 chars) tags, and a non-UTC RFC3339 offset tags its date
-	// verbatim — no parsing, no timezone normalization, ever (a time.Parse
-	// "simplification" would silently change both).
+	// verbatim — the prefix is validated for calendar existence, never
+	// normalized (no offset-to-UTC conversion; the bytes pass through as-is).
 	dOnly := Digest(Fold([]event.Event{
 		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Body: "date-only ts", TS: "2026-07-15"},
 		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Body: "offset ts", TS: "2026-07-15T23:59:00+02:00"},
