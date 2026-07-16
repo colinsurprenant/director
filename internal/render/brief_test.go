@@ -132,6 +132,34 @@ func TestBriefFleetProjectsPathAsFileErrors(t *testing.T) {
 	}
 }
 
+// TestBriefDates locks the staleness signal on the brief's two ground-truth
+// sections, mirroring the digest's date tags: where-we-are and carried-forward
+// lines carry the event's stamped emission date (never the clock — the brief's
+// byte-identical determinism must hold), a ts-less event renders untagged, and
+// the date sits before the escalate marker exactly as in the digest.
+func TestBriefDates(t *testing.T) {
+	hub := t.TempDir()
+	seedProject(t, hub, "widget", []event.Event{
+		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Risk: event.RiskEscalate, Body: "dated escalation", TS: "2026-07-08T09:00:00Z"},
+		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Body: "undated loop"},
+		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindHandoff, Workstream: "ws1", Body: "dated position", TS: "2026-07-15T01:02:03Z"},
+	})
+
+	out, err := BriefProject(hub, "widget")
+	if err != nil {
+		t.Fatalf("BriefProject: %v", err)
+	}
+	if !strings.Contains(out, "- (2026-07-15) [ws1] dated position") {
+		t.Errorf("where-we-are line missing its date tag:\n%s", out)
+	}
+	if !strings.Contains(out, "- (2026-07-08) [risk:escalate] dated escalation") {
+		t.Errorf("carried-forward line must render date-then-risk-then-body:\n%s", out)
+	}
+	if !strings.Contains(out, "- undated loop") || strings.Contains(out, ") undated loop") {
+		t.Errorf("ts-less open-item must render without a date tag:\n%s", out)
+	}
+}
+
 func writeCharter(t *testing.T, hub, repoKey, body string) {
 	t.Helper()
 	dir := filepath.Join(hub, "projects", repoKey)

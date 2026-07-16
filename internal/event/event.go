@@ -40,7 +40,7 @@ const (
 	KindDecision Kind = "decision"  // a choice + what it affects
 	KindOpenItem Kind = "open-item" // open loop / follow-up / deferred (open→closed)
 	KindHandoff  Kind = "handoff"   // current task · next action · hypotheses · dead ends
-	KindNote     Kind = "note"      // FYI / context for a parallel or future session
+	KindNote     Kind = "note"      // FYI / context for a parallel or future session; a finished task's outcome
 )
 
 // Risk tags decisions and marks the "needs a human" subset of open-items (§17).

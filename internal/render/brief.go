@@ -16,9 +16,13 @@ import (
 // never stores a STATE.md — by composing, per project:
 //
 //   - CHARTER outlook   — where we're headed (read from disk; graceful if absent)
-//   - latest handoff    — where we are + what's next (per workstream)
-//   - open-set          — what's stuck / carried forward (risk:escalate = needs-you)
+//   - latest handoff    — where we are + what's next (per workstream, date-tagged)
+//   - open-set          — what's stuck / carried forward (date-tagged; risk:escalate = needs-you)
 //   - active decisions  — what changed
+//
+// The date tags mirror the digest's (see render.dateTag): the human weighing
+// staleness deserves the same signal a rehydrating session gets, from the same
+// deterministic source — the event's own stamped ts, never the clock.
 //
 // It is fully deterministic (no time.Now(); every map is sorted before output)
 // so the human reads the *same* brief a fresh session reads, and §13 t4's
@@ -84,7 +88,7 @@ func writeProjectBrief(b *strings.Builder, hub, repoKey string) error {
 	} else {
 		for _, ws := range sortedKeys(proj.LatestHandoff) {
 			h := proj.LatestHandoff[ws]
-			fmt.Fprintf(b, "- [%s] %s\n", ws, oneLine(h.Body))
+			fmt.Fprintf(b, "- %s[%s] %s\n", dateTag(h.TS), ws, oneLine(h.Body))
 		}
 	}
 
@@ -93,7 +97,7 @@ func writeProjectBrief(b *strings.Builder, hub, repoKey string) error {
 		b.WriteString("(none open)\n")
 	} else {
 		for _, o := range proj.OpenItems {
-			fmt.Fprintf(b, "- %s%s\n", escalateTag(o.Risk), oneLine(o.Body))
+			fmt.Fprintf(b, "- %s%s%s\n", dateTag(o.TS), escalateTag(o.Risk), oneLine(o.Body))
 		}
 	}
 
