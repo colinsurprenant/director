@@ -51,6 +51,7 @@ const emitProtocol = "## Director protocol — keep this current as you work\n" 
 	"- an open-item the moment you defer a loop — `director emit --type open-item --area <area> --risk <low|escalate> \"<loop>\"`\n" +
 	"- a handoff at each natural boundary (sub-task done, switching focus, wrapping up) — `director emit --type handoff --area <area> \"current task · next · hypotheses · dead ends (tried X, failed: Y)\"`\n" +
 	"- when you FINISH an open-item, close it — `director resolve <ulid>` (use a ULID from the open-items listed below; resolve only when it is truly done — there is no reopen)\n" +
+	"Reserved: a note whose `--refs` names a handoff CONCLUDES it (retires that resume point from the digest) — only the `/director:complete` ceremony does this; never ref a handoff from a note otherwise.\n" +
 	"The digest below is an INDEX: entries are capped headlines, not full text. `director show <ulid>` prints any event in full — before touching an area, pull the full bodies of its listed decisions rather than guessing past a headline.\n" +
 	"At a WORKSTREAM boundary, suggest the matching close-out command to the human — the two are not interchangeable:\n" +
 	"- work DONE and merged → suggest `/director:complete`, BEFORE the branch/worktree is deleted — it reviews this workstream's open-items with the human, resolves the finished ones, and archives the workstream\n" +

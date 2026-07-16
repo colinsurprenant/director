@@ -21,7 +21,7 @@ func runEmit(args []string) int {
 	fs.StringVar(&area, "area", "", "subsystem/path tag")
 	fs.StringVar(&risk, "risk", "", "low|escalate (decisions and open-items)")
 	fs.StringVar(&to, "to", "", "addressed-to handle (optional)")
-	fs.StringVar(&refs, "refs", "", "comma-separated ULIDs this references/supersedes")
+	fs.StringVar(&refs, "refs", "", "comma-separated ULIDs this references/supersedes; a note ref naming a handoff CONCLUDES it (see /director:complete)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}

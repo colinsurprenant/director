@@ -165,16 +165,19 @@ type Manifest struct {
 // markers, so the raw count is passed separately to keep the diff honest).
 func BuildManifest(proj Projection, repoKey, source string, raw []event.Event) Manifest {
 	return Manifest{
-		RepoKey:           repoKey,
-		Source:            source,
-		Events:            len(raw),
-		Decisions:         len(proj.Decisions),
-		OpenItems:         len(proj.OpenItems),
-		Handoffs:          len(proj.Handoffs),
-		Notes:             len(proj.Notes),
-		LastID:            LastID(raw),
-		Workstreams:       sortedKeys(proj.LatestHandoff),
-		ConcludedHandoffs: proj.ConcludedHandoffs,
+		RepoKey:     repoKey,
+		Source:      source,
+		Events:      len(raw),
+		Decisions:   len(proj.Decisions),
+		OpenItems:   len(proj.OpenItems),
+		Handoffs:    len(proj.Handoffs),
+		Notes:       len(proj.Notes),
+		LastID:      LastID(raw),
+		Workstreams: sortedKeys(proj.LatestHandoff),
+		// Never nil: the sibling workstreams field always marshals as [], and
+		// the §9 artifact is diffable — the first conclusion must not flip the
+		// field null → [...].
+		ConcludedHandoffs: append([]string{}, proj.ConcludedHandoffs...),
 	}
 }
 

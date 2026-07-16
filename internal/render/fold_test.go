@@ -312,6 +312,11 @@ func TestFoldConclusionHighWaterMark(t *testing.T) {
 	if !reflect.DeepEqual(proj.ConcludedHandoffs, []string{h1}) {
 		t.Errorf("ConcludedHandoffs = %v, want [%s]", proj.ConcludedHandoffs, h1)
 	}
+	for _, seed := range []int64{1, 7, 99} {
+		if !reflect.DeepEqual(Fold(shuffled(events, seed)), proj) {
+			t.Fatalf("mark-direction fold is order-dependent (seed %d)", seed)
+		}
+	}
 
 	// Both concluded, refs listed newest-first: the workstream leaves
 	// LatestHandoff and the manifest view is still ULID-ascending.
