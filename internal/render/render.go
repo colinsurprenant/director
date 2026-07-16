@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/colinsurprenant/director/internal/event"
 )
@@ -207,7 +208,11 @@ func sortedKeys(m map[string]event.Event) []string {
 // TEST guards against. The date is the event's own stamped ts, never the
 // clock, so the digest stays a pure function of the event set (§13 t4) —
 // relative ages ("12d") would break that. A missing or malformed ts renders
-// nothing: the tag degrades, it never guesses.
+// nothing: the tag degrades, it never guesses. Malformed includes an
+// impossible calendar date ("2026-99-99" — reachable only via a corrupt or
+// hand-edited log, which reads do not validate): the shape check guarantees
+// the emitted byte form, time.Parse guarantees the date exists, and the value
+// is still emitted verbatim — validation only, never normalization.
 func dateTag(ts string) string {
 	if len(ts) < 10 {
 		return ""
@@ -220,6 +225,9 @@ func dateTag(ts string) string {
 		} else if r < '0' || r > '9' {
 			return ""
 		}
+	}
+	if _, err := time.Parse("2006-01-02", ts[:10]); err != nil {
+		return ""
 	}
 	return "(" + ts[:10] + ") "
 }
