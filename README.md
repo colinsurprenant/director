@@ -206,7 +206,7 @@ director emit --type decision|open-item|handoff|note --area <subsystem> \
   [--risk low|escalate] [--to <handle>] [--refs <ulid,ulid>] <body>
 ```
 
-`emit` prints the **new event's ULID to stdout**: note it; that is the id used to `--refs` or `resolve` the event later.
+`emit` prints the **new event's ULID to stdout**: note it; that is the id used to `--refs` or `resolve` the event later. (One `--refs` pairing is load-bearing: a `note` ref naming a **handoff** concludes it — see the kind table's lifecycle column below.)
 
 ### resolve: close an open-item
 
