@@ -20,9 +20,15 @@ import (
 type Projection struct {
 	Decisions     []event.Event          // active decisions (un-superseded), ULID-ascending
 	OpenItems     []event.Event          // the open-set: original open-items not yet closed, ULID-ascending
-	LatestHandoff map[string]event.Event // workstream → its highest-ULID handoff
+	LatestHandoff map[string]event.Event // workstream → its highest-ULID un-concluded handoff
 	Handoffs      []event.Event          // every handoff, ULID-ascending
 	Notes         []event.Event          // every note, ULID-ascending
+
+	// ConcludedHandoffs lists the handoff ids explicitly concluded by a note's
+	// Refs, ULID-ascending. It feeds the manifest (§9) so the one fold rule
+	// that removes digest content stays observable — which handoffs were
+	// retired, each one `director show`-able to find the concluding note.
+	ConcludedHandoffs []string
 }
 
 // Fold collapses an event set into a resolved Projection. It is a PURE function
@@ -44,6 +50,17 @@ type Projection struct {
 //     fold, which is also how pre-promote binaries degrade (identical active set).
 //   - latest handoff: iterating ULID-ascending, the highest-ULID handoff per
 //     workstream wins — the session's most recent position (§16).
+//   - concluded handoffs: a note whose Refs name a handoff CONCLUDES that
+//     workstream's trail up to and including it — a per-workstream high-water
+//     mark, so concluding the latest handoff can never resurface an even
+//     staler one as "latest". Concluded handoffs stay in Handoffs (history)
+//     and in the log, but leave LatestHandoff and therefore the digest: the
+//     same shape as resolve for open-items. This is how /director:complete
+//     retires a dead workstream's phantom resume point (the LIE-TEST gap,
+//     01KWZ6212N) — its completion note refs the target's last handoff. The
+//     meaning is reserved: a note refs a handoff ONLY to conclude it. A
+//     handoff emitted after the mark (a genuinely new position) surfaces
+//     normally.
 //
 // Bounded-read note: deriving the open-set correctly needs the full history (a
 // close-marker may sit arbitrarily far from its open-item), so v1 folds over the
@@ -63,10 +80,13 @@ func Fold(events []event.Event) Projection {
 
 	proj := Projection{LatestHandoff: make(map[string]event.Event)}
 
-	// Pass 1: build the two resolution sets — ids closed by a marker, and ids
-	// superseded by a later decision — independent of iteration order.
+	// Pass 1: build the resolution sets — ids closed by a marker, ids
+	// superseded by a later decision, and handoff ids concluded by a note —
+	// independent of iteration order.
 	closed := make(map[string]bool)
 	superseded := make(map[string]bool)
+	noteRefs := make(map[string]bool)
+	handoffWS := make(map[string]string) // handoff id → its workstream
 	for _, ev := range sorted {
 		switch ev.Type {
 		case event.KindOpenItem:
@@ -79,6 +99,28 @@ func Fold(events []event.Event) Projection {
 			for _, ref := range ev.Refs {
 				superseded[ref] = true
 			}
+		case event.KindHandoff:
+			handoffWS[ev.ID] = ev.Workstream
+		case event.KindNote:
+			for _, ref := range ev.Refs {
+				noteRefs[ref] = true
+			}
+		}
+	}
+	// A note ref concludes only ids that ARE handoffs (notes ref open-items
+	// and decisions for ordinary cross-linking — those keep their meaning).
+	// The per-workstream high-water mark is the highest concluded ULID: every
+	// handoff at or below it is retired from "latest".
+	concluded := make(map[string]bool)
+	maxConcluded := make(map[string]string)
+	for id := range noteRefs {
+		ws, isHandoff := handoffWS[id]
+		if !isHandoff {
+			continue
+		}
+		concluded[id] = true
+		if id > maxConcluded[ws] {
+			maxConcluded[ws] = id
 		}
 	}
 
@@ -98,8 +140,15 @@ func Fold(events []event.Event) Projection {
 			}
 		case event.KindHandoff:
 			proj.Handoffs = append(proj.Handoffs, ev)
-			// Ascending order means the last write per workstream is the highest ULID.
-			proj.LatestHandoff[ev.Workstream] = ev
+			if concluded[ev.ID] {
+				proj.ConcludedHandoffs = append(proj.ConcludedHandoffs, ev.ID)
+			}
+			// Ascending order means the last write per workstream is the
+			// highest ULID; anything at or below the conclusion high-water
+			// mark is retired and never becomes the resume point.
+			if ev.ID > maxConcluded[ev.Workstream] {
+				proj.LatestHandoff[ev.Workstream] = ev
+			}
 		case event.KindNote:
 			proj.Notes = append(proj.Notes, ev)
 		}

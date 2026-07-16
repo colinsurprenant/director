@@ -152,6 +152,12 @@ type Manifest struct {
 	Notes       int      `json:"notes"`       // raw note count
 	LastID      string   `json:"last_id"`     // highest event id read (last-verified)
 	Workstreams []string `json:"workstreams"` // workstreams with a latest handoff, sorted
+
+	// ConcludedHandoffs lists the handoff ids a note's Refs concluded, ULID
+	// order. Conclusion is the one fold rule that removes digest content, so
+	// the removal is recorded here rather than silent: each id is one
+	// `director show` away from the concluding note.
+	ConcludedHandoffs []string `json:"concluded_handoffs"`
 }
 
 // BuildManifest derives the manifest for one fold. rawCount is the number of
@@ -159,15 +165,16 @@ type Manifest struct {
 // markers, so the raw count is passed separately to keep the diff honest).
 func BuildManifest(proj Projection, repoKey, source string, raw []event.Event) Manifest {
 	return Manifest{
-		RepoKey:     repoKey,
-		Source:      source,
-		Events:      len(raw),
-		Decisions:   len(proj.Decisions),
-		OpenItems:   len(proj.OpenItems),
-		Handoffs:    len(proj.Handoffs),
-		Notes:       len(proj.Notes),
-		LastID:      LastID(raw),
-		Workstreams: sortedKeys(proj.LatestHandoff),
+		RepoKey:           repoKey,
+		Source:            source,
+		Events:            len(raw),
+		Decisions:         len(proj.Decisions),
+		OpenItems:         len(proj.OpenItems),
+		Handoffs:          len(proj.Handoffs),
+		Notes:             len(proj.Notes),
+		LastID:            LastID(raw),
+		Workstreams:       sortedKeys(proj.LatestHandoff),
+		ConcludedHandoffs: proj.ConcludedHandoffs,
 	}
 }
 
