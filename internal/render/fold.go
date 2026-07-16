@@ -48,8 +48,9 @@ type Projection struct {
 //     Refs drop the promoted decisions from the active set, and the marker
 //     itself stays active as the doc pointer — promotion IS supersession to the
 //     fold, which is also how pre-promote binaries degrade (identical active set).
-//   - latest handoff: iterating ULID-ascending, the highest-ULID handoff per
-//     workstream wins — the session's most recent position (§16).
+//   - latest handoff: iterating ULID-ascending, the highest-ULID UN-CONCLUDED
+//     handoff per workstream wins — the session's most recent position (§16);
+//     see the conclusion rule below for what "concluded" retires.
 //   - concluded handoffs: a note whose Refs name a handoff CONCLUDES that
 //     workstream's trail up to and including it — a per-workstream high-water
 //     mark, so concluding the latest handoff can never resurface an even
