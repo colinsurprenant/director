@@ -26,9 +26,10 @@ Emit durable state to the LOG **as you work** — do not batch it for the end of
 - The **moment** a decision is made or a follow-up is deferred, emit it. Right then, not later.
   An item written immediately survives an unexpected compaction; an item you were "going to log
   at the end" is exactly what gets lost.
-- At each **natural boundary** (finishing a sub-task, switching focus, pausing, wrapping up),
-  emit a `handoff`: **current task · next action · hypotheses · dead ends**. This is the positional
-  snapshot a fresh session (you, after compaction, or a peer) reads to pick up where you left off.
+- At each **natural boundary of work that will resume** (finishing a sub-task, switching focus,
+  pausing, wrapping up mid-workstream), emit a `handoff`: **current task · next action ·
+  hypotheses · dead ends**. This is the positional snapshot a fresh session (you, after
+  compaction, or a peer) reads to pick up where you left off.
   Dead ends ride along ("tried X, failed because Y") — negative results are what stop the next
   session from re-walking a path this one already burned.
 - A deferred loop is its **own `open-item` event** — do **not** pack it into the handoff body.
@@ -77,7 +78,8 @@ The escalate-flagged open-set is exactly what surfaces in the cockpit's **Needs-
 `--risk escalate` only for genuine needs-a-human items; a routine follow-up is plain `open-item`.
 
 `done` is **not** a kind you emit — it is fleet-liveness only (a hook marks the session terminal).
-"What's done" belongs in the `handoff` body.
+"What's done" belongs in the `handoff` body when the work resumes, or in the task-outcome `note`
+when it doesn't.
 
 ### emit returns the new event's ULID
 

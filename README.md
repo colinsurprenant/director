@@ -256,7 +256,7 @@ There are exactly four model-emitted semantic kinds. Pick by what the fact *is*:
 | `note` | FYI / context for a parallel or future session; a finished task's outcome (a review verdict, an investigation result) | none |
 
 - **There is no `blocker` kind.** "Stuck, needs a human" is an `open-item` with `--risk escalate`, exactly the open-set that surfaces in `status`'s Needs-you band.
-- **`done` is not a semantic kind**: it is fleet-liveness only (a hook marks the session terminal). "What's done" belongs in a `handoff` body.
+- **`done` is not a semantic kind**: it is fleet-liveness only (a hook marks the session terminal). "What's done" belongs in a `handoff` body when the work resumes, or in the task-outcome `note` when it doesn't.
 
 ## The coordination protocol
 
