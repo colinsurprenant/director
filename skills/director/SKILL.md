@@ -34,6 +34,11 @@ Emit durable state to the LOG **as you work** — do not batch it for the end of
 - A deferred loop is its **own `open-item` event** — do **not** pack it into the handoff body.
   The handoff carries *position*; open-items carry *carried-forward loops*. `brief`/`render`
   join the two. Packing them together duplicates state, and duplication goes stale.
+- A finished **self-contained task** (a PR review, a one-shot investigation) records its
+  **outcome as a `note`** — a handoff is only for work that *resumes*, and starting a task needs
+  no event at all. A task-lifecycle handoff on a shared workstream shadows the coordination
+  session's real resume point as "latest". (This is the finished-workstream rule, applied to
+  finished tasks.)
 
 Prefer **flush-often, then start fresh at a boundary** over riding a session up into the
 degradation zone (a reliable degradation signal: the human giving you the same correction twice). Because you flush continuously, a fresh start is already covered — there is no
@@ -48,7 +53,7 @@ There are exactly four model-emitted kinds. Pick by what the fact *is*:
 | `decision` | a choice + what it affects (carries `--risk low\|escalate`) | `director emit --type decision --area auth --risk low "Use ULID not UUID for event ids — sortable, matches log fold"` |
 | `open-item` | an open loop / follow-up / deferred item — the canonical home for "documented, not dropped" | `director emit --type open-item --area render "Resolve cross-machine ULID tie-break before multi-machine sync"` |
 | `handoff` | current task · next action · hypotheses · dead ends (positional snapshot at a boundary) | `director emit --type handoff --area store "Done: NDJSON append. Next: wire emit dispatch. Hypothesis: O_APPEND is line-atomic on POSIX. Dead end: fsync-per-line, 30x too slow"` |
-| `note` | FYI / context for a parallel or future session | `director emit --type note --to @next-on-hooks --area hooks "settings.json merge is _managedBy-tagged — don't strip GSD entries"` |
+| `note` | FYI / context for a parallel or future session; a finished task's outcome (a review verdict, an investigation result) | `director emit --type note --to @next-on-hooks --area hooks "settings.json merge is _managedBy-tagged — don't strip GSD entries"` |
 
 One **reserved ref meaning**: a `note` whose `--refs` names a **handoff** CONCLUDES it — that
 handoff (and the workstream's older ones) leaves the digest's resume points, staying in the log.

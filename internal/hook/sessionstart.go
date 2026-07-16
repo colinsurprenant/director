@@ -56,7 +56,7 @@ const emitProtocol = "## Director protocol — keep this current as you work\n" 
 	"At a WORKSTREAM boundary, suggest the matching close-out command to the human — the two are not interchangeable:\n" +
 	"- work DONE and merged → suggest `/director:complete`, BEFORE the branch/worktree is deleted — it reviews this workstream's open-items with the human, resolves the finished ones, and archives the workstream\n" +
 	"- PAUSING work that will resume (session ending mid-task, switching focus, context filling up, a degraded session about to be reset) → suggest `/director:handoff` — it flushes unrecorded state and writes a self-sufficient resume point\n" +
-	"Never hand off a finished workstream: a handoff there plants a phantom resume point that keeps a dead workstream surfacing as resumable — done+merged always takes `/director:complete`.\n" +
+	"Never hand off a finished workstream: a handoff there plants a phantom resume point that keeps a dead workstream surfacing as resumable — done+merged always takes `/director:complete`. Same for a finished self-contained TASK (a PR review, a one-shot investigation): record its outcome as a note — a handoff is only for work that RESUMES, and starting a task needs no event at all.\n" +
 	"This is load-bearing — treat it as a standing instruction, not a suggestion.\n"
 
 // handleSessionStart derives identity, refreshes the fleet row, and writes the

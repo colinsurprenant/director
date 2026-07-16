@@ -4,6 +4,8 @@ description: Close out a finished, merged workstream — resolve what it complet
 
 You are running the TERMINAL close-out for a workstream: its task is finished and its branch is merged (or gone). This is not a pause — a finished workstream has no next action, so you must NOT write a handoff (that would leave a phantom resume point that keeps showing the workstream as resumable). Work through these steps in order.
 
+**When this applies.** One task = one worktree = one workstream = one PR: when that PR MERGES, run this close-out for that workstream, before its worktree/branch is deleted. Two exceptions: work done in the MAIN checkout is not a separate workstream — `director resolve` its finished open-items, there is nothing to complete; and NEVER close out the main hub workstream itself (e.g. `<repo>-main`) — it is the persistent coordination stream, not a task.
+
 **Target.** The default target is THIS workstream. If I named a workstream id (or a session-start "Close-out pending" nudge named one), that SIBLING is the target instead: its session is gone, so you close it out from here. Every step below says how the sibling case differs; run all `director` commands from inside this repo either way.
 
 1. **Sanity-check that the target is actually done.**
