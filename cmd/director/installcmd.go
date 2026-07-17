@@ -148,7 +148,13 @@ func runUninstall(args []string) int {
 		fmt.Fprintf(os.Stderr, "uninstall: %v\n", err)
 		return 1
 	}
-	fmt.Printf("removed Director hooks from %s\n", path)
+	// The CC/Codex forms strip tagged entries FROM the target file; the OpenCode
+	// form removes the managed files themselves — say what actually happened.
+	if target == "opencode" {
+		fmt.Printf("removed Director plugin %s and its /director-* commands\n", path)
+	} else {
+		fmt.Printf("removed Director hooks from %s\n", path)
+	}
 	return 0
 }
 
