@@ -3,7 +3,7 @@
 [![ci](https://github.com/colinsurprenant/director/actions/workflows/ci.yml/badge.svg)](https://github.com/colinsurprenant/director/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/colinsurprenant/director?display_name=tag)](https://github.com/colinsurprenant/director/releases/latest)
 
-**A coordination ledger for your coding-agent work: decisions, open loops, handoffs. Durable across sessions, repos, and weeks.**
+**Sessions are disposable. The state of the work isn't.** A coordination ledger for your coding-agent work: decisions, open loops, handoffs, durable across sessions, repos, and weeks.
 
 **[The two-minute tour: colinsurprenant.github.io/director](https://colinsurprenant.github.io/director/)**
 
