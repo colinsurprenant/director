@@ -125,6 +125,14 @@ Codex's hook contract mirrors Claude Code's, so the **same shims serve both agen
 
 Everything below uses the Claude Code command names (`/director:adopt` etc.); on Codex, read each as its `$director-*` skill twin: same command, same behavior.
 
+### Wire into OpenCode
+
+```bash
+director install --opencode
+```
+
+OpenCode hooks are in-process plugin calls, not command hooks, so instead of shims the `--opencode` form drops **one self-contained managed plugin** at `~/.config/opencode/plugin/director.js` (a pure file drop: OpenCode loads it with no registration, and no config file of yours is ever merged or modified) plus the boundary commands as custom commands at `~/.config/opencode/command/`, invoked as `/director-adopt`, `/director-complete`, `/director-handoff`. Works standalone; nothing else is required. Ground truth injection (first message of each session, re-injected after compaction), liveness, and close-out work as on Claude Code; the Stop emit-guard and the context-fill handoff nudge read CC's transcript format and stay safely inert on OpenCode. Details in [`docs/getting-started.md`](docs/getting-started.md).
+
 ### Environment variables
 
 Install paths and runtime knobs, common to both agents unless a default says otherwise:
@@ -136,6 +144,8 @@ Install paths and runtime knobs, common to both agents unless a default says oth
 | `DIRECTOR_COMMANDS_DIR` | `~/.claude/commands/director` | where `install` writes the `/director:*` slash commands |
 | `DIRECTOR_CODEX_HOOKS_PATH` | `~/.codex/hooks.json` | the Codex hooks file `install --codex` merges into |
 | `DIRECTOR_CODEX_SKILLS_DIR` | `~/.agents/skills` | where `install --codex` writes the `$director-*` agent skills |
+| `DIRECTOR_OPENCODE_PLUGIN_PATH` | `~/.config/opencode/plugin/director.js` | the managed plugin file `install --opencode` drops |
+| `DIRECTOR_OPENCODE_COMMANDS_DIR` | `~/.config/opencode/command` | where `install --opencode` writes the `/director-*` custom commands |
 | `DIRECTOR_HUB` | `~/.director` | the central hub that holds all cross-repo coordination state |
 | `DIRECTOR_BIN` | (PATH) | which `director` binary the shims invoke (defaults to `director` on `PATH`, then the symlink `install` drops next to the shims at `<hooks dir>/../bin/director`, `~/.claude/director/bin/director` by default) |
 | `DIRECTOR_HANDOFF_NUDGE_TOKENS` | (unset) | the context-fill handoff nudge (Claude Code-only for now): an absolute token threshold at which sessions are nudged toward `/director:handoff`; unset or `0` disables it. Fires once per crossing and re-arms only after context falls below half the threshold (a compaction or a context clear) |
@@ -189,8 +199,9 @@ fleet lifecycle (hook-emitted):
 adoption & install:
   adopt       register an existing repo (identity + CHARTER stub + fleet row)
   install     idempotent merge of Director hooks into settings.json
-              (--codex: Codex's hooks.json + $director-* agent skills instead)
-  uninstall   remove only Director-managed hook entries (--codex: Codex's)
+              (--codex: Codex's hooks.json + $director-* agent skills instead;
+               --opencode: managed plugin + /director-* custom commands instead)
+  uninstall   remove only Director-managed hook entries (--codex / --opencode: theirs)
   doctor      check the install is wired and the hooks will actually fire
 
 misc:

@@ -19,25 +19,44 @@ var installGOOS = runtime.GOOS
 // self-contained with no manual copy step. Default target is Claude Code
 // (settings.json); --codex targets Codex (hooks.json + agent skills) instead.
 func runInstall(args []string) int {
-	path, codex, code := installTargetFlags("install", args)
+	path, target, code := installTargetFlags("install", args)
 	if path == "" {
 		return code
 	}
 
 	// The shims install writes are bash scripts, which neither Claude Code nor
 	// Codex can execute on native Windows — installing would plant hooks that
-	// can never fire (or worse, pop an editor at session start). Refuse before
-	// touching anything; the guard sits after flag parsing so --help still
-	// works. Uninstall stays available as a cleanup path.
+	// can never fire (or worse, pop an editor at session start). The OpenCode
+	// plugin is JS (no shims), but its fallback tier is the unix-only install
+	// symlink, so that target is refused too until the Windows story exists.
+	// Refuse before touching anything; the guard sits after flag parsing so
+	// --help still works. Uninstall stays available as a cleanup path.
 	if installGOOS == "windows" {
-		fmt.Fprintln(os.Stderr, "install: native Windows is not supported yet — the hook shims are bash scripts, which Claude Code on Windows cannot execute.")
+		if target == "opencode" {
+			fmt.Fprintln(os.Stderr, "install: native Windows is not supported yet — the install symlink the plugin's binary fallback probes is unix-only.")
+		} else {
+			fmt.Fprintln(os.Stderr, "install: native Windows is not supported yet — the hook shims are bash scripts, which Claude Code on Windows cannot execute.")
+		}
 		fmt.Fprintln(os.Stderr, "  Use WSL with the Linux binary for the full ambient layer (hooks included).")
 		fmt.Fprintln(os.Stderr, "  The manual CLI verbs (emit, render, status, brief, show, resolve) all work natively without install.")
 		fmt.Fprintln(os.Stderr, "  Details: https://github.com/colinsurprenant/director/blob/main/docs/getting-started.md")
 		return 1
 	}
 
-	if codex {
+	if target == "opencode" {
+		if err := install.InstallOpenCode(path); err != nil {
+			fmt.Fprintf(os.Stderr, "install: %v\n", err)
+			return 1
+		}
+		fmt.Printf("installed Director plugin at %s (set DIRECTOR_OPENCODE_PLUGIN_PATH to override)\n", path)
+		if commandsDir, err := install.DefaultOpenCodeCommandsDir(); err == nil {
+			fmt.Printf("  commands written to %s (%s; set DIRECTOR_OPENCODE_COMMANDS_DIR to override)\n", commandsDir, install.OpenCodeCommandNames())
+		}
+		printBinLine()
+		return 0
+	}
+
+	if target == "codex" {
 		if err := install.InstallCodex(path); err != nil {
 			fmt.Fprintf(os.Stderr, "install: %v\n", err)
 			return 1
@@ -112,50 +131,69 @@ func printBinLine() {
 // form only while the OTHER agent's install still references them; once neither
 // does, they are reclaimed.
 func runUninstall(args []string) int {
-	path, codex, code := installTargetFlags("uninstall", args)
+	path, target, code := installTargetFlags("uninstall", args)
 	if path == "" {
 		return code
 	}
-	if codex {
-		if err := install.UninstallCodex(path); err != nil {
-			fmt.Fprintf(os.Stderr, "uninstall: %v\n", err)
-			return 1
-		}
-	} else {
-		if err := install.Uninstall(path); err != nil {
-			fmt.Fprintf(os.Stderr, "uninstall: %v\n", err)
-			return 1
-		}
+	var err error
+	switch target {
+	case "opencode":
+		err = install.UninstallOpenCode(path)
+	case "codex":
+		err = install.UninstallCodex(path)
+	default:
+		err = install.Uninstall(path)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "uninstall: %v\n", err)
+		return 1
 	}
 	fmt.Printf("removed Director hooks from %s\n", path)
 	return 0
 }
 
-// installTargetFlags parses the shared install/uninstall flags: --codex selects
-// the agent, --settings overrides the target file (default:
-// ~/.claude/settings.json, or ~/.codex/hooks.json with --codex). It returns
-// ("", false, code) when parsing fails or the default can't be resolved, so
-// callers return code directly.
-func installTargetFlags(name string, args []string) (path string, codex bool, code int) {
+// installTargetFlags parses the shared install/uninstall flags: --codex /
+// --opencode select the agent (mutually exclusive), --settings overrides the
+// target file (default: ~/.claude/settings.json; ~/.codex/hooks.json with
+// --codex; the managed plugin file with --opencode). It returns ("", "", code)
+// when parsing fails or the default can't be resolved, so callers return code
+// directly; target is "claude", "codex", or "opencode".
+func installTargetFlags(name string, args []string) (path, target string, code int) {
+	var codex, opencode bool
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	fs.StringVar(&path, "settings", "", "target hooks file (default: ~/.claude/settings.json, or ~/.codex/hooks.json with --codex)")
+	fs.StringVar(&path, "settings", "", "target file (default: ~/.claude/settings.json, ~/.codex/hooks.json with --codex, or the plugin file with --opencode)")
 	fs.BoolVar(&codex, "codex", false, "target Codex (hooks.json + $director-* agent skills) instead of Claude Code")
+	fs.BoolVar(&opencode, "opencode", false, "target OpenCode (managed plugin + /director-* custom commands) instead of Claude Code")
 	if err := fs.Parse(args); err != nil {
-		return "", false, 2
+		return "", "", 2
+	}
+	if codex && opencode {
+		fmt.Fprintf(os.Stderr, "%s: --codex and --opencode are mutually exclusive\n", name)
+		return "", "", 2
+	}
+	target = "claude"
+	if codex {
+		target = "codex"
+	}
+	if opencode {
+		target = "opencode"
 	}
 	if path != "" {
-		return path, codex, 0
+		return path, target, 0
 	}
 	var def string
 	var err error
-	if codex {
+	switch target {
+	case "codex":
 		def, err = install.DefaultCodexHooksPath()
-	} else {
+	case "opencode":
+		def, err = install.DefaultOpenCodePluginPath()
+	default:
 		def, err = install.DefaultSettingsPath()
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
-		return "", false, 1
+		return "", "", 1
 	}
-	return def, codex, 0
+	return def, target, 0
 }

@@ -49,6 +49,8 @@ func setupCodex(t *testing.T, fixture string) (hooksPath, hooksDir, skillsDir st
 	t.Setenv(codexSkillsDirEnv, skillsDir)
 	t.Setenv(settingsPathEnv, filepath.Join(t.TempDir(), "settings.json"))
 	t.Setenv(commandsDirEnv, filepath.Join(t.TempDir(), "commands"))
+	t.Setenv(opencodePluginPathEnv, filepath.Join(t.TempDir(), "director.js"))
+	t.Setenv(opencodeCommandsDirEnv, filepath.Join(t.TempDir(), "oc-command"))
 	hooksPath = filepath.Join(t.TempDir(), "hooks.json")
 	t.Setenv(codexHooksPathEnv, hooksPath)
 	if fixture != "" {

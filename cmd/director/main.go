@@ -134,8 +134,9 @@ fleet lifecycle (hook-emitted):
 adoption & install:
   adopt       register an existing repo (identity + CHARTER stub + fleet row)
   install     idempotent merge of Director hooks into settings.json
-              (--codex: Codex's hooks.json + $director-* agent skills instead)
-  uninstall   remove only Director-managed hook entries (--codex: Codex's)
+              (--codex: Codex's hooks.json + $director-* agent skills instead;
+               --opencode: managed plugin + /director-* custom commands instead)
+  uninstall   remove only Director-managed hook entries (--codex / --opencode: theirs)
   doctor      check the install is healthy: hooks wired and the binary reachable
               the way the shims resolve it (exits non-zero if not)
 

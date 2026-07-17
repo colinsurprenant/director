@@ -83,6 +83,12 @@ type Input struct {
 
 	// PreCompact: manual | auto. Unused in v1 beyond presence.
 	Trigger string `json:"trigger"`
+
+	// Agent is a Director extension, NOT a CC wire field: an adapter that
+	// fabricates payloads (the OpenCode plugin) names itself here so flavor
+	// detection doesn't depend on heuristics. CC and the Codex shims never set
+	// it; absent means "detect from the payload" (see agentFlavor).
+	Agent string `json:"agent"`
 }
 
 // parseInput decodes CC's stdin JSON into an Input. A malformed or empty body is

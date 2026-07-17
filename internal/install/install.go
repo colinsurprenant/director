@@ -263,12 +263,15 @@ func Uninstall(settingsPath string) error {
 	// (best-effort: only the exact Director filenames, never foreign files) —
 	// UNLESS a Codex install still references them: the shims are shared, and a
 	// CC uninstall must not silently break a coexisting Codex install (the
-	// mirror of UninstallCodex leaving them for CC). The bin symlink shares the
-	// shims' lifecycle exactly: it exists only to be found by them.
+	// mirror of UninstallCodex leaving them for CC). The bin symlink is wider
+	// than the shims: the OpenCode plugin's fallback tier probes it too (no
+	// shims involved), so its reclaim additionally gates on that install.
 	if !codexInstallPresent() {
 		if hooksDir, err := DefaultHooksDir(); err == nil {
 			removeShims(hooksDir)
-			removeBinSymlink(hooksDir)
+			if !opencodeInstallPresent() {
+				removeBinSymlink(hooksDir)
+			}
 		}
 	}
 	// And the Director-owned slash commands — the inverse of writeCommands, same

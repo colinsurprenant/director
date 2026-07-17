@@ -70,6 +70,7 @@ type doctorInputs struct {
 	hooksDir                string                // where the shims live
 	binPath                 string                // the install symlink tier (<hooks root>/bin/director)
 	codexHooks              string                // ~/.codex/hooks.json
+	opencodePlugin          string                // ~/.config/opencode/plugin/director.js
 	hub                     string                // the coordination hub root
 }
 
@@ -129,6 +130,10 @@ func doctorInputsFromEnv() (doctorInputs, error) {
 	if err != nil {
 		return doctorInputs{}, err
 	}
+	opencodePlugin, err := install.DefaultOpenCodePluginPath()
+	if err != nil {
+		return doctorInputs{}, err
+	}
 	hub, err := hubRoot()
 	if err != nil {
 		return doctorInputs{}, err
@@ -156,6 +161,7 @@ func doctorInputsFromEnv() (doctorInputs, error) {
 		hooksDir:                hooksDir,
 		binPath:                 binPath,
 		codexHooks:              codexHooks,
+		opencodePlugin:          opencodePlugin,
 		hub:                     hub,
 	}, nil
 }
@@ -167,6 +173,9 @@ func diagnose(in doctorInputs) doctorReport {
 	r.checks = append(r.checks, binaryResolutionCheck(in))
 	r.checks = append(r.checks, claudeHooksCheck(in))
 	if c, ok := codexHooksCheck(in); ok {
+		r.checks = append(r.checks, c)
+	}
+	if c, ok := opencodeHooksCheck(in); ok {
 		r.checks = append(r.checks, c)
 	}
 	r.checks = append(r.checks, hubCheck(in.hub))
@@ -256,6 +265,18 @@ func codexHooksCheck(in doctorInputs) (check, bool) {
 			"%s references Director hooks, but shims are missing from %s (%s) — re-run `director install --codex`.", in.codexHooks, in.hooksDir, strings.Join(missing, ", "))}, true
 	}
 	return check{"codex hooks", levelOK, fmt.Sprintf("wired in %s", in.codexHooks)}, true
+}
+
+// opencodeHooksCheck reports the OpenCode side only when its managed plugin is
+// present, so it never nags a user on another agent. The plugin needs no shims
+// (it shells out to the binary itself), so presence of the managed file is the
+// whole wiring check — binary reachability is already covered by
+// binaryResolutionCheck, whose resolution ladder the plugin mirrors.
+func opencodeHooksCheck(in doctorInputs) (check, bool) {
+	if !install.OpenCodePluginPresent(in.opencodePlugin) {
+		return check{}, false
+	}
+	return check{"opencode hooks", levelOK, fmt.Sprintf("plugin present at %s", in.opencodePlugin)}, true
 }
 
 // hubCheck confirms coordination state can actually be written. A not-yet-created

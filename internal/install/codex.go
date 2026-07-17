@@ -127,7 +127,11 @@ func UninstallCodex(hooksPath string) error {
 	if !claudeInstallPresent() && !codexInstallPresent() {
 		if hooksDir, err := DefaultHooksDir(); err == nil {
 			removeShims(hooksDir)
-			removeBinSymlink(hooksDir)
+			// The bin symlink outlives the shims when an OpenCode install remains:
+			// its plugin probes the same fallback path without using the shims.
+			if !opencodeInstallPresent() {
+				removeBinSymlink(hooksDir)
+			}
 		}
 	}
 	return nil

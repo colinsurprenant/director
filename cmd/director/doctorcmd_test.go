@@ -90,6 +90,28 @@ func TestDoctorHealthy(t *testing.T) {
 	if hasCheck(rep, "codex hooks") {
 		t.Errorf("codex check must be absent without a Codex install")
 	}
+	if hasCheck(rep, "opencode hooks") {
+		t.Errorf("opencode check must be absent without an OpenCode install")
+	}
+}
+
+// TestDoctorOpenCodePresent: with a managed plugin on disk the opencode check
+// appears and reads OK; the fixture's zero opencodePlugin path keeps it absent
+// everywhere else (OpenCodePluginPresent fails closed on "").
+func TestDoctorOpenCodePresent(t *testing.T) {
+	in := installedFixture(t)
+	pluginPath := filepath.Join(t.TempDir(), "plugin", "director.js")
+	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", pluginPath)
+	t.Setenv("DIRECTOR_OPENCODE_COMMANDS_DIR", filepath.Join(t.TempDir(), "oc-command"))
+	if err := install.InstallOpenCode(pluginPath); err != nil {
+		t.Fatalf("InstallOpenCode fixture: %v", err)
+	}
+	in.opencodePlugin = pluginPath
+
+	rep := diagnose(in)
+	if lv := levelOf(t, rep, "opencode hooks"); lv != levelOK {
+		t.Errorf("opencode check: got %v, want OK", lv)
+	}
 }
 
 func TestDoctorDirectorBinBrokenFails(t *testing.T) {
