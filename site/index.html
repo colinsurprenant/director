@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Director: a coordination ledger for coding agents</title>
-<meta name="description" content="A coordination ledger for your coding-agent work: decisions, open loops, handoffs, durable across sessions, repos, and weeks. For Claude Code and OpenAI Codex.">
+<meta name="description" content="The cure for context rot is a fresh session; the cost is re-explaining everything. Director makes the reset free: a coordination ledger your agent writes as it works, injected into the next session as ground truth. For Claude Code and OpenAI Codex.">
 <meta property="og:title" content="Director: a coordination ledger for coding agents">
-<meta property="og:description" content="Memory tools store what the agent knows; Director tracks the state of the work. Run both: they don't overlap.">
+<meta property="og:description" content="The cure for context rot is a fresh session. Director makes it free: your agent writes the ledger as it works; the next session starts with it injected as ground truth.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://colinsurprenant.github.io/director/">
 <meta property="og:image" content="https://colinsurprenant.github.io/director/og.png">
@@ -253,16 +253,17 @@
 
 <header class="wrap">
   <p class="ack reveal d1">▸ Director: director-main-aaa5961e · <span class="meta">3 open-item(s), 1 need-you</span><span class="caret" aria-hidden="true"></span></p>
-  <h1 class="reveal d2">A coordination ledger for your coding-agent work.</h1>
-  <p class="sub reveal d2">Decisions, open loops, handoffs: durable across sessions, repos, and weeks.</p>
+  <h1 class="reveal d2">The cure for context rot is a fresh session. Director makes it free.</h1>
+  <p class="sub reveal d2">A coordination ledger your agent writes as it works: decisions, open loops, handoffs. The next session starts with them injected as ground truth.</p>
   <div class="qa reveal d3">
     <p><span class="q-label">Memory tools answer</span> <span class="q-dim">“what does the agent <em>know</em>?”</span></p>
     <p><span class="q-label">Director answers</span> <span class="q-hot">“what is the state of the <em>work</em>?”</span></p>
   </div>
   <p class="facts reveal d3"><span class="f">what was decided, and why</span> <span class="sep">·</span> <span class="f">which loops are still open</span> <span class="sep">·</span> <span class="f">where the work stopped</span> <span class="sep">·</span> <span class="f">what still needs you</span></p>
   <p class="lede reveal d3">
-    <strong>The session boundary is where the state leaks.</strong> Nothing in a memory store ever
-    <strong>closes</strong>. Your agents keep the ledger as they work; you never write a status
+    A reset, a compaction, a week away: <strong>the session boundary is where the state leaks.</strong>
+    Resetting used to mean re-explaining everything; now the fresh session opens already oriented.
+    Your agents keep the ledger as they work; you never write a status
     update. <strong>You review.</strong>
   </p>
   <div class="install reveal d4">
@@ -342,6 +343,10 @@
   <p class="kicker">where it fits</p>
   <h2>Keep your tools. This is a different layer.</h2>
   <dl class="vs">
+    <div>
+      <dt>vs compaction</dt>
+      <dd>Compaction compresses the transcript at an arbitrary moment and hopes the right things survive: a rot vector, not a cure. Director records the work itself: typed facts, written when they happen, that outlive the session.</dd>
+    </div>
     <div>
       <dt>vs memory tools</dt>
       <dd>They answer <em>what does the agent know</em>; Director answers <em>what is the state of the work</em>. Facts accumulate; loops open and close. Run both: they don’t overlap.</dd>
