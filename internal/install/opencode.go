@@ -15,6 +15,7 @@ package install
 import (
 	"bytes"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -94,6 +95,22 @@ func opencodeCommandFilename(filename string) string {
 // is in place, so a failure never leaves a live plugin probing a fallback that
 // isn't there.
 func InstallOpenCode(pluginPath string) error {
+	// Ownership preflight FIRST, before any artifact is written: the plugin
+	// lands in OpenCode's SHARED plugin dir, where a user can legitimately have
+	// their own director.js — and unlike the CC/Codex targets (whose overwrites
+	// stay inside Director-owned dirs or merge tagged entries), a blind write
+	// here would irreversibly destroy a foreign file. Absent or Director-marked
+	// is writable; anything else refuses the whole install. The command files
+	// need no marker gate: their exact `director-` prefixed names in the shared
+	// command dir are the ownership claim, the same convention the Codex
+	// `director-*` skill dirs rely on.
+	if data, err := os.ReadFile(pluginPath); err == nil {
+		if !bytes.Contains(data, []byte(opencodeManagedMarker)) {
+			return fmt.Errorf("install: refusing to overwrite %s: it exists and does not carry the %q marker (not a Director-managed file); move it aside or set %s", pluginPath, opencodeManagedMarker, opencodePluginPathEnv)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("install: inspect plugin path %s: %w", pluginPath, err)
+	}
 	hooksDir, err := DefaultHooksDir()
 	if err != nil {
 		return err
@@ -174,7 +191,12 @@ func OpenCodePluginPresent(path string) bool {
 
 // writeOpenCodePlugin materializes the embedded plugin at pluginPath with the
 // fallback-binary placeholder templated to this install's symlink path. The
-// write is atomic (temp + rename) and idempotent — re-install reproduces the
+// placeholder in the source is an UNQUOTED identifier and the substitution is
+// a complete JSON-encoded string literal (Go's encoder emits pure-ASCII JSON,
+// escaping quotes, backslashes, control characters, and the U+2028/U+2029
+// line separators, all of which are valid JavaScript string escapes), so no
+// path content can escape the literal and corrupt the generated file. The
+// write is atomic (temp + rename) and idempotent: re-install reproduces the
 // same bytes for the same hooks root.
 func writeOpenCodePlugin(pluginPath, hooksDir string) error {
 	data, err := opencodeFS.ReadFile("opencode/director.js")
@@ -182,7 +204,11 @@ func writeOpenCodePlugin(pluginPath, hooksDir string) error {
 		return fmt.Errorf("install: read embedded opencode plugin: %w", err)
 	}
 	binPath := filepath.Join(binDirFor(hooksDir), "director")
-	data = bytes.ReplaceAll(data, []byte(opencodeBinPlaceholder), []byte(binPath))
+	literal, err := json.Marshal(binPath)
+	if err != nil {
+		return fmt.Errorf("install: encode fallback bin path: %w", err)
+	}
+	data = bytes.ReplaceAll(data, []byte(opencodeBinPlaceholder), literal)
 	if err := os.MkdirAll(filepath.Dir(pluginPath), 0o755); err != nil {
 		return fmt.Errorf("install: create plugin dir %s: %w", filepath.Dir(pluginPath), err)
 	}

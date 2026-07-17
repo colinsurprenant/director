@@ -16,9 +16,15 @@
 //                         emit-guard is inert here — no transcript — so any
 //                         control output is deliberately ignored)
 //   session.created     → subagent filter (a child session, parentID set, is
-//                         skipped everywhere: no injection, no fleet rows)
-//   session.compacted   → re-arm injection (next chat.message re-injects with
-//                         source=compact, mirroring CC's compact SessionStart)
+//                         skipped everywhere: no injection, no fleet rows;
+//                         unknown ids — a resumed session after a server
+//                         restart — are classified via client.session.get)
+//   session.compacted   → immediate re-grounding: the resumed auto-continue
+//                         turn does NOT pass through chat.message (OpenCode
+//                         synthesizes it directly), so a compacted session
+//                         gets the ground truth appended to its system prompt
+//                         per request until the next real user message, where
+//                         chat.message re-injects it durably (source=compact)
 //
 // Cardinal rule, same as the Go adapter (§13 t5): a broken hook must NEVER
 // break a session. Every handler swallows every error; the worst outcome is
@@ -28,8 +34,12 @@ import { spawn } from "node:child_process"
 
 // FALLBACK_BIN is templated by `director install --opencode` to the install
 // symlink (<hooks root>/bin/director) — the same PATH-independent tier the bash
-// shims probe, for GUI/launchd processes whose PATH misses `director`.
-const FALLBACK_BIN = "__DIRECTOR_BIN_FALLBACK__"
+// shims probe, for GUI/launchd processes whose PATH misses `director`. The
+// placeholder is an UNQUOTED identifier and install substitutes a complete
+// JSON-encoded string literal, so no path character can escape the literal; an
+// untemplated copy throws a ReferenceError inside runHook, which the handlers'
+// catch-all turns into the standard silent degrade.
+const FALLBACK_BIN = __DIRECTOR_BIN_FALLBACK__
 
 // hookTimeoutMs bounds one `director _hook` invocation so a wedged subprocess
 // can't stall the session's turn. The Go verbs are fast (ms-scale folds); ten
@@ -116,16 +126,41 @@ function runOne(bin, event, payload) {
   })
 }
 
-export const DirectorPlugin = async ({ directory }) => {
+export const DirectorPlugin = async ({ directory, client }) => {
   // Per-server-instance state. injected: sessions already carrying the ground
-  // truth. children: subagent sessions (parentID set at creation) — excluded
-  // from injection and fleet everywhere, mirroring the CC throwaway filter.
-  // compacted: sessions whose next injection is a source=compact re-injection.
-  // A server restart clears all three; the worst case is a benign re-injection,
-  // the same thing CC does on session resume.
+  // truth. children/tops: subagent classification (children are excluded from
+  // injection and fleet everywhere, mirroring the CC throwaway filter).
+  // compacted: sessions in the post-compaction window, with compactCtx caching
+  // their re-grounding text so the per-request system-prompt bridge doesn't
+  // spawn a hook per LLM call. A server restart clears all of this; injected/
+  // compacted degrade to a benign re-injection (what CC does on resume), and
+  // the child classification is RECOVERED, not guessed: an unknown session id
+  // is looked up via client.session.get (see isChild) so a resumed child
+  // doesn't come back as a top-level session with a fleet row.
   const injected = new Set()
   const children = new Set()
+  const tops = new Set()
   const compacted = new Set()
+  const compactCtx = new Map()
+
+  // isChild classifies a session, surviving server restarts: the created-event
+  // cache first, then one client.session.get lookup for an unknown id (cached
+  // on success). On lookup failure it reports top-level WITHOUT caching — the
+  // pre-recovery behavior, retried on the next call — because permanently
+  // mis-caching on a transient error would be worse than a redundant lookup.
+  const isChild = async (sid) => {
+    if (children.has(sid)) return true
+    if (tops.has(sid)) return false
+    try {
+      const res = await client.session.get({ path: { id: sid } })
+      const info = res?.data ?? res
+      if (info && typeof info === "object" && "id" in info) {
+        ;(info.parentID ? children : tops).add(sid)
+        return !!info.parentID
+      }
+    } catch {}
+    return false
+  }
 
   // cwd is the server-level directory captured at init: OpenCode runs one
   // server per project directory in practice, so it matches every session's
@@ -145,21 +180,24 @@ export const DirectorPlugin = async ({ directory }) => {
         const sid = event?.properties?.sessionID ?? event?.properties?.info?.id
         switch (event?.type) {
           case "session.created":
-            if (event.properties?.info?.parentID) children.add(event.properties.info.id)
+            ;(event.properties?.info?.parentID ? children : tops).add(event.properties.info.id)
             return
           case "session.compacted":
-            if (sid && injected.has(sid)) {
+            if (sid && !(await isChild(sid))) {
               injected.delete(sid)
               compacted.add(sid)
+              compactCtx.delete(sid)
             }
             return
           case "session.deleted":
             injected.delete(sid)
             children.delete(sid)
+            tops.delete(sid)
             compacted.delete(sid)
+            compactCtx.delete(sid)
             return
           case "session.idle":
-            if (!sid || children.has(sid)) return
+            if (!sid || (await isChild(sid))) return
             // End-of-turn Stop: fleet bookkeeping only. The emit-guard needs a
             // transcript to ever block, and this payload carries none, so any
             // control output is ignored by design — a block here would have
@@ -170,10 +208,31 @@ export const DirectorPlugin = async ({ directory }) => {
       } catch {}
     },
 
+    // The post-compaction bridge: OpenCode's automatic compaction synthesizes
+    // the continuation user message directly (it never passes through
+    // chat.message), so the FIRST resumed model turn would otherwise run on
+    // the compaction summary alone. While a session sits in the compacted
+    // window, append its re-grounding text to the system prompt of every LLM
+    // request; the next real user message hands over to chat.message's durable
+    // part injection (which clears the window before this hook runs again).
+    "experimental.chat.system.transform": async (input, output) => {
+      try {
+        const sid = input.sessionID
+        if (!sid || !compacted.has(sid)) return
+        let ctx = compactCtx.get(sid)
+        if (ctx === undefined) {
+          const control = await runHook("sessionstart", { ...basePayload("SessionStart", sid), source: "compact" })
+          ctx = control?.hookSpecificOutput?.additionalContext ?? ""
+          compactCtx.set(sid, ctx) // cache "" too — a failed/empty fetch must not re-spawn per request
+        }
+        if (ctx) output.system.push(ctx)
+      } catch {}
+    },
+
     "chat.message": async (input, output) => {
       try {
         const sid = input.sessionID
-        if (!sid || children.has(sid) || injected.has(sid)) return
+        if (!sid || injected.has(sid) || (await isChild(sid))) return
         // Marking BEFORE the await is the dedupe for concurrent fires — and it
         // is deliberately not rolled back on a null control result: null can't
         // distinguish "hook failed" from "nothing to inject" (a non-git dir),
@@ -182,6 +241,7 @@ export const DirectorPlugin = async ({ directory }) => {
         // until the server restarts — the same silent-degrade the shims choose.
         injected.add(sid)
         const source = compacted.delete(sid) ? "compact" : "startup"
+        compactCtx.delete(sid) // hand-over: the durable part injection replaces the system-prompt bridge
         const control = await runHook("sessionstart", { ...basePayload("SessionStart", sid), source })
         const ctx = control?.hookSpecificOutput?.additionalContext
         if (!ctx) return
@@ -199,7 +259,7 @@ export const DirectorPlugin = async ({ directory }) => {
     "tool.execute.after": async (input, output) => {
       try {
         const sid = input.sessionID
-        if (!sid || children.has(sid)) return
+        if (!sid || (await isChild(sid))) return
         const control = await runHook("posttooluse", {
           ...basePayload("PostToolUse", sid),
           tool_name: input.tool,

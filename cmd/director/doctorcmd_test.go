@@ -95,6 +95,49 @@ func TestDoctorHealthy(t *testing.T) {
 	}
 }
 
+// TestDoctorOpenCodeOnlyIsHealthy: an OpenCode-only machine (no Claude Code
+// settings.json at all) must read healthy — the README documents --opencode as
+// standalone, so the CC check stands down when CC is absent and another target
+// is wired. The "no target anywhere" case keeps its fail (TestDoctorNoHooksFails).
+func TestDoctorOpenCodeOnlyIsHealthy(t *testing.T) {
+	skipUnixOnlyDoctor(t)
+	root := t.TempDir()
+	hooksDir := filepath.Join(root, "hooks")
+	t.Setenv("DIRECTOR_HOOKS_DIR", hooksDir)
+	pluginPath := filepath.Join(root, "plugin", "director.js")
+	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", pluginPath)
+	t.Setenv("DIRECTOR_OPENCODE_COMMANDS_DIR", filepath.Join(root, "oc-command"))
+	t.Setenv("DIRECTOR_CODEX_HOOKS_PATH", filepath.Join(root, "codex-hooks.json"))
+	if err := install.InstallOpenCode(pluginPath); err != nil {
+		t.Fatalf("InstallOpenCode fixture: %v", err)
+	}
+	binPath, err := install.DefaultBinPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := doctorInputs{
+		directorBin:    "",
+		lookDirector:   func() (string, bool) { return "", false },
+		settingsPath:   filepath.Join(root, "no-settings.json"), // absent: no CC install
+		hooksDir:       hooksDir,
+		binPath:        binPath,
+		codexHooks:     filepath.Join(root, "no-codex.json"),
+		opencodePlugin: pluginPath,
+		hub:            root,
+	}
+
+	rep := diagnose(in)
+	if !rep.healthy {
+		t.Fatalf("opencode-only install must be healthy, got %+v", rep.checks)
+	}
+	if hasCheck(rep, "claude code hooks") {
+		t.Errorf("claude check must stand down when CC is absent and OpenCode is wired")
+	}
+	if lv := levelOf(t, rep, "opencode hooks"); lv != levelOK {
+		t.Errorf("opencode check: got %v, want OK", lv)
+	}
+}
+
 // TestDoctorOpenCodePresent: with a managed plugin on disk the opencode check
 // appears and reads OK; the fixture's zero opencodePlugin path keeps it absent
 // everywhere else (OpenCodePluginPresent fails closed on "").

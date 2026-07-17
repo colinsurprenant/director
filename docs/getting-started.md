@@ -200,8 +200,10 @@ at `~/.config/opencode/command/`, invoked as `/director-adopt`, `/director-compl
 `/director-handoff`. OpenCode-specific notes:
 
 - **Injection rides the first message.** OpenCode has no injectable session-start hook, so the plugin
-  prepends the ground truth to the first user message of each session (and re-injects after a
-  compaction). Behavior is otherwise identical to Claude Code's session-start injection.
+  prepends the ground truth to the first user message of each session. After a compaction the resumed
+  turn is re-grounded through the system prompt (OpenCode's auto-continuation bypasses the message
+  hook), and the next user message re-injects the state durably. Behavior is otherwise identical to
+  Claude Code's session-start injection.
 - The Stop emit-guard and the context-fill handoff nudge read CC's transcript format and stay safely
   inert on OpenCode; end-of-turn fleet bookkeeping still runs (OpenCode's `session.idle` is a
   turn-end signal, so liveness matches Claude Code's).

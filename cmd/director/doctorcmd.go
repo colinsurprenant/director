@@ -171,12 +171,24 @@ func doctorInputsFromEnv() (doctorInputs, error) {
 func diagnose(in doctorInputs) doctorReport {
 	var r doctorReport
 	r.checks = append(r.checks, binaryResolutionCheck(in))
-	r.checks = append(r.checks, claudeHooksCheck(in))
-	if c, ok := codexHooksCheck(in); ok {
-		r.checks = append(r.checks, c)
+	// Targets are assessed symmetrically: each installed agent gets its check,
+	// and the Claude Code check — historically unconditional — is skipped only
+	// when CC is genuinely absent (no managed entries AND no parse error, which
+	// would hide a broken file) while another agent IS wired. A machine with no
+	// target at all keeps the CC fail as its "run director install" guidance;
+	// without this gate an OpenCode- or Codex-only install (documented as
+	// standalone) would deterministically exit unhealthy.
+	codexCheck, codexPresent := codexHooksCheck(in)
+	opencodeCheck, opencodePresent := opencodeHooksCheck(in)
+	claudeAbsent := !install.ManagedEntriesPresent(in.settingsPath) && install.SettingsParseError(in.settingsPath) == nil
+	if !claudeAbsent || (!codexPresent && !opencodePresent) {
+		r.checks = append(r.checks, claudeHooksCheck(in))
 	}
-	if c, ok := opencodeHooksCheck(in); ok {
-		r.checks = append(r.checks, c)
+	if codexPresent {
+		r.checks = append(r.checks, codexCheck)
+	}
+	if opencodePresent {
+		r.checks = append(r.checks, opencodeCheck)
 	}
 	r.checks = append(r.checks, hubCheck(in.hub))
 

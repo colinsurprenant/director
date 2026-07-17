@@ -1,6 +1,7 @@
 package install
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -130,6 +131,66 @@ func TestUninstallOpenCodeRemovesOnlyItsOwn(t *testing.T) {
 		if _, err := os.Lstat(filepath.Join(filepath.Dir(hooksDir), "bin", "director")); !os.IsNotExist(err) {
 			t.Errorf("opencode-only machine: uninstall must reclaim the bin symlink (err=%v)", err)
 		}
+	}
+}
+
+// TestInstallOpenCodeRefusesForeignPlugin: an existing director.js without the
+// managed marker is someone else's file — install must refuse BEFORE writing
+// any artifact (preflight-first ordering), preserving the foreign bytes and
+// leaving no commands or symlink behind.
+func TestInstallOpenCodeRefusesForeignPlugin(t *testing.T) {
+	pluginPath, commandsDir, hooksDir := setupOpenCode(t)
+	if err := os.MkdirAll(filepath.Dir(pluginPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	foreign := []byte("export const Mine = async () => ({})")
+	if err := os.WriteFile(pluginPath, foreign, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := InstallOpenCode(pluginPath); err == nil {
+		t.Fatal("InstallOpenCode over an unmarked plugin should refuse, got nil")
+	}
+	b, err := os.ReadFile(pluginPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != string(foreign) {
+		t.Errorf("foreign plugin bytes were changed by the refused install:\n%s", b)
+	}
+	if _, err := os.Stat(filepath.Join(commandsDir, "director-complete.md")); !os.IsNotExist(err) {
+		t.Errorf("refused install still wrote command files (err=%v)", err)
+	}
+	if _, err := os.Lstat(filepath.Join(filepath.Dir(hooksDir), "bin", "director")); !os.IsNotExist(err) {
+		t.Errorf("refused install still wrote the bin symlink (err=%v)", err)
+	}
+}
+
+// TestInstallOpenCodeTemplatesHostilePathSafely: a hooks-dir override carrying
+// quote/backslash characters must still produce a syntactically valid plugin —
+// the fallback path is substituted as a complete JSON-encoded string literal,
+// never spliced raw into quotes.
+func TestInstallOpenCodeTemplatesHostilePathSafely(t *testing.T) {
+	pluginPath, _, _ := setupOpenCode(t)
+	hostile := filepath.Join(t.TempDir(), `bad"root\dir`, "hooks")
+	t.Setenv(hooksDirEnv, hostile)
+
+	if err := InstallOpenCode(pluginPath); err != nil {
+		t.Fatalf("InstallOpenCode: %v", err)
+	}
+	b, err := os.ReadFile(pluginPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), opencodeBinPlaceholder) {
+		t.Errorf("plugin still carries the untemplated placeholder")
+	}
+	wantLiteral, err := json.Marshal(filepath.Join(binDirFor(hostile), "director"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "const FALLBACK_BIN = "+string(wantLiteral)+"\n") {
+		t.Errorf("fallback path not substituted as a JSON string literal; want %s in:\n%.400s", wantLiteral, b)
 	}
 }
 
