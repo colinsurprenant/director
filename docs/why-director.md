@@ -12,7 +12,7 @@ And it compounds. Work in **blocks** over weeks (a few days deep in one project,
 
 The leak is specific. Native agent memory has gotten good at *facts*: what the project is, how the build works, your preferences. What nothing carries is the **coordination narrative**: what was decided and why, which loops were deliberately deferred, where the work stopped when the block ended, and what still needs *you*. So you become the message bus, re-explaining last month's decision to this morning's session, re-discovering your own open loops by grepping git history, relaying context by hand between a worktree session and the main one.
 
-Director exists to move you from **message bus** to **reviewer**.
+Director exists to take the message-bus job off you. The ledger relays the state; you direct the work.
 
 ## What Director is
 
