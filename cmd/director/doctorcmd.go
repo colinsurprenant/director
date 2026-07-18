@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -280,15 +282,42 @@ func codexHooksCheck(in doctorInputs) (check, bool) {
 }
 
 // opencodeHooksCheck reports the OpenCode side only when its managed plugin is
-// present, so it never nags a user on another agent. The plugin needs no shims
-// (it shells out to the binary itself), so presence of the managed file is the
-// whole wiring check — binary reachability is already covered by
-// binaryResolutionCheck, whose resolution ladder the plugin mirrors.
+// present, so it never nags a user on another agent. Presence alone is NOT the
+// whole check: the plugin resolves the director binary itself (process env →
+// PATH → the fallback path BAKED into it at install time), and its ladder
+// deliberately differs from the shims' in two ways doctor must model — a
+// DIRECTOR_BIN pinned in settings.json "env" is injected by Claude Code into
+// hook processes but never reaches the OpenCode server, and the baked
+// fallback is absolute, so a DIRECTOR_HOOKS_DIR move leaves the plugin
+// probing the OLD path while binaryResolutionCheck happily verifies the new
+// one. Without this, a settings-pinned machine with a dead PATH/symlink reads
+// all-healthy while OpenCode coordination is silently dead.
 func opencodeHooksCheck(in doctorInputs) (check, bool) {
 	if !install.OpenCodePluginPresent(in.opencodePlugin) {
 		return check{}, false
 	}
-	return check{"opencode hooks", levelOK, fmt.Sprintf("plugin present at %s", in.opencodePlugin)}, true
+	baked := false
+	if data, err := os.ReadFile(in.opencodePlugin); err == nil {
+		if lit, err := json.Marshal(in.binPath); err == nil {
+			baked = bytes.Contains(data, lit)
+		}
+	}
+	envBin := in.directorBin != "" && !in.directorBinFromSettings
+	_, pathHit := in.lookDirector()
+	symlinkOK := false
+	if fi, err := os.Stat(in.binPath); err == nil && !fi.IsDir() {
+		symlinkOK = true
+	}
+	switch {
+	case envBin || pathHit || (baked && symlinkOK):
+		return check{"opencode hooks", levelOK, fmt.Sprintf("plugin present at %s", in.opencodePlugin)}, true
+	case !baked:
+		return check{"opencode hooks", levelFail, fmt.Sprintf(
+			"plugin at %s bakes a fallback path that is not the current %s (hooks dir moved, or the file is untemplated) — re-run `director install --opencode`.", in.opencodePlugin, in.binPath)}, true
+	default:
+		return check{"opencode hooks", levelFail, fmt.Sprintf(
+			"plugin present at %s but its binary ladder resolves nothing: no DIRECTOR_BIN in the environment (a settings.json env pin does NOT reach the OpenCode server), `director` not on PATH, and the fallback %s is missing — re-run `director install --opencode`.", in.opencodePlugin, in.binPath)}, true
+	}
 }
 
 // hubCheck confirms coordination state can actually be written. A not-yet-created

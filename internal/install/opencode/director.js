@@ -32,19 +32,31 @@
 
 import { spawn } from "node:child_process"
 
-// FALLBACK_BIN is templated by `director install --opencode` to the install
-// symlink (<hooks root>/bin/director) — the same PATH-independent tier the bash
-// shims probe, for GUI/launchd processes whose PATH misses `director`. The
-// placeholder is an UNQUOTED identifier and install substitutes a complete
-// JSON-encoded string literal, so no path character can escape the literal; an
-// untemplated copy throws a ReferenceError inside runHook, which the handlers'
-// catch-all turns into the standard silent degrade.
-const FALLBACK_BIN = __DIRECTOR_BIN_FALLBACK__
+// fallbackBin resolves the install-symlink tier (<hooks root>/bin/director) —
+// the same PATH-independent tier the bash shims probe, for GUI/launchd
+// processes whose PATH misses `director`. `director install --opencode`
+// substitutes the UNQUOTED placeholder identifier with a complete JSON-encoded
+// string literal, so no path character can escape the literal. The identifier
+// is referenced only INSIDE this function so that an untemplated copy (someone
+// hand-copying the repo source instead of running install) stays importable —
+// the ReferenceError is confined here and read as "no fallback tier", instead
+// of failing the whole module at evaluation time where only OpenCode's loader
+// isolation would save the session.
+function fallbackBin() {
+  try {
+    return __DIRECTOR_BIN_FALLBACK__
+  } catch {
+    return null
+  }
+}
 
 // hookTimeoutMs bounds one `director _hook` invocation so a wedged subprocess
 // can't stall the session's turn. The Go verbs are fast (ms-scale folds); ten
 // seconds is generous headroom, and on expiry the child is killed and the hook
-// degrades to a no-op.
+// degrades to a no-op. The bound is PER CANDIDATE: a non-executable PATH entry
+// that dies fast then a hanging fallback can stack to ~2x this before the
+// degrade — still bounded, and only on a machine whose director install is
+// already broken.
 const hookTimeoutMs = 10_000
 
 // runHook pipes a CC-shaped payload to `director _hook <event>` and returns the
@@ -54,7 +66,7 @@ const hookTimeoutMs = 10_000
 function runHook(event, payload) {
   const candidates = process.env.DIRECTOR_BIN
     ? [process.env.DIRECTOR_BIN]
-    : ["director", FALLBACK_BIN]
+    : ["director", fallbackBin()].filter(Boolean)
   return tryCandidates(candidates, event, payload)
 }
 
@@ -135,31 +147,38 @@ export const DirectorPlugin = async ({ directory, client }) => {
   // spawn a hook per LLM call. A server restart clears all of this; injected/
   // compacted degrade to a benign re-injection (what CC does on resume), and
   // the child classification is RECOVERED, not guessed: an unknown session id
-  // is looked up via client.session.get (see isChild) so a resumed child
-  // doesn't come back as a top-level session with a fleet row.
+  // is looked up via client.session.get (see classify) so a resumed child
+  // doesn't come back as a top-level session with a fleet row. One known
+  // upstream race, self-healing: session.compacted is delivered to plugins
+  // unawaited, so the very first post-compaction LLM request can beat the
+  // re-arm and miss the bridge; every subsequent request in the turn carries it.
   const injected = new Set()
   const children = new Set()
   const tops = new Set()
   const compacted = new Set()
   const compactCtx = new Map()
 
-  // isChild classifies a session, surviving server restarts: the created-event
-  // cache first, then one client.session.get lookup for an unknown id (cached
-  // on success). On lookup failure it reports top-level WITHOUT caching — the
-  // pre-recovery behavior, retried on the next call — because permanently
-  // mis-caching on a transient error would be worse than a redundant lookup.
-  const isChild = async (sid) => {
-    if (children.has(sid)) return true
-    if (tops.has(sid)) return false
+  // classify resolves a session to "child" | "top" | "unknown", surviving
+  // server restarts: the created-event cache first, then one
+  // client.session.get lookup for an unknown id (cached on success). A failed
+  // lookup is reported as "unknown", never guessed: every consumer SKIPS its
+  // action on unknown and retries on its next firing, because acting on a
+  // guess is worse in both directions — injecting the full ground truth into a
+  // subagent, or materializing a fleet row for one, pollutes the sibling
+  // counts other sessions see. Nothing is cached on failure, so a transient
+  // client error costs one skipped beat, not a permanent misclassification.
+  const classify = async (sid) => {
+    if (children.has(sid)) return "child"
+    if (tops.has(sid)) return "top"
     try {
       const res = await client.session.get({ path: { id: sid } })
       const info = res?.data ?? res
       if (info && typeof info === "object" && "id" in info) {
         ;(info.parentID ? children : tops).add(sid)
-        return !!info.parentID
+        return info.parentID ? "child" : "top"
       }
     } catch {}
-    return false
+    return "unknown"
   }
 
   // cwd is the server-level directory captured at init: OpenCode runs one
@@ -179,11 +198,18 @@ export const DirectorPlugin = async ({ directory, client }) => {
       try {
         const sid = event?.properties?.sessionID ?? event?.properties?.info?.id
         switch (event?.type) {
-          case "session.created":
-            ;(event.properties?.info?.parentID ? children : tops).add(event.properties.info.id)
+          case "session.created": {
+            const id = event.properties?.info?.id
+            if (id) (event.properties.info.parentID ? children : tops).add(id)
             return
+          }
           case "session.compacted":
-            if (sid && !(await isChild(sid))) {
+            // Gate on injected, not on a classification lookup: only sessions
+            // this server-life already classified top-level ever get injected,
+            // so injected.has IS the classification here — and a session that
+            // was never injected (post-restart) needs no re-arm, its next
+            // chat.message injects durably anyway.
+            if (sid && injected.has(sid)) {
               injected.delete(sid)
               compacted.add(sid)
               compactCtx.delete(sid)
@@ -197,7 +223,7 @@ export const DirectorPlugin = async ({ directory, client }) => {
             compactCtx.delete(sid)
             return
           case "session.idle":
-            if (!sid || (await isChild(sid))) return
+            if (!sid || (await classify(sid)) !== "top") return
             // End-of-turn Stop: fleet bookkeeping only. The emit-guard needs a
             // transcript to ever block, and this payload carries none, so any
             // control output is ignored by design — a block here would have
@@ -222,7 +248,12 @@ export const DirectorPlugin = async ({ directory, client }) => {
         let ctx = compactCtx.get(sid)
         if (ctx === undefined) {
           const control = await runHook("sessionstart", { ...basePayload("SessionStart", sid), source: "compact" })
-          ctx = control?.hookSpecificOutput?.additionalContext ?? ""
+          ctx = control?.hookSpecificOutput?.additionalContext
+          if (typeof ctx !== "string") ctx = "" // a foreign binary on PATH can emit any shape; only a string may enter the prompt
+          // The window may have closed during the await (session deleted, or a
+          // user message handed over to the durable injection) — re-check
+          // before caching, or a dead session's entry leaks until restart.
+          if (!compacted.has(sid)) return
           compactCtx.set(sid, ctx) // cache "" too — a failed/empty fetch must not re-spawn per request
         }
         if (ctx) output.system.push(ctx)
@@ -232,19 +263,23 @@ export const DirectorPlugin = async ({ directory, client }) => {
     "chat.message": async (input, output) => {
       try {
         const sid = input.sessionID
-        if (!sid || injected.has(sid) || (await isChild(sid))) return
-        // Marking BEFORE the await is the dedupe for concurrent fires — and it
-        // is deliberately not rolled back on a null control result: null can't
-        // distinguish "hook failed" from "nothing to inject" (a non-git dir),
-        // and retrying the latter would spawn a process on every message
-        // forever. The cost is that a genuinely broken setup stays uninjected
-        // until the server restarts — the same silent-degrade the shims choose.
+        if (!sid || injected.has(sid)) return
+        if ((await classify(sid)) !== "top") return
+        // The classify call suspended, so a concurrent fire for the same
+        // session may have passed the guard above in the meantime — re-check
+        // before claiming the injection, then mark. The mark is deliberately
+        // not rolled back on a null control result: null can't distinguish
+        // "hook failed" from "nothing to inject" (a non-git dir), and retrying
+        // the latter would spawn a process on every message forever. The cost
+        // is that a genuinely broken setup stays uninjected until the server
+        // restarts — the same silent-degrade the shims choose.
+        if (injected.has(sid)) return
         injected.add(sid)
         const source = compacted.delete(sid) ? "compact" : "startup"
         compactCtx.delete(sid) // hand-over: the durable part injection replaces the system-prompt bridge
         const control = await runHook("sessionstart", { ...basePayload("SessionStart", sid), source })
         const ctx = control?.hookSpecificOutput?.additionalContext
-        if (!ctx) return
+        if (typeof ctx !== "string" || !ctx) return // a foreign binary on PATH can emit any shape; only a string may become a part
         output.parts.unshift({
           id: "prt_director" + Math.random().toString(36).slice(2, 14),
           sessionID: sid,
@@ -259,13 +294,13 @@ export const DirectorPlugin = async ({ directory, client }) => {
     "tool.execute.after": async (input, output) => {
       try {
         const sid = input.sessionID
-        if (!sid || (await isChild(sid))) return
+        if (!sid || (await classify(sid)) !== "top") return
         const control = await runHook("posttooluse", {
           ...basePayload("PostToolUse", sid),
           tool_name: input.tool,
         })
         const ctx = control?.hookSpecificOutput?.additionalContext
-        if (!ctx) return
+        if (typeof ctx !== "string" || !ctx) return
         output.output = (output.output ?? "") + "\n\n" + ctx
       } catch {}
     },

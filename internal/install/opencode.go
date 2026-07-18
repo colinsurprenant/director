@@ -145,12 +145,14 @@ func UninstallOpenCode(pluginPath string) error {
 		// included, mirroring the CC/Codex missing-file stance.
 		return nil
 	case err != nil:
-		return fmt.Errorf("uninstall: read plugin %s: %w", pluginPath, err)
+		// No package prefix on the uninstall-path errors (house convention, see
+		// removeManagedEntries): the CLI wraps them with its verb.
+		return fmt.Errorf("read plugin %s: %w", pluginPath, err)
 	case !bytes.Contains(data, []byte(opencodeManagedMarker)):
-		return fmt.Errorf("uninstall: refusing to remove %s: it does not carry the %q marker (not a Director-managed file)", pluginPath, opencodeManagedMarker)
+		return fmt.Errorf("refusing to remove %s: it does not carry the %q marker (not a Director-managed file)", pluginPath, opencodeManagedMarker)
 	}
 	if err := os.Remove(pluginPath); err != nil {
-		return fmt.Errorf("uninstall: remove plugin %s: %w", pluginPath, err)
+		return fmt.Errorf("remove plugin %s: %w", pluginPath, err)
 	}
 	_ = os.Remove(filepath.Dir(pluginPath)) // succeeds only if empty; foreign plugins keep it intact
 	if commandsDir, err := DefaultOpenCodeCommandsDir(); err == nil {
@@ -192,12 +194,12 @@ func OpenCodePluginPresent(path string) bool {
 // writeOpenCodePlugin materializes the embedded plugin at pluginPath with the
 // fallback-binary placeholder templated to this install's symlink path. The
 // placeholder in the source is an UNQUOTED identifier and the substitution is
-// a complete JSON-encoded string literal (Go's encoder emits pure-ASCII JSON,
-// escaping quotes, backslashes, control characters, and the U+2028/U+2029
-// line separators, all of which are valid JavaScript string escapes), so no
-// path content can escape the literal and corrupt the generated file. The
-// write is atomic (temp + rename) and idempotent: re-install reproduces the
-// same bytes for the same hooks root.
+// a complete JSON-encoded string literal (Go's encoder escapes quotes,
+// backslashes, control characters, and the U+2028/U+2029 line separators;
+// other non-ASCII passes through as raw UTF-8, which is valid inside a
+// JavaScript string), so no path content can escape the literal and corrupt
+// the generated file. The write is atomic (temp + rename) and idempotent:
+// re-install reproduces the same bytes for the same hooks root.
 func writeOpenCodePlugin(pluginPath, hooksDir string) error {
 	data, err := opencodeFS.ReadFile("opencode/director.js")
 	if err != nil {

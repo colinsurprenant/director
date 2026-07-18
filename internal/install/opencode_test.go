@@ -166,6 +166,30 @@ func TestInstallOpenCodeRefusesForeignPlugin(t *testing.T) {
 	}
 }
 
+// TestInstallOpenCodeRefusesUnreadablePlugin: an existing plugin file the
+// preflight cannot READ is neither absent nor provably ours — refuse with the
+// inspect error (distinct from the unmarked refusal), never write through it.
+func TestInstallOpenCodeRefusesUnreadablePlugin(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root ignores file modes")
+	}
+	pluginPath, _, _ := setupOpenCode(t)
+	if err := os.MkdirAll(filepath.Dir(pluginPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pluginPath, []byte("unreadable"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+
+	err := InstallOpenCode(pluginPath)
+	if err == nil {
+		t.Fatal("InstallOpenCode over an unreadable plugin should refuse, got nil")
+	}
+	if !strings.Contains(err.Error(), "inspect plugin path") {
+		t.Errorf("unreadable plugin should get the inspect refusal, got: %v", err)
+	}
+}
+
 // TestInstallOpenCodeTemplatesHostilePathSafely: a hooks-dir override carrying
 // quote/backslash characters must still produce a syntactically valid plugin —
 // the fallback path is substituted as a complete JSON-encoded string literal,
@@ -189,7 +213,7 @@ func TestInstallOpenCodeTemplatesHostilePathSafely(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), "const FALLBACK_BIN = "+string(wantLiteral)+"\n") {
+	if !strings.Contains(string(b), "return "+string(wantLiteral)+"\n") {
 		t.Errorf("fallback path not substituted as a JSON string literal; want %s in:\n%.400s", wantLiteral, b)
 	}
 }
