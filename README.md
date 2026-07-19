@@ -9,7 +9,7 @@
 
 By now everyone agrees on the cure for context rot: don't push a degraded session, reset it, and carry distilled state forward, not the transcript. The advice is right; the cost is why nobody follows it. A fresh session starts blank on the state of the work (what was decided and why, which loops you left open on purpose, where the last block stopped), so every reset means re-explaining, and every week away means ten minutes of archaeology before real work starts. Most people pay that down by hand (a CLAUDE.md, a notes file, a "write a handoff for the next one" before they stop), and that instinct is right. But a hand-kept record rides on you remembering, has no open-vs-closed lifecycle, and doesn't survive two sessions at once. **The session boundary is where the state leaks**: one repo or many, whether it's a reset, a compaction, a session ending, a week away, or a parallel worktree.
 
-Director makes the reset free, and you don't operate it: it wires into Claude Code and Codex through hooks, the session emits as it works, and that state is injected into the next one as ground truth. It moves you out of the **message bus** seat: the ledger carries the state between sessions, and you go back to **directing the work**. Built around a shared, durable, **append-only event log** per repo:
+Director makes the reset free, and you don't operate it: it wires into Claude Code, Codex, and OpenCode through hooks, the session emits as it works, and that state is injected into the next one as ground truth. It moves you out of the **message bus** seat: the ledger carries the state between sessions, and you go back to **directing the work**. Built around a shared, durable, **append-only event log** per repo:
 
 - Sessions **`emit`** typed events as they work (`decision` · `open-item` · `handoff` · `note`) and **`resolve`** open loops when they truly close.
 - The log collapses deterministically into **`render`** (the machine digest), **`brief`** (the human re-orientation view), and **`status`** (the one-line-per-workstream cockpit).
@@ -18,7 +18,7 @@ Director makes the reset free, and you don't operate it: it wires into Claude Co
 
 Memory tools answer *"what does the agent know?"* Director answers *"what is the state of the work?"*: what was decided and why, which loops were deliberately deferred, and what still needs *you*. Facts accumulate; loops open and close, and nothing in a memory store ever *closes*. That lifecycle is the difference, and so is the delivery: pushed at session start, not recalled by similarity. Run both: they don't overlap.
 
-The LOG (plus the deliberately-edited living docs) is the only system of record; sessions and every rendered view are disposable caches reconstructible from it. Director wires natively into **Claude Code and OpenAI Codex**: same hooks, same log, same boundary commands, either agent alone or both side by side. A single static binary, stdlib-first, one vetted build-time dependency (`github.com/oklog/ulid/v2`). No daemon, no database, no cloud, no telemetry: the binary never opens a network connection, and the log is plain NDJSON.
+The LOG (plus the deliberately-edited living docs) is the only system of record; sessions and every rendered view are disposable caches reconstructible from it. Director wires natively into **Claude Code, OpenAI Codex, and OpenCode**: same log, same boundary commands, any of them alone or side by side. A single static binary, stdlib-first, one vetted build-time dependency (`github.com/oklog/ulid/v2`). No daemon, no database, no cloud, no telemetry: the binary never opens a network connection, and the log is plain NDJSON.
 
 ```text
 $ claude
@@ -80,7 +80,7 @@ One command downloads the right prebuilt binary for your platform (checksum-veri
 curl -fsSL https://raw.githubusercontent.com/colinsurprenant/director/main/install.sh | sh
 ```
 
-Wire Codex instead with `… | sh -s -- --codex` (or `--both`); install the binary only with `… | sh -s -- --no-wire`.
+Wire Codex instead with `… | sh -s -- --codex`, OpenCode with `--opencode`, all three agents with `--all` (wire flags combine: `--codex --opencode` wires exactly those two); install the binary only with `… | sh -s -- --no-wire`.
 
 > **On Windows?** Run the one-liner inside [WSL](https://learn.microsoft.com/windows/wsl/) with the Linux binary: everything works there, hooks included. Native Windows is CLI-only for now: the binary is built and CI-tested, and every manual verb (`emit`, `render`, `status`, `brief`, `show`, `resolve`, …) works from PowerShell, but the hook shims are bash, so the ambient layer (session-start injection, heartbeats, boundary nudges) is not yet wired natively.
 
@@ -93,7 +93,7 @@ go build -o bin/director ./cmd/director
 sudo install bin/director /usr/local/bin/director   # or copy it anywhere on PATH
 ```
 
-Then wire it into your agent. The one-liner already wired Claude Code; the sections below spell out what that does, and how to add Codex.
+Then wire it into your agent. The one-liner already wired Claude Code; the sections below spell out what that does, and how to add Codex and OpenCode.
 
 ### Wire into Claude Code
 
@@ -109,7 +109,7 @@ director install
 
 The installed hook commands point at the **shims**, not the binary directly, so rebuilding or relocating `director` never requires rewriting `settings.json` (re-run `install` to refresh the shims to the current binary). If `~/.claude/settings.json` already has a malformed (non-object) `hooks` value, `install` refuses rather than overwrite it.
 
-Confirm the wiring will actually fire with `director doctor`. The shims fail safe (a missing binary exits 0 and coordination silently no-ops), so a broken install is otherwise invisible; `doctor` walks the same binary-resolution ladder the shims walk and reports each link (binary, Claude Code hooks, Codex hooks if present, hub). It exits non-zero when the install is broken, and warns (without failing) on a partial one, such as a terminal-only install the desktop app would miss:
+Confirm the wiring will actually fire with `director doctor`. The shims fail safe (a missing binary exits 0 and coordination silently no-ops), so a broken install is otherwise invisible; `doctor` walks the same binary-resolution ladder the shims walk and reports each link (binary, Claude Code hooks, Codex and OpenCode hooks if present, hub). It exits non-zero when the install is broken, and warns (without failing) on a partial one, such as a terminal-only install the desktop app would miss:
 
 ```bash
 director doctor
@@ -123,7 +123,7 @@ director install --codex
 
 Codex's hook contract mirrors Claude Code's, so the **same shims serve both agents**, and neither install needs the other: `--codex` works standalone on a machine that has never run Claude Code. It merges the three hooks into `~/.codex/hooks.json` (never your `config.toml`) and installs the boundary commands as agent skills under `~/.agents/skills`, invoked as `$director-adopt`, `$director-complete`, `$director-handoff`. Codex asks you to **trust** the three hooks at your next session start (if you dismiss that prompt, run `/hooks` in the session). Details, including what degrades on Codex, in [`docs/getting-started.md`](docs/getting-started.md).
 
-Everything below uses the Claude Code command names (`/director:adopt` etc.); on Codex, read each as its `$director-*` skill twin: same command, same behavior.
+Everything below uses the Claude Code command names (`/director:adopt` etc.); on Codex, read each as its `$director-*` skill twin, and on OpenCode as its flat `/director-*` custom command (`/director-adopt`): same command, same behavior.
 
 ### Wire into OpenCode
 
@@ -154,19 +154,19 @@ Install paths and runtime knobs, common to both agents unless a default says oth
 
 ## Adopt an existing repo
 
-A director's projects already exist, so adoption of existing repos is on the critical path. It has two layers: **`director adopt` registers; `/director:adopt` understands** (on Codex: `$director-adopt`, same command, delivered as a skill). From inside (or pointing at) a repo:
+A director's projects already exist, so adoption of existing repos is on the critical path. It has two layers: **`director adopt` registers; `/director:adopt` understands** (on Codex: `$director-adopt`; on OpenCode: `/director-adopt` — same command, different delivery). From inside (or pointing at) a repo:
 
 ```bash
 director adopt [<dir>]        # defaults to the current directory
 ```
 
-Working in an agent session, you can skip straight to `/director:adopt` (Claude Code) or `$director-adopt` (Codex): the command runs this registration itself as its first step. The bare CLI verb is what you use outside a session (scripts, a quick shell registration).
+Working in an agent session, you can skip straight to `/director:adopt` (Claude Code), `$director-adopt` (Codex), or `/director-adopt` (OpenCode): the command runs this registration itself as its first step. The bare CLI verb is what you use outside a session (scripts, a quick shell registration).
 
 Adoption **requires a git repository**: workstream identity and liveness are derived from git. On a non-git directory `adopt` fails fast and tells you to `git init` first (an empty init is enough).
 
 `adopt` (the register layer) derives the repo's **stable workstream identity** (handling worktrees, remotes, and forks; see [Identity](#identity)), creates `projects/<repo-key>/` in the hub, scaffolds a ~3-line **CHARTER stub** there, and registers the workstream in the fleet. Re-adopting never clobbers an edited CHARTER. That is all the CLI does: deterministic, done in seconds.
 
-The understand layer is **`/director:adopt`** (Claude Code; `$director-adopt` on Codex), installed by the matching `director install` form and run inside an agent session. It starts with the same `director adopt`, then fans out read-only agents over the repo (docs and planning files, code TODOs read *in context*, git state, the repo's self-descriptions) and brings back two things for your confirmation:
+The understand layer is **`/director:adopt`** (Claude Code; `$director-adopt` on Codex; `/director-adopt` on OpenCode), installed by the matching `director install` form and run inside an agent session. It starts with the same `director adopt`, then fans out read-only agents over the repo (docs and planning files, code TODOs read *in context*, git state, the repo's self-descriptions) and brings back two things for your confirmation:
 
 - a **CHARTER proposal** (goal, non-goals, risk line): every claim cited, inferences marked `(inferred)`, plus the short list of questions only you can answer. Approved, it replaces the stub; adoption starts from an informed draft instead of a blank template.
 - the repo's open loops, **triaged** into four buckets: genuinely **in-flight** work (imported as `open-item` events after your confirm; git state must corroborate the prose, which keeps this bucket naturally small), **backlog** (stays in the repo's own tracker and planning docs; Director is not the tracker), **doc-stamps** (facts wearing a TODO costume; they feed the CHARTER), and **fossils**. Every bucket's count is reported; nothing is imported silently.
@@ -282,7 +282,7 @@ A workstream's id is `<repo>-<branch>-<shortid>`, derived deterministically from
 
 ## Status & scope
 
-**In v1:** the hook-first coordination core (CLI write path, identity, event store, fleet/liveness, `render`/`brief`/`status`, hooks + the `_managedBy` installer, the injected coordination protocol), **informed adoption** (`adopt` registers; `/director:adopt` drafts the CHARTER proposal and runs the triaged open-loop import; see [Adopt an existing repo](#adopt-an-existing-repo)), and a **Codex adapter**: `director install --codex` wires the same hooks into Codex's `hooks.json` (Codex asks you to trust them at the next session start; if you dismiss that prompt, run `/hooks` in the session) and installs the boundary commands as agent skills: `$director-adopt`, `$director-complete`, `$director-handoff`. Ground truth injection, liveness, and close-out work identically on both agents; the emit-guard and the context-fill handoff nudge are Claude Code-only for now (they read CC's transcript format and stay safely inert on Codex). Single-machine.
+**In v1:** the hook-first coordination core (CLI write path, identity, event store, fleet/liveness, `render`/`brief`/`status`, hooks + the `_managedBy` installer, the injected coordination protocol), **informed adoption** (`adopt` registers; `/director:adopt` drafts the CHARTER proposal and runs the triaged open-loop import; see [Adopt an existing repo](#adopt-an-existing-repo)), and a **Codex adapter**: `director install --codex` wires the same hooks into Codex's `hooks.json` (Codex asks you to trust them at the next session start; if you dismiss that prompt, run `/hooks` in the session) and installs the boundary commands as agent skills: `$director-adopt`, `$director-complete`, `$director-handoff`. Ground truth injection, liveness, and close-out work identically on both agents; the emit-guard and the context-fill handoff nudge are Claude Code-only for now (they read CC's transcript format and stay safely inert on Codex). Single-machine. **Since v1** (v1.9.0): an **OpenCode adapter**, `director install --opencode` — a managed plugin plus the boundary commands as `/director-*` custom commands; injection, liveness, and close-out work as on Claude Code, and the CC-only nudges stay safely inert there too.
 
 **Deferred:** deeper brownfield analysis beyond the informed-adopt pass (doc living/record/rot reconciliation, an arc42 overview draft, back-dated decision records). `brief --synthesize` (model-narrated prose) is deferred: v1 ships the deterministic brief. A background monitor/reaper, notifications, and a freshness sweep come later.
 
@@ -323,7 +323,8 @@ In each adopted worktree: `.director/workstream-id` (and `.director/repo-key`), 
 go build -o bin/director ./cmd/director
 sudo install bin/director /usr/local/bin/director
 director install              # Claude Code
-director install --codex      # OpenAI Codex — either, or both
+director install --codex      # OpenAI Codex — any combination
+director install --opencode   # OpenCode
 director doctor               # confirm the wiring will actually fire
 
 # 2. Register an existing repo in the fleet
@@ -331,7 +332,8 @@ cd ~/dev/src/some-project
 director adopt
 
 # 3. Open an agent session in that repo and run /director:adopt (Codex:
-#    $director-adopt) — it drafts the CHARTER from the repo's docs and triages
+#    $director-adopt; OpenCode: /director-adopt) — it drafts the CHARTER from
+#    the repo's docs and triages
 #    its real open loops for import, everything confirmed by you (or skip it
 #    and fill in the CHARTER stub by hand). From here on, every session start
 #    injects CHARTER + digest as Ground Truth.
