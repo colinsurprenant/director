@@ -49,6 +49,8 @@ func writeFixture(t *testing.T, contents string) (path, hooksDir string) {
 	t.Setenv(commandsDirEnv, filepath.Join(t.TempDir(), "commands"))
 	t.Setenv(codexHooksPathEnv, filepath.Join(t.TempDir(), "codex-hooks.json"))
 	t.Setenv(codexSkillsDirEnv, filepath.Join(t.TempDir(), "skills"))
+	t.Setenv(opencodePluginPathEnv, filepath.Join(t.TempDir(), "director.js"))
+	t.Setenv(opencodeCommandsDirEnv, filepath.Join(t.TempDir(), "oc-command"))
 	dir := t.TempDir()
 	path = filepath.Join(dir, "settings.json")
 	// Point the default CC settings at the fixture itself, so UninstallCodex's

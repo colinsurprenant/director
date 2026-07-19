@@ -90,6 +90,207 @@ func TestDoctorHealthy(t *testing.T) {
 	if hasCheck(rep, "codex hooks") {
 		t.Errorf("codex check must be absent without a Codex install")
 	}
+	if hasCheck(rep, "opencode hooks") {
+		t.Errorf("opencode check must be absent without an OpenCode install")
+	}
+}
+
+// TestDoctorOpenCodeOnlyIsHealthy: an OpenCode-only machine (no Claude Code
+// settings.json at all) must read healthy — the README documents --opencode as
+// standalone, so the CC check stands down when CC is absent and another target
+// is wired. The "no target anywhere" case keeps its fail (TestDoctorNoHooksFails).
+func TestDoctorOpenCodeOnlyIsHealthy(t *testing.T) {
+	skipUnixOnlyDoctor(t)
+	root := t.TempDir()
+	hooksDir := filepath.Join(root, "hooks")
+	t.Setenv("DIRECTOR_HOOKS_DIR", hooksDir)
+	pluginPath := filepath.Join(root, "plugin", "director.js")
+	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", pluginPath)
+	t.Setenv("DIRECTOR_OPENCODE_COMMANDS_DIR", filepath.Join(root, "oc-command"))
+	t.Setenv("DIRECTOR_CODEX_HOOKS_PATH", filepath.Join(root, "codex-hooks.json"))
+	if err := install.InstallOpenCode(pluginPath); err != nil {
+		t.Fatalf("InstallOpenCode fixture: %v", err)
+	}
+	binPath, err := install.DefaultBinPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := doctorInputs{
+		directorBin:    "",
+		lookDirector:   func() (string, bool) { return "", false },
+		settingsPath:   filepath.Join(root, "no-settings.json"), // absent: no CC install
+		hooksDir:       hooksDir,
+		binPath:        binPath,
+		codexHooks:     filepath.Join(root, "no-codex.json"),
+		opencodePlugin: pluginPath,
+		hub:            root,
+	}
+
+	rep := diagnose(in)
+	if !rep.healthy {
+		t.Fatalf("opencode-only install must be healthy, got %+v", rep.checks)
+	}
+	if hasCheck(rep, "claude code hooks") {
+		t.Errorf("claude check must stand down when CC is absent and OpenCode is wired")
+	}
+	if lv := levelOf(t, rep, "opencode hooks"); lv != levelOK {
+		t.Errorf("opencode check: got %v, want OK", lv)
+	}
+}
+
+// TestDoctorCodexOnlyIsHealthy pins the one pre-existing behavior the
+// target-symmetry gate changed: a Codex-only machine (documented standalone)
+// previously failed doctor on the unconditional CC check and must now read
+// healthy.
+func TestDoctorCodexOnlyIsHealthy(t *testing.T) {
+	skipUnixOnlyDoctor(t)
+	root := t.TempDir()
+	hooksDir := filepath.Join(root, "hooks")
+	t.Setenv("DIRECTOR_HOOKS_DIR", hooksDir)
+	t.Setenv("DIRECTOR_CODEX_SKILLS_DIR", filepath.Join(root, "skills"))
+	t.Setenv("DIRECTOR_SETTINGS_PATH", filepath.Join(root, "no-settings.json"))
+	codexHooks := filepath.Join(root, "codex-hooks.json")
+	t.Setenv("DIRECTOR_CODEX_HOOKS_PATH", codexHooks)
+	if err := install.InstallCodex(codexHooks); err != nil {
+		t.Fatalf("InstallCodex fixture: %v", err)
+	}
+	binPath, err := install.DefaultBinPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := doctorInputs{
+		lookDirector:   func() (string, bool) { return "", false },
+		settingsPath:   filepath.Join(root, "no-settings.json"),
+		hooksDir:       hooksDir,
+		binPath:        binPath,
+		codexHooks:     codexHooks,
+		opencodePlugin: filepath.Join(root, "no-plugin.js"),
+		hub:            root,
+	}
+
+	rep := diagnose(in)
+	if !rep.healthy {
+		t.Fatalf("codex-only install must be healthy, got %+v", rep.checks)
+	}
+	if hasCheck(rep, "claude code hooks") {
+		t.Errorf("claude check must stand down when CC is absent and Codex is wired")
+	}
+	if lv := levelOf(t, rep, "codex hooks"); lv != levelOK {
+		t.Errorf("codex check: got %v, want OK", lv)
+	}
+}
+
+// TestDoctorMalformedSettingsWithOpenCodeStillFails pins the load-bearing half
+// of the stand-down gate: a PRESENT-but-malformed settings.json is not
+// "absent", so a wired OpenCode install must not hide the broken file — the CC
+// check stays, fails, and names the real remedy.
+func TestDoctorMalformedSettingsWithOpenCodeStillFails(t *testing.T) {
+	skipUnixOnlyDoctor(t)
+	root := t.TempDir()
+	hooksDir := filepath.Join(root, "hooks")
+	t.Setenv("DIRECTOR_HOOKS_DIR", hooksDir)
+	pluginPath := filepath.Join(root, "plugin", "director.js")
+	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", pluginPath)
+	t.Setenv("DIRECTOR_OPENCODE_COMMANDS_DIR", filepath.Join(root, "oc-command"))
+	if err := install.InstallOpenCode(pluginPath); err != nil {
+		t.Fatal(err)
+	}
+	bad := filepath.Join(root, "settings.json")
+	if err := os.WriteFile(bad, []byte("{ this is not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	binPath, err := install.DefaultBinPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := doctorInputs{
+		lookDirector:   func() (string, bool) { return "", false },
+		settingsPath:   bad,
+		hooksDir:       hooksDir,
+		binPath:        binPath,
+		codexHooks:     filepath.Join(root, "no-codex.json"),
+		opencodePlugin: pluginPath,
+		hub:            root,
+	}
+
+	rep := diagnose(in)
+	if rep.healthy {
+		t.Fatal("a malformed settings.json must sink doctor even with OpenCode wired")
+	}
+	if lv := levelOf(t, rep, "claude code hooks"); lv != levelFail {
+		t.Errorf("claude check must stay and fail on a malformed file, got %v", lv)
+	}
+}
+
+// TestDoctorOpenCodeDeadLadderFails is the false-healthy hole the adversarial
+// review reproduced: a DIRECTOR_BIN pinned only in settings.json (which the
+// OpenCode server never inherits) + no PATH hit + a missing fallback symlink
+// means the plugin's entire ladder no-ops — the opencode check must FAIL, not
+// hide behind the settings-pin-satisfied binary check.
+func TestDoctorOpenCodeDeadLadderFails(t *testing.T) {
+	in := installedFixture(t)
+	pluginPath := filepath.Join(t.TempDir(), "plugin", "director.js")
+	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", pluginPath)
+	t.Setenv("DIRECTOR_OPENCODE_COMMANDS_DIR", filepath.Join(t.TempDir(), "oc-command"))
+	if err := install.InstallOpenCode(pluginPath); err != nil {
+		t.Fatal(err)
+	}
+	in.opencodePlugin = pluginPath
+	in.directorBin = os.Args[0] // a VALID binary, pinned via settings only
+	in.directorBinFromSettings = true
+	if err := os.Remove(in.binPath); err != nil {
+		t.Fatal(err)
+	}
+
+	rep := diagnose(in)
+	if lv := levelOf(t, rep, "opencode hooks"); lv != levelFail {
+		t.Errorf("dead plugin ladder must FAIL the opencode check, got %v", lv)
+	}
+	for _, c := range rep.checks {
+		if c.title == "opencode hooks" && !strings.Contains(c.detail, "does NOT reach the OpenCode server") {
+			t.Errorf("failure should explain the settings-pin gap, got: %s", c.detail)
+		}
+	}
+}
+
+// TestDoctorOpenCodeStaleBakedPathFails: the plugin bakes its fallback path at
+// install time; after a DIRECTOR_HOOKS_DIR move doctor would otherwise verify
+// the NEW symlink while the plugin probes the OLD path — the mismatch must
+// surface with a re-install remedy.
+func TestDoctorOpenCodeStaleBakedPathFails(t *testing.T) {
+	in := installedFixture(t)
+	pluginPath := filepath.Join(t.TempDir(), "plugin", "director.js")
+	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", pluginPath)
+	t.Setenv("DIRECTOR_OPENCODE_COMMANDS_DIR", filepath.Join(t.TempDir(), "oc-command"))
+	if err := install.InstallOpenCode(pluginPath); err != nil {
+		t.Fatal(err)
+	}
+	in.opencodePlugin = pluginPath
+	in.binPath = filepath.Join(t.TempDir(), "moved", "bin", "director") // hooks dir moved after install
+
+	rep := diagnose(in)
+	if lv := levelOf(t, rep, "opencode hooks"); lv != levelFail {
+		t.Errorf("stale baked fallback path must FAIL the opencode check, got %v", lv)
+	}
+}
+
+// TestDoctorOpenCodePresent: with a managed plugin on disk the opencode check
+// appears and reads OK; the fixture's zero opencodePlugin path keeps it absent
+// everywhere else (OpenCodePluginPresent fails closed on "").
+func TestDoctorOpenCodePresent(t *testing.T) {
+	in := installedFixture(t)
+	pluginPath := filepath.Join(t.TempDir(), "plugin", "director.js")
+	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", pluginPath)
+	t.Setenv("DIRECTOR_OPENCODE_COMMANDS_DIR", filepath.Join(t.TempDir(), "oc-command"))
+	if err := install.InstallOpenCode(pluginPath); err != nil {
+		t.Fatalf("InstallOpenCode fixture: %v", err)
+	}
+	in.opencodePlugin = pluginPath
+
+	rep := diagnose(in)
+	if lv := levelOf(t, rep, "opencode hooks"); lv != levelOK {
+		t.Errorf("opencode check: got %v, want OK", lv)
+	}
 }
 
 func TestDoctorDirectorBinBrokenFails(t *testing.T) {
@@ -211,6 +412,7 @@ func TestRunDoctorSandboxed(t *testing.T) {
 	t.Setenv("DIRECTOR_COMMANDS_DIR", filepath.Join(root, "commands"))
 	t.Setenv("DIRECTOR_SETTINGS_PATH", settings)
 	t.Setenv("DIRECTOR_CODEX_HOOKS_PATH", filepath.Join(root, "no-codex.json"))
+	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", filepath.Join(root, "no-plugin.js"))
 	t.Setenv("DIRECTOR_HUB", root)
 	t.Setenv("DIRECTOR_BIN", "") // unset override → rely on the symlink tier
 	if err := install.Install(settings); err != nil {
@@ -241,6 +443,7 @@ func TestDoctorSettingsPinnedBinBroken(t *testing.T) {
 	t.Setenv("DIRECTOR_COMMANDS_DIR", filepath.Join(root, "commands"))
 	t.Setenv("DIRECTOR_SETTINGS_PATH", settings)
 	t.Setenv("DIRECTOR_CODEX_HOOKS_PATH", filepath.Join(root, "no-codex.json"))
+	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", filepath.Join(root, "no-plugin.js"))
 	t.Setenv("DIRECTOR_HUB", root)
 	t.Setenv("DIRECTOR_BIN", "") // NOT pinned in the shell
 	if err := install.Install(settings); err != nil {

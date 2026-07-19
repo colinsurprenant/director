@@ -186,6 +186,34 @@ shims are shared between the two agents: either uninstall form leaves them in pl
 agent's install still references them, and reclaims them once neither does, so uninstalling one agent
 never silently breaks the other, and uninstalling the last one leaves no shim files behind.
 
+### Using OpenCode?
+
+```bash
+director install --opencode
+```
+
+OpenCode's hooks are in-process plugin function calls, not command hooks, so there are no shims on
+this path: the `--opencode` form drops one self-contained managed plugin at
+`~/.config/opencode/plugin/director.js` (a pure file drop: OpenCode loads it with no registration,
+and none of your config files are merged or modified) and the boundary commands as custom commands
+at `~/.config/opencode/command/`, invoked as `/director-adopt`, `/director-complete`,
+`/director-handoff`. OpenCode-specific notes:
+
+- **Injection rides the first message.** OpenCode has no injectable session-start hook, so the plugin
+  prepends the ground truth to the first user message of each session. After a compaction the resumed
+  turn is re-grounded through the system prompt (OpenCode's auto-continuation bypasses the message
+  hook), and the next user message re-injects the state durably. Behavior is otherwise identical to
+  Claude Code's session-start injection.
+- The Stop emit-guard and the context-fill handoff nudge read CC's transcript format and stay safely
+  inert on OpenCode; end-of-turn fleet bookkeeping still runs (OpenCode's `session.idle` is a
+  turn-end signal, so liveness matches Claude Code's).
+- The plugin resolves the `director` binary the same way the shims do: `DIRECTOR_BIN`, then `PATH`,
+  then the symlink `install` drops at `<hooks root>/bin/director`.
+
+`director uninstall --opencode` removes only the managed plugin (it refuses to touch a
+`director.js` it does not own) and the `/director-*` command files; the shared bin symlink survives
+while a Claude Code or Codex install still references it.
+
 ---
 
 ## 2. Adopt a repo

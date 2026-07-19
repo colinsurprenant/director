@@ -59,8 +59,12 @@ func handlePostToolUse(in Input, out io.Writer, hub string) error {
 			// Handoff-threshold nudge (handoffnudge.go): it has the real context-fill
 			// signal, so when it fires this call carries ITS nudge alone — never
 			// stacked with the blind flush nudge below on the same tool call.
+			// The nudge text names /director:handoff — rewrite it for the starting
+			// agent's command namespace, same rule as the session-start protocol.
+			// (Inert off Claude Code today — the nudge needs a CC transcript — but
+			// the rewrite must not be the thing that breaks when that changes.)
 			if text, usage := runHandoffNudge(in, hub, ws); text != "" {
-				if err := writePostToolUseContext(out, text); err != nil {
+				if err := writePostToolUseContext(out, commandNamesFor(text, agentFlavor(in))); err != nil {
 					return fmt.Errorf("write handoff nudge: %w", err)
 				}
 				logSuccess(hub, EventPostToolUse, in.SessionID, fmt.Sprintf("handoff nudge fired at ~%d context tokens", usage))

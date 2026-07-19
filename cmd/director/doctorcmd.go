@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -70,6 +72,7 @@ type doctorInputs struct {
 	hooksDir                string                // where the shims live
 	binPath                 string                // the install symlink tier (<hooks root>/bin/director)
 	codexHooks              string                // ~/.codex/hooks.json
+	opencodePlugin          string                // ~/.config/opencode/plugin/director.js
 	hub                     string                // the coordination hub root
 }
 
@@ -129,6 +132,10 @@ func doctorInputsFromEnv() (doctorInputs, error) {
 	if err != nil {
 		return doctorInputs{}, err
 	}
+	opencodePlugin, err := install.DefaultOpenCodePluginPath()
+	if err != nil {
+		return doctorInputs{}, err
+	}
 	hub, err := hubRoot()
 	if err != nil {
 		return doctorInputs{}, err
@@ -156,6 +163,7 @@ func doctorInputsFromEnv() (doctorInputs, error) {
 		hooksDir:                hooksDir,
 		binPath:                 binPath,
 		codexHooks:              codexHooks,
+		opencodePlugin:          opencodePlugin,
 		hub:                     hub,
 	}, nil
 }
@@ -165,9 +173,24 @@ func doctorInputsFromEnv() (doctorInputs, error) {
 func diagnose(in doctorInputs) doctorReport {
 	var r doctorReport
 	r.checks = append(r.checks, binaryResolutionCheck(in))
-	r.checks = append(r.checks, claudeHooksCheck(in))
-	if c, ok := codexHooksCheck(in); ok {
-		r.checks = append(r.checks, c)
+	// Targets are assessed symmetrically: each installed agent gets its check,
+	// and the Claude Code check — historically unconditional — is skipped only
+	// when CC is genuinely absent (no managed entries AND no parse error, which
+	// would hide a broken file) while another agent IS wired. A machine with no
+	// target at all keeps the CC fail as its "run director install" guidance;
+	// without this gate an OpenCode- or Codex-only install (documented as
+	// standalone) would deterministically exit unhealthy.
+	codexCheck, codexPresent := codexHooksCheck(in)
+	opencodeCheck, opencodePresent := opencodeHooksCheck(in)
+	claudeAbsent := !install.ManagedEntriesPresent(in.settingsPath) && install.SettingsParseError(in.settingsPath) == nil
+	if !claudeAbsent || (!codexPresent && !opencodePresent) {
+		r.checks = append(r.checks, claudeHooksCheck(in))
+	}
+	if codexPresent {
+		r.checks = append(r.checks, codexCheck)
+	}
+	if opencodePresent {
+		r.checks = append(r.checks, opencodeCheck)
 	}
 	r.checks = append(r.checks, hubCheck(in.hub))
 
@@ -256,6 +279,45 @@ func codexHooksCheck(in doctorInputs) (check, bool) {
 			"%s references Director hooks, but shims are missing from %s (%s) — re-run `director install --codex`.", in.codexHooks, in.hooksDir, strings.Join(missing, ", "))}, true
 	}
 	return check{"codex hooks", levelOK, fmt.Sprintf("wired in %s", in.codexHooks)}, true
+}
+
+// opencodeHooksCheck reports the OpenCode side only when its managed plugin is
+// present, so it never nags a user on another agent. Presence alone is NOT the
+// whole check: the plugin resolves the director binary itself (process env →
+// PATH → the fallback path BAKED into it at install time), and its ladder
+// deliberately differs from the shims' in two ways doctor must model — a
+// DIRECTOR_BIN pinned in settings.json "env" is injected by Claude Code into
+// hook processes but never reaches the OpenCode server, and the baked
+// fallback is absolute, so a DIRECTOR_HOOKS_DIR move leaves the plugin
+// probing the OLD path while binaryResolutionCheck happily verifies the new
+// one. Without this, a settings-pinned machine with a dead PATH/symlink reads
+// all-healthy while OpenCode coordination is silently dead.
+func opencodeHooksCheck(in doctorInputs) (check, bool) {
+	if !install.OpenCodePluginPresent(in.opencodePlugin) {
+		return check{}, false
+	}
+	baked := false
+	if data, err := os.ReadFile(in.opencodePlugin); err == nil {
+		if lit, err := json.Marshal(in.binPath); err == nil {
+			baked = bytes.Contains(data, lit)
+		}
+	}
+	envBin := in.directorBin != "" && !in.directorBinFromSettings
+	_, pathHit := in.lookDirector()
+	// Same executability bar as the main ladder: a present-but-non-executable
+	// fallback dies with EACCES in the plugin's spawn, and it is the LAST
+	// candidate — nothing behind it to degrade to.
+	symlinkOK := isExecutable(in.binPath)
+	switch {
+	case envBin || pathHit || (baked && symlinkOK):
+		return check{"opencode hooks", levelOK, fmt.Sprintf("plugin present at %s", in.opencodePlugin)}, true
+	case !baked:
+		return check{"opencode hooks", levelFail, fmt.Sprintf(
+			"plugin at %s bakes a fallback path that is not the current %s (hooks dir moved, or the file is untemplated) — re-run `director install --opencode`.", in.opencodePlugin, in.binPath)}, true
+	default:
+		return check{"opencode hooks", levelFail, fmt.Sprintf(
+			"plugin present at %s but its binary ladder resolves nothing: no DIRECTOR_BIN in the environment (a settings.json env pin does NOT reach the OpenCode server), `director` not on PATH, and the fallback %s is missing — re-run `director install --opencode`.", in.opencodePlugin, in.binPath)}, true
+	}
 }
 
 // hubCheck confirms coordination state can actually be written. A not-yet-created

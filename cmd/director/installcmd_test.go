@@ -10,6 +10,35 @@ import (
 // touching anything — the shims are bash, so installing there plants hooks the
 // agent can never execute. Both the Claude Code and Codex forms are guarded
 // (the shims are shared). Uninstall stays available as a cleanup path.
+// TestInstallTargetFlagsMutuallyExclusive: --codex and --opencode name
+// different agents; combining them must be a usage error (exit 2) for both
+// verbs, before any default-path resolution.
+func TestInstallTargetFlagsMutuallyExclusive(t *testing.T) {
+	if code := runInstall([]string{"--codex", "--opencode"}); code != 2 {
+		t.Errorf("install --codex --opencode: exit = %d, want 2", code)
+	}
+	if code := runUninstall([]string{"--codex", "--opencode"}); code != 2 {
+		t.Errorf("uninstall --codex --opencode: exit = %d, want 2", code)
+	}
+}
+
+// TestInstallOpenCodeRefusesNativeWindows: the --opencode target is refused on
+// native Windows too (its fallback tier is the unix-only symlink), with the
+// refusal happening before any file is written.
+func TestInstallOpenCodeRefusesNativeWindows(t *testing.T) {
+	old := installGOOS
+	installGOOS = "windows"
+	t.Cleanup(func() { installGOOS = old })
+
+	pluginPath := filepath.Join(t.TempDir(), "director.js")
+	if code := runInstall([]string{"--opencode", "--settings", pluginPath}); code != 1 {
+		t.Fatalf("install --opencode on native windows: exit = %d, want 1", code)
+	}
+	if _, err := os.Stat(pluginPath); !os.IsNotExist(err) {
+		t.Fatal("refused install must not write the plugin file")
+	}
+}
+
 func TestInstallRefusesNativeWindows(t *testing.T) {
 	old := installGOOS
 	installGOOS = "windows"

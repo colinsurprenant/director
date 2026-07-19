@@ -90,7 +90,7 @@ func handleSessionStart(in Input, out io.Writer, hub string) error {
 		}
 	}
 
-	ctx, err := buildGroundTruth(hub, ws.RepoKey, ws.ID, in.SessionID, sessionUUID(in), isCodexTranscript(in.TranscriptPath))
+	ctx, err := buildGroundTruth(hub, ws.RepoKey, ws.ID, in.SessionID, sessionUUID(in), agentFlavor(in))
 	if err != nil {
 		logFailure(hub, EventSessionStart, in.SessionID, fmt.Sprintf("build ground truth: %v", err))
 		return nil
@@ -160,9 +160,9 @@ const injectionBudgetBytes = 16 * 1024
 // digest itself and health-logged. sessionID is only for health-logging a
 // nudge/concurrency failure (both fail-open, never blocking the injection);
 // uuid is this session's fleet-row key, used to exclude its own row from the
-// concurrent-session count. codex switches the protocol/nudge command names to
-// Codex's skill-mention namespace (see codexCommandNames).
-func buildGroundTruth(hub, repoKey, workstreamID, sessionID, uuid string, codex bool) (string, error) {
+// concurrent-session count. flavor switches the protocol/nudge command names to
+// the starting agent's namespace (see commandNamesFor).
+func buildGroundTruth(hub, repoKey, workstreamID, sessionID, uuid, flavor string) (string, error) {
 	store := event.NewStore(hub, repoKey)
 	events, err := store.ReadAll()
 	if err != nil {
@@ -180,14 +180,14 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID, uuid string, codex 
 	// must not run it twice.
 	var protocol, nudge, banner, concurrent, resume string
 	if managed {
-		protocol = codexCommandNames(emitProtocol, codex)
+		protocol = commandNamesFor(emitProtocol, flavor)
 		n, err := closeOutNudge(hub, repoKey, workstreamID, proj, time.Now().UTC())
 		if err != nil {
 			// Fail open: the nudge is advisory — a fleet read problem must never
 			// cost the session its Ground Truth. Log it and inject without.
 			logFailure(hub, EventSessionStart, sessionID, fmt.Sprintf("close-out nudge: %v", err))
 		} else if n != "" {
-			nudge = codexCommandNames(n, codex)
+			nudge = commandNamesFor(n, flavor)
 		}
 		// Sibling sessions live on this same workstream (same checkout). "Live"
 		// is a row with a heartbeat younger than the idle TTL — but note what a
@@ -325,17 +325,37 @@ func isCodexTranscript(path string) bool {
 	return strings.Contains(filepath.ToSlash(path), "/.codex/")
 }
 
-// codexCommandNames rewrites CC-namespaced command references
-// (/director:complete) to their Codex skill mentions ($director-complete —
-// the boundary commands install as agent skills there) when the starting
-// session is a Codex one. Applied ONLY to the protocol and nudge blocks
-// Director authors — never to the digest, which must stay byte-for-byte the
-// render output.
-func codexCommandNames(s string, codex bool) string {
-	if !codex {
+// agentFlavor resolves which agent's command namespace the injected
+// protocol/nudge blocks should use. An adapter that fabricates its own payloads
+// (the OpenCode plugin) names itself in the `agent` field; otherwise Codex is
+// detected from the transcript path and everything else reads as Claude Code —
+// the same best-effort stance as isCodexTranscript (a wrong guess costs only a
+// command name the human can map, never state).
+func agentFlavor(in Input) string {
+	if in.Agent != "" {
+		return in.Agent
+	}
+	if isCodexTranscript(in.TranscriptPath) {
+		return "codex"
+	}
+	return "claude"
+}
+
+// commandNamesFor rewrites CC-namespaced command references
+// (/director:complete) to the starting agent's namespace: Codex skill mentions
+// ($director-complete — the boundary commands install as agent skills there)
+// or OpenCode's flat custom commands (/director-complete). Applied ONLY to the
+// protocol and nudge blocks Director authors — never to the digest, which must
+// stay byte-for-byte the render output.
+func commandNamesFor(s, flavor string) string {
+	switch flavor {
+	case "codex":
+		return strings.ReplaceAll(s, "/director:", "$director-")
+	case "opencode":
+		return strings.ReplaceAll(s, "/director:", "/director-")
+	default:
 		return s
 	}
-	return strings.ReplaceAll(s, "/director:", "$director-")
 }
 
 // closeOutNudge surfaces dead SIBLING workstreams of this repo — branch gone,

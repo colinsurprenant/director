@@ -484,6 +484,35 @@ func TestSessionStartCodexCommandNames(t *testing.T) {
 	}
 }
 
+// TestSessionStartOpenCodeCommandNames: an OpenCode session (the plugin names
+// itself in the payload's agent field — there is no transcript to detect from)
+// gets the protocol block with OpenCode's flat custom-command names
+// (/director-complete), never the CC or Codex forms.
+func TestSessionStartOpenCodeCommandNames(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+
+	// Non-empty log opens the adopted-repo gate so the protocol block is present.
+	store := event.NewStore(hub, ws.RepoKey)
+	if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindNote, Area: "x", Body: "working"}); err != nil {
+		t.Fatalf("seed note: %v", err)
+	}
+
+	in := `{"session_id":"s-oc","transcript_path":"","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup","agent":"opencode"}`
+	var out bytes.Buffer
+	if code := Dispatch(EventSessionStart, strings.NewReader(in), &out, hub); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	got := out.String()
+	if !strings.Contains(got, "/director-complete") || !strings.Contains(got, "/director-handoff") {
+		t.Errorf("opencode session should get flat /director-* command names in the protocol:\n%s", got)
+	}
+	if strings.Contains(got, "/director:complete") || strings.Contains(got, "$director-complete") {
+		t.Errorf("opencode session must not be told CC or Codex command names:\n%s", got)
+	}
+}
+
 // TestSessionStartCloseOutNudgeForGoneSibling: the "later session" surface of
 // the branch-gone signal. A worktree session leaves an open-item, its branch
 // merges away and is deleted; the NEXT session on the repo (a different
