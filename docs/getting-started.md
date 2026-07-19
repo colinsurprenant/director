@@ -26,7 +26,8 @@ curl -fsSL https://raw.githubusercontent.com/colinsurprenant/director/main/insta
 
 One command downloads the right prebuilt binary for your platform (checksum-verified), installs it to
 `~/.local/bin`, and runs `director install` to wire Claude Code (wire Codex instead with
-`… | sh -s -- --codex`, or `--both`; install the binary only with `… | sh -s -- --no-wire`).
+`… | sh -s -- --codex`, OpenCode with `--opencode`, all three with `--all`; wire flags combine,
+and `… | sh -s -- --no-wire` installs the binary only).
 **Already ran it?** The binary is in place: run `director doctor` to confirm the wiring, then skip
 to section 2.
 

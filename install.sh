@@ -8,12 +8,18 @@
 #   curl -fsSL https://raw.githubusercontent.com/colinsurprenant/director/main/install.sh | sh
 #
 # Options (pass through sh: `... | sh -s -- <opt>`), `--opt value` or `--opt=value`:
-#   --codex        wire OpenAI Codex instead of Claude Code
-#   --both         wire both agents
+#   --claude       wire Claude Code (the default when no wire flag is given)
+#   --codex        wire OpenAI Codex
+#   --opencode     wire OpenCode
+#   --all          wire all three agents
 #   --no-wire      install the binary only, wire nothing
 #   --version T    install release tag T (default: latest)
 #   --dir D        install the binary into D (default: ~/.local/bin)
 #   --help         print this and exit
+#
+# Wire flags are additive: naming any of them replaces the Claude Code default
+# with exactly the named set (`--codex --opencode` wires those two, not Claude).
+# `--both` (the pre-OpenCode "Claude + Codex") was removed in favor of --all.
 #
 # Environment overrides (flags win over these):
 #   DIRECTOR_VERSION       release tag to install (default: latest)
@@ -30,7 +36,13 @@
 set -eu
 
 REPO="colinsurprenant/director"
-WIRE="claude" # claude | codex | both | none
+# Wire targets. Claude Code is the default until an explicit wire flag speaks;
+# the first one clears the default, later ones add (see add_wire).
+WIRE_CLAUDE=1
+WIRE_CODEX=0
+WIRE_OPENCODE=0
+WIRE_EXPLICIT=0
+WIRE_NONE=0
 VERSION="${DIRECTOR_VERSION:-}"
 # The ~/.local/bin default is applied AFTER arg parsing so that --dir /
 # DIRECTOR_INSTALL_DIR work even when HOME is unset (stripped envs, cron, sudo).
@@ -55,8 +67,11 @@ Install Director (a coordination ledger for your coding-agent work).
   curl -fsSL https://raw.githubusercontent.com/colinsurprenant/director/main/install.sh | sh
 
 Options (via `... | sh -s -- <opt>`):
-  --codex        wire OpenAI Codex instead of Claude Code
-  --both         wire both agents
+  --claude       wire Claude Code (the default when no wire flag is given)
+  --codex        wire OpenAI Codex
+  --opencode     wire OpenCode
+  --all          wire all three agents (wire flags are additive: combine
+                 --claude/--codex/--opencode to wire exactly that set)
   --no-wire      install the binary only
   --version T    install release tag T (default: latest)
   --dir D        install into D (default: ~/.local/bin)
@@ -64,12 +79,33 @@ Options (via `... | sh -s -- <opt>`):
 EOF
 }
 
+# First explicit wire flag replaces the Claude Code default; later ones add.
+add_wire() {
+	if [ "$WIRE_EXPLICIT" -eq 0 ]; then
+		WIRE_CLAUDE=0
+		WIRE_EXPLICIT=1
+	fi
+	case "$1" in
+	claude) WIRE_CLAUDE=1 ;;
+	codex) WIRE_CODEX=1 ;;
+	opencode) WIRE_OPENCODE=1 ;;
+	*) die "add_wire: unknown target $1" ;; # unreachable; guards future call sites
+	esac
+}
+
 # --- args ----------------------------------------------------------------
 while [ $# -gt 0 ]; do
 	case "$1" in
-	--codex) WIRE=codex ;;
-	--both) WIRE=both ;;
-	--no-wire) WIRE=none ;;
+	--claude) add_wire claude ;;
+	--codex) add_wire codex ;;
+	--opencode) add_wire opencode ;;
+	--all)
+		add_wire claude
+		add_wire codex
+		add_wire opencode
+		;;
+	--both | --both=*) die "--both was removed now that there are three wire targets — use --all, or combine --claude/--codex/--opencode" ;;
+	--no-wire) WIRE_NONE=1 ;;
 	--version)
 		[ $# -ge 2 ] || die "--version needs a value"
 		VERSION="$2"
@@ -90,6 +126,12 @@ while [ $# -gt 0 ]; do
 	esac
 	shift
 done
+
+# Checked after the loop so the conflict is caught in either flag order.
+if [ "$WIRE_NONE" -eq 1 ]; then
+	[ "$WIRE_EXPLICIT" -eq 0 ] || die "--no-wire contradicts --claude/--codex/--opencode/--all"
+	WIRE_CLAUDE=0
+fi
 
 # Apply the default install dir now that flags/env have spoken. Only here is HOME
 # needed, and only when no explicit dir was given — so --dir rescues a HOME-less
@@ -223,15 +265,10 @@ run_wire() { # DESCRIPTION ARGS...
 		wire_failed=1
 	}
 }
-case "$WIRE" in
-claude) run_wire "Wiring Claude Code…" install ;;
-codex) run_wire "Wiring Codex…" install --codex ;;
-both)
-	run_wire "Wiring Claude Code…" install
-	run_wire "Wiring Codex…" install --codex
-	;;
-none) info "Skipping agent wiring (--no-wire)." ;;
-esac
+if [ "$WIRE_CLAUDE" -eq 1 ]; then run_wire "Wiring Claude Code…" install; fi
+if [ "$WIRE_CODEX" -eq 1 ]; then run_wire "Wiring Codex…" install --codex; fi
+if [ "$WIRE_OPENCODE" -eq 1 ]; then run_wire "Wiring OpenCode…" install --opencode; fi
+if [ "$WIRE_NONE" -eq 1 ]; then info "Skipping agent wiring (--no-wire)."; fi
 
 # --- PATH guidance + next steps -----------------------------------------
 on_path=0
@@ -243,7 +280,11 @@ if [ "$on_path" -eq 0 ]; then
 	info "NOTE: $INSTALL_DIR is not on your PATH. To run 'director' directly, add:"
 	info "    export PATH=\"$INSTALL_DIR:\$PATH\""
 	info "  to your ~/.profile, ~/.bashrc, or ~/.zshrc."
-	info "  (Director's Claude Code hooks already work without this — 'install' dropped a PATH-independent fallback.)"
+	# Every wire form drops the PATH-independent bin symlink; with --no-wire
+	# nothing was wired, so there is no fallback to reassure about.
+	if [ "$WIRE_NONE" -eq 0 ]; then
+		info "  (Director's hooks already work without this — 'install' dropped a PATH-independent fallback.)"
+	fi
 fi
 
 # Point at the binary the way the user can actually invoke it right now.
