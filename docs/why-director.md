@@ -12,7 +12,7 @@ And it compounds. Work in **blocks** over weeks (a few days deep in one project,
 
 The leak is specific. Native agent memory has gotten good at *facts*: what the project is, how the build works, your preferences. What nothing carries is the **coordination narrative**: what was decided and why, which loops were deliberately deferred, where the work stopped when the block ended, and what still needs *you*. So you become the message bus, re-explaining last month's decision to this morning's session, re-discovering your own open loops by grepping git history, relaying context by hand between a worktree session and the main one.
 
-Director exists to move you from **message bus** to **reviewer**.
+Director exists to take the message-bus job off you. The ledger relays the state; you direct the work.
 
 ## What Director is
 
@@ -84,6 +84,9 @@ Honest answers to the five-minute evaluation questions.
 
 **vs. memory tools (Claude Code auto-memory, claude-mem, mem0, and the rest).**
 Different question. Memory tools answer *"what does the agent know?"*: recall across sequential sessions, and the good ones do it automatically and well. Director answers *"what is in flight?"*: what was decided, what's still open, where the work stands, and what needs the human, across a portfolio, with lifecycle semantics (an open-item is *open until resolved*, not a note that fades). Run both; they don't overlap. Native per-project memory is a private notebook; Director is the shared ledger.
+
+**vs. compaction (and auto-summarization).**
+The default answer, and the wrong layer. Compaction compresses the transcript when the window fills: a lossy summary produced at an arbitrary moment, with no say over what survives, and each pass summarizes the previous summary. That is the poisoning failure mode of context rot, not its cure; the now-standard advice (reset a degraded session, carry distilled state forward, not the transcript) exists precisely because pushing a compacted session onward degrades it, and Letta's Recovery-Bench measured the same thing for carried history (agents handed the full history of their failed attempts did worse than agents starting clean). Director is what makes following that advice free: it never summarizes the conversation. It records the work itself, typed facts written at the moment they happen, with lifecycle, durable beyond the session, injected into the fresh start. Compaction tries to save the session; Director makes the session disposable.
 
 **vs. beads (and issue trackers as agent memory).**
 Closest neighbor, different shape. Beads is *task-shaped*: a git-backed dependency graph of work items, and excellent at that. Director is *event-shaped*: **the narrative between tasks**. The decision that reframed the task, the loop deferred while doing it, the handoff parked when the block ended. A decision is not a task; forcing it into an issue tracker strips its "why" of ordering and provenance. They compose rather than compete: track your work in beads, carry your narrative in Director. Director is also portfolio-wide by construction (one hub, many repos, one cockpit), where a tracker's world is one repo's graph.
