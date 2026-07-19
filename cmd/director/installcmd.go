@@ -23,7 +23,7 @@ var installGOOS = runtime.GOOS
 // with a non-zero exit if any failed.
 func runInstall(args []string) int {
 	targets, code := installTargetFlags("install", args)
-	if targets == nil {
+	if len(targets) == 0 {
 		return code
 	}
 
@@ -46,7 +46,7 @@ func runInstall(args []string) int {
 		return 1
 	}
 
-	exit := 0
+	exit := code // non-zero when a default path failed to resolve for a dropped target
 	for _, t := range targets {
 		if installOne(t.name, t.path) != 0 {
 			exit = 1
@@ -148,10 +148,10 @@ func printBinLine() {
 // flags uninstall each in turn.
 func runUninstall(args []string) int {
 	targets, code := installTargetFlags("uninstall", args)
-	if targets == nil {
+	if len(targets) == 0 {
 		return code
 	}
-	exit := 0
+	exit := code // non-zero when a default path failed to resolve for a dropped target
 	for _, t := range targets {
 		if uninstallOne(t.name, t.path) != 0 {
 			exit = 1
@@ -195,10 +195,12 @@ type installTarget struct {
 // flags mirror the curl|sh installer's wire flags and are additive: naming any
 // of --claude/--codex/--opencode selects exactly the named set, --all selects
 // all three, and no target flag defaults to Claude Code. --settings overrides
-// the target file and is therefore single-target only. Returns (nil, code)
-// when parsing fails or a default can't be resolved, so callers return code
-// directly; targets come back in fixed claude → codex → opencode order for
-// deterministic output.
+// the target file and is therefore single-target only. Parse/usage errors
+// return (nil, 2). A default path that fails to resolve drops only ITS target
+// and sets code 1 — the rest still come back, so one unresolvable default
+// (e.g. HOME unset with partial DIRECTOR_* overrides) cannot block viable
+// targets; callers must fold the returned code into their exit. Targets come
+// back in fixed claude → codex → opencode order for deterministic output.
 func installTargetFlags(name string, args []string) (targets []installTarget, code int) {
 	var claude, codex, opencode, all bool
 	var path string
@@ -244,10 +246,11 @@ func installTargetFlags(name string, args []string) (targets []installTarget, co
 			}
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
-				return nil, 1
+				code = 1
+				continue
 			}
 		}
 		targets = append(targets, installTarget{name: t, path: p})
 	}
-	return targets, 0
+	return targets, code
 }

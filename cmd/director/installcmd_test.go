@@ -3,15 +3,45 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 )
 
+// TestInstallTargetFlagsResolveFailureDropsOnlyThatTarget: a default path that
+// cannot resolve (HOME unset, no env override) must drop only its own target
+// and report code 1 — the resolvable targets still come back, mirroring the
+// per-target independence of the install loop itself.
+func TestInstallTargetFlagsResolveFailureDropsOnlyThatTarget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("HOME-based default resolution is unix-shaped; windows uses USERPROFILE")
+	}
+	dir := t.TempDir()
+	t.Setenv("DIRECTOR_SETTINGS_PATH", filepath.Join(dir, "settings.json"))
+	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", filepath.Join(dir, "director.js"))
+	t.Setenv("HOME", "") // codex has no override left to resolve through
+
+	targets, code := installTargetFlags("install", []string{"--all"})
+	if code != 1 {
+		t.Errorf("--all with unresolvable codex default: code = %d, want 1", code)
+	}
+	var got []string
+	for _, tg := range targets {
+		got = append(got, tg.name)
+	}
+	if !slices.Equal(got, []string{"claude", "opencode"}) {
+		t.Errorf("targets = %v, want [claude opencode]", got)
+	}
+}
+
 // TestInstallAllRoundTrip: `install --all` wires every agent in one run and
 // `uninstall --all` unwinds them, with every default path redirected through
 // the documented env overrides into a temp dir.
 func TestInstallAllRoundTrip(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("install refuses native windows by design; the multi-target loop is exercised on unix")
+	}
 	dir := t.TempDir()
 	settings := filepath.Join(dir, "settings.json")
 	codexHooks := filepath.Join(dir, "hooks.json")
@@ -119,6 +149,9 @@ func TestInstallSettingsSingleTargetOnly(t *testing.T) {
 // pointing its hooks path under a regular file; claude and opencode must
 // still install (and later uninstall), both verbs exiting 1.
 func TestInstallAllPartialFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("install refuses native windows by design; the multi-target loop is exercised on unix")
+	}
 	dir := t.TempDir()
 	settings := filepath.Join(dir, "settings.json")
 	plugin := filepath.Join(dir, "plugin", "director.js")
