@@ -53,8 +53,13 @@ func TestInstallOpenCodeWritesTemplatedPlugin(t *testing.T) {
 	if strings.Contains(string(b), opencodeBinPlaceholder) {
 		t.Errorf("plugin still carries the untemplated placeholder %s", opencodeBinPlaceholder)
 	}
-	wantBin := filepath.Join(filepath.Dir(hooksDir), "bin", "director")
-	if !strings.Contains(string(b), wantBin) {
+	// Compare against the JSON-encoded literal, not the raw path: on Windows
+	// the encoder escapes the backslashes, so the raw form never appears.
+	wantBin, err := json.Marshal(filepath.Join(filepath.Dir(hooksDir), "bin", "director"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), string(wantBin)) {
 		t.Errorf("plugin fallback path not templated to %s:\n%.400s", wantBin, b)
 	}
 
@@ -170,6 +175,9 @@ func TestInstallOpenCodeRefusesForeignPlugin(t *testing.T) {
 // preflight cannot READ is neither absent nor provably ours — refuse with the
 // inspect error (distinct from the unmarked refusal), never write through it.
 func TestInstallOpenCodeRefusesUnreadablePlugin(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("0o000 does not make a file unreadable on windows")
+	}
 	if os.Getuid() == 0 {
 		t.Skip("root ignores file modes")
 	}
@@ -195,6 +203,9 @@ func TestInstallOpenCodeRefusesUnreadablePlugin(t *testing.T) {
 // the fallback path is substituted as a complete JSON-encoded string literal,
 // never spliced raw into quotes.
 func TestInstallOpenCodeTemplatesHostilePathSafely(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip(`" is not a legal path character on windows; the hostile-path scenario is unix-only`)
+	}
 	pluginPath, _, _ := setupOpenCode(t)
 	hostile := filepath.Join(t.TempDir(), `bad"root\dir`, "hooks")
 	t.Setenv(hooksDirEnv, hostile)
