@@ -16,7 +16,7 @@ Director exists to take the message-bus job off you. The ledger relays the state
 
 ## What Director is
 
-You don't operate Director; your agents do. It installs into Claude Code and Codex as hooks, so the writing happens as sessions work and the state is there waiting when the next one starts. What it maintains is a shared, durable, **append-only event log** per repo (one static Go binary: no daemon, no database, no cloud, no telemetry), plus **deterministic projections** over it:
+You don't operate Director; your agents do. It installs into Claude Code, Codex, and OpenCode as hooks, so the writing happens as sessions work and the state is there waiting when the next one starts. What it maintains is a shared, durable, **append-only event log** per repo (one static Go binary: no daemon, no database, no cloud, no telemetry), plus **deterministic projections** over it:
 
 - Sessions **emit** typed events as they work, using exactly four kinds (`decision`, `open-item`, `handoff`, `note`), and **resolve** open-items when they are truly closed.
 - The log collapses deterministically (no LLM in the loop) into three views: `render` (the machine digest), `brief` (the human re-orientation view), and `status` (the one-line-per-workstream cockpit with a *Needs-you* band).

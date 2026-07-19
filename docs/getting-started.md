@@ -9,8 +9,8 @@ archaeology, so re-entering a project you haven't touched in weeks picks up exac
 block left off. You don't operate it: you read the projections (`status`, `brief`) and step in only
 where a human is actually needed.
 
-This guide walks the first run end to end, written in Claude Code terms with the Codex differences
-called out where they exist (see "Using OpenAI Codex?" in section 1). Go is only needed for the
+This guide walks the first run end to end, written in Claude Code terms with the Codex and OpenCode
+differences called out where they exist (see "Using OpenAI Codex?" and "Using OpenCode?" in section 1). Go is only needed for the
 `go install` and build-from-source paths. For the full command/flag reference see
 [`../README.md`](../README.md).
 
@@ -109,7 +109,7 @@ installed Director hooks into /Users/you/.claude/settings.json (set DIRECTOR_SET
   merged workstream). More on the boundary pair in section 5.
 
 Verify it took. `director doctor` is the thorough check: it walks the same binary-resolution ladder
-the hooks walk and reports each link (binary, Claude Code hooks, Codex hooks if present, hub), so a
+the hooks walk and reports each link (binary, Claude Code hooks, Codex and OpenCode hooks if present, hub), so a
 broken install becomes loud instead of a silent no-op. It exits non-zero when the install is broken,
 and warns (without failing) on a partial one, such as a terminal-only install the desktop app would miss.
 
@@ -181,7 +181,8 @@ Codex-specific notes:
   `done --workstream <id>` is unaffected.
 
 The rest of this guide uses the Claude Code command names (`/director:adopt` etc.); on Codex, read each
-as its `$director-*` skill twin: same command, same behavior.
+as its `$director-*` skill twin, and on OpenCode as its flat `/director-*` custom command: same command,
+same behavior.
 
 `director uninstall --codex` removes only the tagged entries and the three skill directories. The hook
 shims are shared between the two agents: either uninstall form leaves them in place while the other
@@ -273,7 +274,7 @@ this is where you steer the fleet.
 
 ## 3. Open an agent session
 
-Just start Claude Code (or Codex) in the adopted repo as usual. Director's `SessionStart` hook fires automatically and:
+Just start Claude Code (or Codex, or OpenCode) in the adopted repo as usual. Director's `SessionStart` hook fires automatically and:
 
 - registers/refreshes the workstream's liveness row, and
 - injects the **CHARTER + a deterministic digest** of the LOG as the session's *authoritative current
@@ -382,8 +383,8 @@ what `brief` shows and what the next session starts from.
 
 ## 6. Troubleshooting
 
-Start with **`director doctor`**: it checks the whole install chain (binary resolution, Claude Code and
-Codex hooks, shims present, hub writable) and names the broken link, exiting non-zero when coordination
+Start with **`director doctor`**: it checks the whole install chain (binary resolution, Claude Code,
+Codex, and OpenCode hooks, shims present, hub writable) and names the broken link, exiting non-zero when coordination
 would not fire. The table covers the specifics.
 
 | Symptom | Cause & fix |
