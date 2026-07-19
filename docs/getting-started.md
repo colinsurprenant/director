@@ -91,6 +91,10 @@ given repo's Director state from a single machine.
 director install
 ```
 
+Bare `install` wires Claude Code. The target flags mirror the one-liner's wire flags and combine:
+`--codex`, `--opencode`, `--claude` name targets (`--codex --opencode` wires exactly those two), and
+`--all` wires all three in one run.
+
 ```text
 installed Director hooks into /Users/you/.claude/settings.json (set DIRECTOR_SETTINGS_PATH to override)
   shims written to /Users/you/.claude/director/hooks (set DIRECTOR_HOOKS_DIR to override)

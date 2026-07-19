@@ -93,7 +93,7 @@ go build -o bin/director ./cmd/director
 sudo install bin/director /usr/local/bin/director   # or copy it anywhere on PATH
 ```
 
-Then wire it into your agent. The one-liner already wired Claude Code; the sections below spell out what that does, and how to add Codex and OpenCode.
+Then wire it into your agent. The one-liner already wired Claude Code; the sections below spell out what that does, and how to add Codex and OpenCode. The target flags combine (`--codex --opencode` wires exactly those two) and `director install --all` wires all three in one go.
 
 ### Wire into Claude Code
 
@@ -199,9 +199,11 @@ fleet lifecycle (hook-emitted):
 adoption & install:
   adopt       register an existing repo (identity + CHARTER stub + fleet row)
   install     idempotent merge of Director hooks into settings.json
-              (--codex: Codex's hooks.json + $director-* agent skills instead;
-               --opencode: managed plugin + /director-* custom commands instead)
-  uninstall   remove only Director-managed hook entries (--codex / --opencode: theirs)
+              (--codex: Codex's hooks.json + $director-* agent skills;
+               --opencode: managed plugin + /director-* custom commands;
+               targets combine, --all wires all three, bare = Claude Code)
+  uninstall   remove only Director-managed hook entries (--codex / --opencode:
+              theirs; targets combine, --all for all three)
   doctor      check the install is wired and the hooks will actually fire
 
 misc:
@@ -322,9 +324,9 @@ In each adopted worktree: `.director/workstream-id` (and `.director/repo-key`), 
 # 1. Build the binary, put it on PATH, wire in your agent(s)
 go build -o bin/director ./cmd/director
 sudo install bin/director /usr/local/bin/director
-director install              # Claude Code
-director install --codex      # OpenAI Codex — any combination
-director install --opencode   # OpenCode
+director install              # Claude Code (the default)
+director install --codex      # OpenAI Codex; targets combine (--codex --opencode)
+director install --all        # or wire Claude Code + Codex + OpenCode in one go
 director doctor               # confirm the wiring will actually fire
 
 # 2. Register an existing repo in the fleet
