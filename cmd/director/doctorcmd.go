@@ -304,10 +304,10 @@ func opencodeHooksCheck(in doctorInputs) (check, bool) {
 	}
 	envBin := in.directorBin != "" && !in.directorBinFromSettings
 	_, pathHit := in.lookDirector()
-	symlinkOK := false
-	if fi, err := os.Stat(in.binPath); err == nil && !fi.IsDir() {
-		symlinkOK = true
-	}
+	// Same executability bar as the main ladder: a present-but-non-executable
+	// fallback dies with EACCES in the plugin's spawn, and it is the LAST
+	// candidate — nothing behind it to degrade to.
+	symlinkOK := isExecutable(in.binPath)
 	switch {
 	case envBin || pathHit || (baked && symlinkOK):
 		return check{"opencode hooks", levelOK, fmt.Sprintf("plugin present at %s", in.opencodePlugin)}, true
