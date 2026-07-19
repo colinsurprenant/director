@@ -172,9 +172,11 @@ Codex-specific notes:
 - **Trust the hooks once.** Codex asks you to review and trust the three hook definitions at your next
   session start; until you do, they are silently skipped. If you dismiss or interrupt that prompt (an
   Esc is enough), run `/hooks` inside the session to review and trust them.
-- Ground truth injection, liveness, and close-out work identically on both agents. The Stop emit-guard
-  and the context-fill handoff nudge are Claude Code-only for now (they read CC's transcript format and
-  stay safely inert on Codex).
+- Ground truth injection, liveness, and close-out work identically on Claude Code and Codex, and
+  equivalently on OpenCode (same injected state, different mechanism: its plugin injects on the first
+  user message because OpenCode has no session-start hook; see "Using OpenCode?" below). The Stop
+  emit-guard and the context-fill handoff nudge are Claude Code-only for now (they read CC's transcript
+  format and stay safely inert on Codex and OpenCode).
 - Codex exposes no session id to shell commands, so a hand-run `director done` (including
   `$director-complete`'s final step) may report "row not found" there, not a failure: the Stop hook
   archives the session's row at turn end, and everything durable was already written. Targeted
