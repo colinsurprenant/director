@@ -255,6 +255,12 @@ info "Installed director $VERSION → $bin"
 # --- wire the agent ------------------------------------------------------
 # Invoke via the absolute path: wiring must work before INSTALL_DIR is on PATH.
 # `director install` is idempotent and non-clobbering.
+#
+# Deliberately one single-target invocation per agent — do NOT collapse these
+# into `install --all` or combined flags. This script is fetched from main but
+# runs the latest RELEASE binary, so it must stick to the oldest stable CLI
+# surface: newer flag forms would fail against any not-yet-released binary.
+# Per-target calls also keep the progress lines and re-run hints exact.
 wire_failed=0
 run_wire() { # DESCRIPTION ARGS...
 	desc="$1"
