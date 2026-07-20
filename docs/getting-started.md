@@ -5,8 +5,8 @@ on that state: what was decided, which loops are open, where the last one stoppe
 boundary is where the state leaks**, whether it's a reset, a compaction, or weeks away. Director makes
 the reset free: sessions write durable coordination state (decisions, open loops, handoffs) to a shared
 append-only LOG as they work, and every new session starts from that record instead of from git
-archaeology, so re-entering a project you haven't touched in weeks picks up exactly where the last
-block left off. You don't operate it: you read the projections (`status`, `brief`) and step in only
+archaeology, so re-entering a parked project picks up exactly where the last block left off. You
+don't operate it: you read the projections (`status`, `brief`) and step in only
 where a human is actually needed.
 
 This guide walks the first run end to end, written in Claude Code terms with the Codex and OpenCode

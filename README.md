@@ -7,7 +7,7 @@
 
 **[The two-minute tour: colinsurprenant.github.io/director](https://colinsurprenant.github.io/director/)**
 
-By now everyone agrees on the cure for context rot: don't push a degraded session, reset it, and carry distilled state forward, not the transcript. The advice is right; the cost is why nobody follows it. A fresh session starts blank on the state of the work (what was decided and why, which loops you left open on purpose, where the last block stopped), so every reset means re-explaining, and every week away means ten minutes of archaeology before real work starts. Most people pay that down by hand (a CLAUDE.md, a notes file, a "write a handoff for the next one" before they stop), and that instinct is right. But a hand-kept record rides on you remembering, has no open-vs-closed lifecycle, and doesn't survive two sessions at once. **The session boundary is where the state leaks**: one repo or many, whether it's a reset, a compaction, a session ending, a week away, or a parallel worktree.
+By now everyone agrees on the cure for context rot: don't push a degraded session, reset it, and carry distilled state forward, not the transcript. The advice is right; the cost is why nobody follows it. A fresh session starts blank on the state of the work (what was decided and why, which loops you left open on purpose, where the last block stopped), so every reset means re-explaining, and every return to a parked repo means archaeology before real work starts. Most people pay that down by hand (a CLAUDE.md, a notes file, a "write a handoff for the next one" before they stop), and that instinct is right. But a hand-kept record rides on you remembering, has no open-vs-closed lifecycle, and doesn't survive two sessions at once. **The session boundary is where the state leaks**: one repo or many, whether it's a reset, a compaction, a session ending, a week away, or a parallel worktree.
 
 Director makes the reset free, and you don't operate it: it wires into Claude Code, Codex, and OpenCode through hooks, the session emits as it works, and that state is injected into the next one as ground truth. It moves you out of the **message bus** seat: the ledger carries the state between sessions, and you go back to **directing the work**. Built around a shared, durable, **append-only event log** per repo:
 
@@ -57,9 +57,21 @@ docs-site-main-9d2e5b71 · dormant · 13d ago · ok
 
 *One human, many workstreams: which are live, which are parked between blocks, and the one line that needs you.*
 
+And the same log carries the state across **tools**, not just across time: Claude Code, OpenAI Codex, and OpenCode all read and write one ledger (see [One ledger, three harnesses](#one-ledger-three-harnesses)).
+
 > **Scope:** single-machine for now, single-human by design; multi-machine sync is on the roadmap (see [Status & scope](#status--scope)).
 >
 > **New here?** [`docs/getting-started.md`](docs/getting-started.md) is the task-oriented first-run guide (install → adopt → first session → cockpit), plus how the model uses Director and a troubleshooting section. This README is the reference.
+
+## One ledger, three harnesses
+
+Multi-harness is not a compatibility checkbox; it is a workflow. Without a shared ledger, running more than one coding agent on a repo puts *you* in the message-bus seat between them: paste the diff context here, re-explain the decision there, carry the verdict back. With one log that every harness reads and writes, that job disappears:
+
+- **Build in one, review from the others.** The setup Director itself is developed with: main work in Claude Code, with Codex and OpenCode (the latter running a non-Anthropic model) as standing reviewers on the same repo. A review session opens on the same injected ground truth the build session wrote (the decisions with their why, the open loops, where the work stopped), and its verdict lands back in the log as a `note` for the next session to pick up. Different vendors, different models, one state of the work.
+- **Hit a usage limit mid-task? Switch harnesses, not context.** Open another wired agent on the same repo and it starts from the same digest: what was decided, what is open, where you stopped. The wall costs you the tool, not the thread.
+- **The ledger is neutral ground.** The state of the work lives in a plain NDJSON log on your machine, not in any one vendor's session format. Adding, dropping, or mixing agents never strands it.
+
+Wiring is symmetric: `director install --all` (or any combination of `--codex` / `--opencode` with the bare Claude Code default) gives every harness the same boundary commands and the same ground-truth injection at the top of every session. Details per agent are under [Install](#install).
 
 ## Why Director
 
