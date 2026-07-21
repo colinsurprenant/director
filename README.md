@@ -83,7 +83,7 @@ billing-worker-main-3f8a1c2d · idle · 6h ago · ok
 docs-site-main-9d2e5b71 · dormant · 13d ago · ok
 ```
 
-*One human, many workstreams: which are live, which are parked between blocks, and the one line that needs you ("need-you" counts the `[risk:escalate]` open items, the ones waiting on a human call).*
+*One human, many workstreams: which are live, which are parked between blocks, and the one line blocked on a human call.*
 
 Memory tools answer *"what does the agent know?"* Director answers *"what is the state of the work?"*: what was decided and why, which loops were deliberately deferred, and what still needs *you*. Facts accumulate; loops open and close, and nothing in a memory store ever *closes*. That lifecycle is the difference, and so is the delivery: pushed at session start, not recalled by similarity. Run both: they don't overlap.
 
