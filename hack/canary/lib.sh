@@ -98,9 +98,9 @@ canary_findings_header() {
   local out="$1" harness="$2" version="$3" date="$4"
   {
     printf '# Canary findings: %s\n\n' "$harness"
-    printf '- Harness: `%s`\n' "$harness"
-    printf '- Version: `%s`\n' "$version"
-    printf '- Run (UTC): %s\n' "$date"
+    printf -- '- Harness: `%s`\n' "$harness"
+    printf -- '- Version: `%s`\n' "$version"
+    printf -- '- Run (UTC): %s\n' "$date"
     printf '\n'
   } >"$out"
 }

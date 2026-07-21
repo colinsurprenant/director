@@ -277,11 +277,23 @@ log "turn 2 exit: $T2_RC"
 # ---------------------------------------------------------------------------
 contains() { grep -q "$1" "$2" 2>/dev/null; }
 
+# The sentinel values exist ONLY in the hook's stdout, never in a prompt, so a
+# match in either turn's output is proof of injection. A failed turn cannot
+# prove absence: report INVALID rather than a false-red NO.
 TOKEN_INJECTED="NO"
-contains "CANARY-TOKEN-7C3D9A2F" "$RESULTS_DIR/turn1.out.json" && TOKEN_INJECTED="YES"
+if contains "CANARY-TOKEN-7C3D9A2F" "$RESULTS_DIR/turn1.out.json" \
+   || contains "CANARY-TOKEN-7C3D9A2F" "$RESULTS_DIR/turn2.out.json"; then
+  TOKEN_INJECTED="YES"
+elif [ "$T1_RC" -ne 0 ]; then
+  TOKEN_INJECTED="INVALID (turn 1 failed, rc=$T1_RC; see turn1.err)"
+fi
 
 ENV_INJECTED="NO"
-contains "CANARY-ENV-5B1E" "$RESULTS_DIR/turn2.out.json" && ENV_INJECTED="YES"
+if contains "CANARY-ENV-5B1E" "$RESULTS_DIR/turn2.out.json"; then
+  ENV_INJECTED="YES"
+elif [ "$T2_RC" -ne 0 ]; then
+  ENV_INJECTED="INVALID (turn 2 failed, rc=$T2_RC; see turn2.err)"
+fi
 
 FIRED_EVENTS="$(canary_unique_events "$RESULTS_DIR/fired.log")"
 
@@ -319,7 +331,7 @@ canary_findings_header "$FINDINGS_MD" "$HARNESS" "$AGENT_VERSION" "$RUN_TS"
   for pf in "$RESULTS_DIR"/payload.*.json; do
     found_payload=1
     base="$(basename "$pf")"
-    printf '- `%s`: %s\n' "$base" "$(canary_payload_keys "$pf")"
+    printf -- '- `%s`: %s\n' "$base" "$(canary_payload_keys "$pf")"
   done
   [ "$found_payload" -eq 0 ] && printf '(no payload files captured)\n'
   printf '\n'
