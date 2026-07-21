@@ -91,7 +91,7 @@ The LOG (plus the deliberately-edited living docs) is the only system of record;
 
 ## One ledger, three harnesses
 
-Any number of sessions, in any mix of harnesses, share the same Director log through an append-only writer that loses nothing under concurrency. Parallel worktrees see each other's decisions instead of clobbering them; a reviewer in another tool lands its verdict in the same log the builder reads. In practice:
+Any number of sessions, in any mix of harnesses, share the same Director log through an append-only writer that loses nothing under concurrency on a local filesystem. Parallel worktrees see each other's decisions instead of clobbering them; a reviewer in another tool lands its verdict in the same log the builder reads. In practice:
 
 - **Build in one, review from the others.** The setup Director itself is developed with: main work in Claude Code, with Codex and OpenCode (the latter running a non-Anthropic model) as standing reviewers on the same repo. A review session opens on the same injected ground truth the build session wrote (the decisions with their why, the open loops, where the work stopped), and its verdict lands back in the log as a `note` for the next session to pick up. Different vendors, different models, one state of the work.
 - **Hit a usage limit mid-task? Switch harnesses, not context.** Open another wired agent on the same repo and it starts from the same digest: what was decided, what is open, where you stopped. The wall costs you the tool, not the thread.
@@ -334,7 +334,7 @@ A workstream's id is `<repo>-<branch>-<shortid>`, derived deterministically from
 
 | Property | Guarantee |
 |---|---|
-| No data loss | zero lost entries under N concurrent `emit` writers and across resume-after-compaction |
+| No data loss | zero lost entries under N concurrent `emit` writers and across resume-after-compaction (local filesystems; an NFS-mounted hub is a known limitation, with multi-machine deferred) |
 | Render determinism | same inputs → byte-identical `render` and `brief`; `render --verify` passes |
 | Identity stability | one workstream keeps one id across resume/compaction |
 | Fail-safe hooks | a broken hook never blocks session start (failure surfaces in `health/`) |
