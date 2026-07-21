@@ -38,7 +38,7 @@ $ claude
 
 *Recorded while it works; loaded when the next one starts.*
 
-**Sessions are disposable. The state of the work isn't.** Reset the moment a session degrades. Park a repo, come back whenever. The thread survives, because it never lived in the chat.
+**Sessions are disposable. The state of the work isn't.** `/clear` the moment a session degrades. Park a repo, come back whenever. The state of the work lives in the log, not in the chat.
 
 **Concurrent sessions, one ledger.** A builder in Claude Code, a reviewer in Codex or OpenCode, a third session in a parallel worktree: all writing the same log at once, losing nothing (see [One ledger, three harnesses](#one-ledger-three-harnesses)).
 
