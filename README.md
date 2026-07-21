@@ -3,22 +3,13 @@
 [![ci](https://github.com/colinsurprenant/director/actions/workflows/ci.yml/badge.svg)](https://github.com/colinsurprenant/director/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/colinsurprenant/director?display_name=tag)](https://github.com/colinsurprenant/director/releases/latest)
 
-**Sessions are disposable. The state of the work isn't.** Director is a coordination ledger your agent writes as it works: what was decided and why, which loops are still open, where the work stopped, what still needs you. Every new session starts with it injected as ground truth.
+**Save the work, not the chat.**
 
 **[The two-minute tour: colinsurprenant.github.io/director](https://colinsurprenant.github.io/director/)**
 
-By now everyone agrees on the cure for context rot: don't push a degraded session, reset it, and carry distilled state forward, not the transcript. The advice is right; the cost is why nobody follows it. A fresh session starts blank on the state of the work (what was decided and why, which loops you left open on purpose, where the last block stopped), so every reset means re-explaining, and every return to a parked repo means archaeology before real work starts. Most people pay that down by hand (a CLAUDE.md, a notes file, a "write a handoff for the next one" before they stop), and that instinct is right. But a hand-kept record rides on you remembering, has no open-vs-closed lifecycle, and doesn't survive two sessions at once. **The session boundary is where the state leaks**: one repo or many, whether it's a reset, a compaction, a session ending, a week away, or a parallel worktree.
+The session is long past its best. You keep pushing it anyway, because it holds everything you accumulated on the way here: the decisions, the dead ends, the loose ends, where you were going.
 
-Director makes the reset free, and you don't operate it: it wires into Claude Code, Codex, and OpenCode through hooks, the session emits as it works, and that state is injected into the next one as ground truth. It moves you out of the **message bus** seat: the ledger carries the state between sessions, and you go back to **directing the work**. Built around a shared, durable, **append-only event log** per repo:
-
-- Sessions **`emit`** typed events as they work (`decision` · `open-item` · `handoff` · `note`) and **`resolve`** open loops when they truly close.
-- The log collapses deterministically into **`render`** (the machine digest), **`brief`** (the human re-orientation view), and **`status`** (the one-line-per-workstream cockpit).
-- A SessionStart hook **injects** the CHARTER + digest into every new session as ground truth, so a cold re-entry (three weeks after the last block) starts from your parked handoff instead of from git archaeology.
-- The log is **model-agnostic**: the next session can be you tomorrow, you after a compaction, or a stronger model you escalate a stuck problem to, with the tried-and-failed hypotheses traveling along. Escalate with context, not with amnesia.
-
-Memory tools answer *"what does the agent know?"* Director answers *"what is the state of the work?"*: what was decided and why, which loops were deliberately deferred, and what still needs *you*. Facts accumulate; loops open and close, and nothing in a memory store ever *closes*. That lifecycle is the difference, and so is the delivery: pushed at session start, not recalled by similarity. Run both: they don't overlap.
-
-The LOG (plus the deliberately-edited living docs) is the only system of record; sessions and every rendered view are disposable caches reconstructible from it. Director wires natively into **Claude Code, OpenAI Codex, and OpenCode**: same log, same boundary commands, any of them alone or side by side. A single static binary, stdlib-first, one vetted build-time dependency (`github.com/oklog/ulid/v2`). No daemon, no database, no cloud, no telemetry: the binary never opens a network connection, and the log is plain NDJSON.
+Director removes the fear of losing that context: your agent records the state of the work (decisions, open loops, handoffs) to a small local log as it goes, and every new session starts with the log loaded:
 
 ```text
 $ claude
@@ -29,7 +20,7 @@ $ claude
   … later …
 ▸ handoff    parked · cursor rework done · next: the backfill script · watch the p99
 
-──────────── session ends · hours, days, or weeks pass ────────────
+──────────── session ends ────────────
 
 $ claude
 > where were we?
@@ -45,9 +36,46 @@ $ claude
 01KWJ4W8…  decision   cursor pagination, not offset; offsets break under deletes
 ```
 
-*The same three facts on both sides of the gap: recorded as the session works, injected when the next one starts ("need-you" counts the `[risk:escalate]` open items, the ones waiting on a human call).*
+*Recorded while it works; loaded when the next one starts.*
 
-That is one workstream. When several are in flight, `director status` is the whole board at a glance:
+**Sessions are disposable. The state of the work isn't.** `/clear` the moment a session degrades. Park a repo, come back whenever. The state of the work lives in the log, not in the chat.
+
+**Concurrent sessions, one ledger.** A builder in Claude Code, a reviewer in Codex or OpenCode, a third session in a parallel worktree: all writing the same log at once, losing nothing (see [One ledger, three harnesses](#one-ledger-three-harnesses)).
+
+Three things it is not:
+
+- **Not your CLAUDE.md.** A good CLAUDE.md already tells every session what the project *is*. Director records what *happened*.
+- **Not a memory tool.** Memory answers "what does the agent *know*". Director answers "what is the state of the *work*". Run both; they don't overlap.
+- **Not a methodology.** Frameworks checkpoint state at phase boundaries. Director makes a fresh start safe at any moment, in whatever process you already have. No phases, no ceremony.
+
+Under the hood, deliberately boring:
+
+- no daemon
+- no database
+- no cloud
+- one concurrency-safe static binary
+- a plain NDJSON log file
+
+Install is one line (macOS / Linux / WSL):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/colinsurprenant/director/main/install.sh | sh
+```
+
+> **Scope:** single-machine for now, single-human by design; multi-machine sync is on the roadmap (see [Status & scope](#status--scope)).
+>
+> **New here?** [`docs/getting-started.md`](docs/getting-started.md) is the task-oriented first-run guide (install → adopt → first session → cockpit), plus how the model uses Director and a troubleshooting section. This README is the reference.
+
+## How it works
+
+**The session boundary is where the state leaks**: a reset, a compaction, a session ending, a week away, a parallel worktree. Director sits at that boundary and makes the reset free, and you don't operate it: it wires into Claude Code, Codex, and OpenCode through hooks, the session emits as it works, and that state is injected into the next one as ground truth. It moves you out of the **message bus** seat: the ledger carries the state between sessions, and you go back to **directing the work**. Built around a shared, durable, **append-only event log** per repo:
+
+- Sessions **`emit`** typed events as they work (`decision` · `open-item` · `handoff` · `note`) and **`resolve`** open loops when they truly close.
+- The log collapses deterministically into **`render`** (the machine digest), **`brief`** (the human re-orientation view), and **`status`** (the one-line-per-workstream cockpit).
+- A SessionStart hook **injects** the CHARTER + digest into every new session as ground truth, so a cold re-entry into a parked repo starts from your handoff instead of from git archaeology.
+- The log is **model-agnostic**: the next session can be you tomorrow, you after a compaction, or a stronger model you escalate a stuck problem to, with the tried-and-failed hypotheses traveling along. Escalate with context, not with amnesia.
+
+When several things are in flight, `director status` is the whole board at a glance:
 
 ```text
 acme-api-main-7c21e9d4 · active · just now · blocked(1): timezone edge case before the backfill merges
@@ -55,17 +83,15 @@ billing-worker-main-3f8a1c2d · idle · 6h ago · ok
 docs-site-main-9d2e5b71 · dormant · 13d ago · ok
 ```
 
-*One human, many workstreams: which are live, which are parked between blocks, and the one line that needs you.*
+*One human, many workstreams: which are live, which are parked between blocks, and the one line blocked on a human call.*
 
-And the same log carries the state across **tools**, not just across time: Claude Code, OpenAI Codex, and OpenCode all read and write one ledger (see [One ledger, three harnesses](#one-ledger-three-harnesses)).
+Memory tools answer *"what does the agent know?"* Director answers *"what is the state of the work?"*: what was decided and why, which loops were deliberately deferred, and what still needs *you*. Facts accumulate; loops open and close, and nothing in a memory store ever *closes*. That lifecycle is the difference, and so is the delivery: pushed at session start, not recalled by similarity. Run both: they don't overlap.
 
-> **Scope:** single-machine for now, single-human by design; multi-machine sync is on the roadmap (see [Status & scope](#status--scope)).
->
-> **New here?** [`docs/getting-started.md`](docs/getting-started.md) is the task-oriented first-run guide (install → adopt → first session → cockpit), plus how the model uses Director and a troubleshooting section. This README is the reference.
+The LOG (plus the deliberately-edited living docs) is the only system of record; sessions and every rendered view are disposable caches reconstructible from it. Director wires natively into **Claude Code, OpenAI Codex, and OpenCode**: same log, same boundary commands, any of them alone or side by side. A single static binary, stdlib-first, one vetted build-time dependency (`github.com/oklog/ulid/v2`). No daemon, no database, no cloud, no telemetry: the binary never opens a network connection, and the log is plain NDJSON.
 
 ## One ledger, three harnesses
 
-Multi-harness is not a compatibility checkbox; it is a workflow. Without a shared ledger, running more than one coding agent on a repo puts *you* in the message-bus seat between them: paste the diff context here, re-explain the decision there, carry the verdict back. With one log that every harness reads and writes, that job disappears:
+Any number of sessions, in any mix of harnesses, share the same Director log through an append-only writer that loses nothing under concurrency on a local filesystem. Parallel worktrees see each other's decisions instead of clobbering them; a reviewer in another tool lands its verdict in the same log the builder reads. In practice:
 
 - **Build in one, review from the others.** The setup Director itself is developed with: main work in Claude Code, with Codex and OpenCode (the latter running a non-Anthropic model) as standing reviewers on the same repo. A review session opens on the same injected ground truth the build session wrote (the decisions with their why, the open loops, where the work stopped), and its verdict lands back in the log as a `note` for the next session to pick up. Different vendors, different models, one state of the work.
 - **Hit a usage limit mid-task? Switch harnesses, not context.** Open another wired agent on the same repo and it starts from the same digest: what was decided, what is open, where you stopped. The wall costs you the tool, not the thread.
@@ -308,7 +334,7 @@ A workstream's id is `<repo>-<branch>-<shortid>`, derived deterministically from
 
 | Property | Guarantee |
 |---|---|
-| No data loss | zero lost entries under N concurrent `emit` writers and across resume-after-compaction |
+| No data loss | zero lost entries under N concurrent `emit` writers and across resume-after-compaction (local filesystems; an NFS-mounted hub is a known limitation, with multi-machine deferred) |
 | Render determinism | same inputs → byte-identical `render` and `brief`; `render --verify` passes |
 | Identity stability | one workstream keeps one id across resume/compaction |
 | Fail-safe hooks | a broken hook never blocks session start (failure surfaces in `health/`) |
