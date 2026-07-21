@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Director: a coordination ledger for coding agents</title>
-<meta name="description" content="The cure for context rot is a fresh session; the cost is re-explaining everything. Director makes the reset free: a coordination ledger your agent writes as it works, injected into the next session as ground truth. For Claude Code, OpenAI Codex, and OpenCode.">
+<meta name="description" content="Save the work, not the chat: a local log your coding agent writes as it works, loaded into every new session. For Claude Code, Codex, and OpenCode.">
 <meta property="og:title" content="Director: a coordination ledger for coding agents">
 <meta property="og:description" content="Sessions are disposable. The state of the work isn't. Director is a ledger your agent writes as it works, injected into every new session as ground truth.">
 <meta property="og:type" content="website">
@@ -206,7 +206,7 @@
   .cell h3 { font-family: var(--mono); font-size: .78rem; font-weight: 400; color: var(--accent); }
   .cell h3 .p { color: var(--ink-faint); }
   .cell p { margin-top: .6rem; font-size: .92rem; color: var(--ink-dim); }
-  .cell p code, .vs dd code {
+  .lede code, .cell p code, .vs dd code {
     font-family: var(--mono); font-size: .82em;
     color: var(--ink); background: var(--bg-raise);
     border: 1px solid var(--line); border-radius: 3px; padding: .05em .3em;
@@ -250,16 +250,18 @@
 <header class="wrap">
   <p class="ack reveal d1">▸ Director: director-main-aaa5961e · <span class="meta">3 open-item(s), 1 need-you</span><span class="caret" aria-hidden="true"></span></p>
   <h1 class="reveal d2">Sessions are disposable. The state of the work isn&rsquo;t.</h1>
-  <p class="sub reveal d2">Director is a coordination ledger your agent writes as it works: what was decided and why, which loops are still open, where the work stopped, what still needs you. Every new session starts with it injected as ground truth.</p>
+  <p class="sub reveal d2">Save the work, not the chat: a small local log your agent writes as it works (decisions, open loops, handoffs), loaded into every new session as ground truth.</p>
   <div class="qa reveal d3">
     <p><span class="q-label">Memory tools answer</span> <span class="q-dim">“what does the agent <em>know</em>?”</span></p>
     <p><span class="q-label">Director answers</span> <span class="q-hot">“what is the state of the <em>work</em>?”</span></p>
   </div>
   <p class="lede reveal d3">
-    A reset, a compaction, a week away: <strong>the session boundary is where the state leaks.</strong>
-    Resetting used to mean re-explaining everything; now the fresh session opens already oriented.
-    Your agents keep the ledger as they work; you never write a status
-    update. <strong>You direct.</strong>
+    <strong>The session is long past its best.</strong> You keep pushing it anyway:
+    it holds everything you accumulated on the way here, the decisions, the dead
+    ends, the loose ends, where you were going. Director removes the fear of
+    losing that context. <code>/clear</code> the moment a session degrades; park
+    a repo, come back whenever. The state of the work lives in the log, not in
+    the chat. You never write a status update. <strong>You direct.</strong>
   </p>
   <div class="install reveal d4">
     <div class="cmd">
@@ -292,7 +294,7 @@
 <span class="cm">  … later …</span>
 <span class="ok">▸</span> <span class="ok">handoff</span>    parked · cursor rework done · next: the backfill script · watch the p99
 
-<span class="cm">──────────── session ends · hours, days, or weeks pass ────────────</span>
+<span class="cm">──────────── session ends ────────────</span>
 
 <span class="cm">$</span> claude
 <span class="cm">&gt;</span> <span class="hd">where were we?</span>
@@ -307,7 +309,7 @@
 <span class="hd">## decisions</span>
 <span class="id">01KWJ4W8…</span>  <span class="cyan">decision</span>   cursor pagination, not offset; offsets break under deletes</code></pre>
     </div>
-    <figcaption class="term-cap">the same three facts on both sides of the gap: recorded as the session works, injected when the next one starts · need-you counts the [risk:escalate] items, what waits on a human call</figcaption>
+    <figcaption class="term-cap">recorded while it works · loaded when the next one starts</figcaption>
   </figure>
 </div>
 
