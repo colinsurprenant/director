@@ -63,3 +63,10 @@ sessionStart-multikey fired twice; beforeReadFile/preToolUse/postToolUse
 fired (model searched the workspace), proving the hook pipeline fully
 operational. Timing-race and key-shape and strict-parse confounds all
 excluded: IDE 3.12.17 does not inject sessionStart context, period.
+
+Residual caveat (Colin, 2026-07-21): account is on the Cursor FREE plan. An
+IDE-specific plan gate on injection cannot be strictly excluded from here,
+but is unlikely: the CLI injected successfully under the same account/plan
+the same day, no doc mentions plan-gating for hooks, and the staff-diagnosed
+timing bug fully explains the behavior. Re-run ide-check.sh --multikey if
+the plan ever changes.
