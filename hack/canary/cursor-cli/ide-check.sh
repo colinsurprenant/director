@@ -36,13 +36,16 @@ log()  { printf '[canary-ide] %s\n' "$*" >&2; }
 die()  { printf '[canary-ide] ERROR: %s\n' "$*" >&2; exit 1; }
 
 MODE="prep"
-case "${1:-}" in
-  "")          MODE="prep" ;;
-  --analyze)   MODE="analyze" ;;
-  --clean)     MODE="clean" ;;
-  -h|--help)   grep -E '^#( |$)' "${BASH_SOURCE[0]}" | sed -E 's/^# ?//'; exit 0 ;;
-  *)           die "unknown argument: ${1}" ;;
-esac
+MULTIKEY=0
+for arg in "$@"; do
+  case "$arg" in
+    --analyze)   MODE="analyze" ;;
+    --clean)     MODE="clean" ;;
+    --multikey)  MULTIKEY=1 ;;
+    -h|--help)   grep -E '^#( |$)' "${BASH_SOURCE[0]}" | sed -E 's/^# ?//'; exit 0 ;;
+    *)           die "unknown argument: ${arg}" ;;
+  esac
+done
 
 # ---------------------------------------------------------------------------
 if [ "$MODE" = "clean" ]; then
@@ -73,6 +76,15 @@ if [ "$MODE" = "prep" ]; then
       && git add README.md && git commit -q -m "canary: initial commit" )
   fi
   sed "s#__HOOKS_DIR__#${HOOKS_DIR}#g" "$TEMPLATE" >"$WORKSPACE/.cursor/hooks.json"
+  if [ "$MULTIKEY" -eq 1 ]; then
+    # Retest variant: sessionStart emits three tokens via three key shapes
+    # (snake, camel, hookSpecificOutput) and no env key.
+    sed -i '' "s#logger.sh sessionStart\"#sessionstart-multikey.sh\"#" \
+      "$WORKSPACE/.cursor/hooks.json"
+    grep -q "sessionstart-multikey.sh" "$WORKSPACE/.cursor/hooks.json" \
+      || die "multikey rewrite failed"
+    log "MULTIKEY variant wired (three tokens, three key shapes)"
+  fi
 
   log "workspace ready: $WORKSPACE"
   log "hooks config:    $WORKSPACE/.cursor/hooks.json"
