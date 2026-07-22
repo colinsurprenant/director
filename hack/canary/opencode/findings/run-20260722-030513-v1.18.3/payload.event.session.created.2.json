@@ -1,0 +1,43 @@
+{
+  "sessionID": "ses_07836d419ffe7knyrVpw0KW2B0",
+  "info": {
+    "id": "ses_07836d419ffe7knyrVpw0KW2B0",
+    "slug": "kind-canyon",
+    "version": "1.18.3",
+    "projectID": "6477126296da7eaad1fae3930abcef44a7b7b525",
+    "directory": "/private/var/folders/0v/vw52k5gd7t9bk0v2lyj5dg780000gn/T/canary-opencode-ws.fEATCf",
+    "path": "",
+    "title": "New session - 2026-07-22T03:05:35.974Z",
+    "permission": [
+      {
+        "permission": "question",
+        "pattern": "*",
+        "action": "deny"
+      },
+      {
+        "permission": "plan_enter",
+        "pattern": "*",
+        "action": "deny"
+      },
+      {
+        "permission": "plan_exit",
+        "pattern": "*",
+        "action": "deny"
+      }
+    ],
+    "cost": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "time": {
+      "created": 1784689535974,
+      "updated": 1784689535974
+    }
+  }
+}

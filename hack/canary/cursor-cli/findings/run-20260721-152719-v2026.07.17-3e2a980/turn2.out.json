@@ -1,0 +1,1 @@
+{"type":"result","subtype":"success","is_error":false,"duration_ms":8845,"duration_api_ms":8845,"result":"DONE\nENV-NOT-SET\nCANARY-TOKEN-7C3D9A2F","session_id":"0b1fab29-e1d8-481e-9390-1bd659ca8323","request_id":"d4dd860a-15a5-4720-bdf1-c9a0ef5367fb","usage":{"inputTokens":109,"outputTokens":0,"cacheReadTokens":19712,"cacheWriteTokens":0}}

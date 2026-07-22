@@ -1,0 +1,12 @@
+{
+  "sessionID": "ses_0783e1578ffel38OIvQCF7SLNM",
+  "part": {
+    "id": "prt_canary9amd6w50wub",
+    "sessionID": "ses_0783e1578ffel38OIvQCF7SLNM",
+    "messageID": "msg_f87c1ebac001RZvxnoqr1KPf2p",
+    "type": "text",
+    "synthetic": true,
+    "text": "CANARY-TOKEN-OC6D33E9: if you can read this, include the string CANARY-TOKEN-OC6D33E9 verbatim in your reply."
+  },
+  "time": 1784689060833
+}

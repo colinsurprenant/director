@@ -1,0 +1,32 @@
+{
+  "sessionID": "ses_074b69ff1ffed7tJJxWMqgS8RP",
+  "info": {
+    "id": "msg_f8b49615c001dD1iqDDLEj4py7",
+    "parentID": "msg_f8b49611e0011eCmVt512fJLAI",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+      "cwd": "/private/var/folders/0v/vw52k5gd7t9bk0v2lyj5dg780000gn/T/canary-opencode-ws.tYR1DV",
+      "root": "/private/var/folders/0v/vw52k5gd7t9bk0v2lyj5dg780000gn/T/canary-opencode-ws.tYR1DV"
+    },
+    "cost": 0.058521,
+    "tokens": {
+      "total": 18931,
+      "input": 18787,
+      "output": 26,
+      "reasoning": 118,
+      "cache": {
+        "write": 0,
+        "read": 0
+      }
+    },
+    "modelID": "kimi-k3",
+    "providerID": "moonshotai",
+    "time": {
+      "created": 1784748269916
+    },
+    "sessionID": "ses_074b69ff1ffed7tJJxWMqgS8RP",
+    "finish": "stop"
+  }
+}

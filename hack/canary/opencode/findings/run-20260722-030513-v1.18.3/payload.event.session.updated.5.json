@@ -1,0 +1,54 @@
+{
+  "sessionID": "ses_078371d7bffec466kOyHU7bHww",
+  "info": {
+    "id": "ses_078371d7bffec466kOyHU7bHww",
+    "slug": "sunny-squid",
+    "projectID": "6477126296da7eaad1fae3930abcef44a7b7b525",
+    "directory": "/private/var/folders/0v/vw52k5gd7t9bk0v2lyj5dg780000gn/T/canary-opencode-ws.fEATCf",
+    "path": "",
+    "title": "CANARY-TOKEN-OC6D33E9",
+    "agent": "build",
+    "model": {
+      "id": "kimi-k3",
+      "providerID": "moonshotai",
+      "variant": "default"
+    },
+    "version": "1.18.3",
+    "summary": {
+      "additions": 0,
+      "deletions": 0,
+      "files": 0
+    },
+    "cost": 0.058188,
+    "tokens": {
+      "input": 18641,
+      "output": 26,
+      "reasoning": 125,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "permission": [
+      {
+        "permission": "question",
+        "pattern": "*",
+        "action": "deny"
+      },
+      {
+        "permission": "plan_enter",
+        "pattern": "*",
+        "action": "deny"
+      },
+      {
+        "permission": "plan_exit",
+        "pattern": "*",
+        "action": "deny"
+      }
+    ],
+    "time": {
+      "created": 1784689517189,
+      "updated": 1784689535284
+    }
+  }
+}

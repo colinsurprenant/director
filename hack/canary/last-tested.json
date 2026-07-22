@@ -1,0 +1,27 @@
+{
+  "cursor-cli": {
+    "version": "2026.07.17-3e2a980",
+    "last_run": "2026-07-22T19:25:42Z",
+    "results": "hack/canary/cursor-cli/findings/run-20260722-192504-v2026.07.17-3e2a980"
+  },
+  "cursor-ide": {
+    "version": "3.12.17",
+    "last_run": "2026-07-21T15:46:31Z",
+    "results": "hack/canary/cursor-cli/findings/ide-run-20260721-154631-v3.12.17"
+  },
+  "claude-code": {
+    "version": "2.1.217",
+    "last_run": "2026-07-22T19:24:12Z",
+    "results": "hack/canary/claude-code/findings/run-20260722-192359-v2.1.217"
+  },
+  "codex": {
+    "version": "0.144.6",
+    "last_run": "2026-07-22T19:24:23Z",
+    "results": "hack/canary/codex/findings/run-20260722-192412-v0.144.6"
+  },
+  "opencode": {
+    "version": "1.18.3",
+    "last_run": "2026-07-22T19:25:01Z",
+    "results": "hack/canary/opencode/findings/run-20260722-192424-v1.18.3"
+  }
+}

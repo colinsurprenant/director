@@ -1,0 +1,37 @@
+Reading additional input from stdin...
+OpenAI Codex v0.144.6
+--------
+workdir: /var/folders/0v/vw52k5gd7t9bk0v2lyj5dg780000gn/T/canary-codex-ws.1qdPHb
+model: gpt-5.6-sol
+provider: openai
+approval: never
+sandbox: workspace-write [workdir, /tmp, $TMPDIR]
+reasoning effort: none
+reasoning summaries: none
+session id: 019f87c1-9ce3-7073-bbc7-e912f438e059
+--------
+user
+Run the shell command: echo canary-shell-ok. After it completes, reply with one line: DONE plus every distinct string starting with CANARY- that appears anywhere in your context, instructions, or tool output, or NONE if there are none.
+warning: `--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation.
+warning: `--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation.
+hook: SessionStart
+hook: SessionStart Completed
+hook: UserPromptSubmit
+hook: UserPromptSubmit Completed
+codex
+I’m running the requested shell command now.
+hook: PreToolUse
+hook: PreToolUse Completed
+exec
+/bin/bash -lc 'echo canary-shell-ok' in /var/folders/0v/vw52k5gd7t9bk0v2lyj5dg780000gn/T/canary-codex-ws.1qdPHb
+ succeeded in 0ms:
+canary-shell-ok
+
+hook: PostToolUse
+hook: PostToolUse Completed
+codex
+DONE CANARY-TOKEN-CX9F02B7 CANARY-PTU-CX5A1CD4
+hook: Stop
+hook: Stop Completed
+tokens used
+12,406

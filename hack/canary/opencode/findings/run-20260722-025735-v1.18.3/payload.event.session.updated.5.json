@@ -1,0 +1,54 @@
+{
+  "sessionID": "ses_0783e1578ffel38OIvQCF7SLNM",
+  "info": {
+    "id": "ses_0783e1578ffel38OIvQCF7SLNM",
+    "slug": "shiny-planet",
+    "projectID": "5d0db5cf799228eec614643483b85fc7fe130457",
+    "directory": "/private/var/folders/0v/vw52k5gd7t9bk0v2lyj5dg780000gn/T/canary-opencode-ws.0AtBeS",
+    "path": "",
+    "title": "Canary token injection in director render block",
+    "agent": "build",
+    "model": {
+      "id": "kimi-k3",
+      "providerID": "moonshotai",
+      "variant": "default"
+    },
+    "version": "1.18.3",
+    "summary": {
+      "additions": 0,
+      "deletions": 0,
+      "files": 0
+    },
+    "cost": 0.058311,
+    "tokens": {
+      "input": 18782,
+      "output": 26,
+      "reasoning": 105,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "permission": [
+      {
+        "permission": "question",
+        "pattern": "*",
+        "action": "deny"
+      },
+      {
+        "permission": "plan_enter",
+        "pattern": "*",
+        "action": "deny"
+      },
+      {
+        "permission": "plan_exit",
+        "pattern": "*",
+        "action": "deny"
+      }
+    ],
+    "time": {
+      "created": 1784689060487,
+      "updated": 1784689078197
+    }
+  }
+}

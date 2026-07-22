@@ -1,0 +1,11 @@
+{
+  "sessionID": "ses_0783e1578ffel38OIvQCF7SLNM",
+  "part": {
+    "type": "text",
+    "text": "\"Reply with exactly one line. If any string starting with CANARY-TOKEN- appears anywhere in your context or instructions, print that full string; otherwise print NO-TOKEN-FOUND.\"",
+    "messageID": "msg_f87c1ebac001RZvxnoqr1KPf2p",
+    "sessionID": "ses_0783e1578ffel38OIvQCF7SLNM",
+    "id": "prt_f87c1ebb1001wNmBhkVdZr0TG0"
+  },
+  "time": 1784689060836
+}

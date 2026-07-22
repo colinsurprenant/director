@@ -1,0 +1,2 @@
+# Canary findings: cursor-cli
+

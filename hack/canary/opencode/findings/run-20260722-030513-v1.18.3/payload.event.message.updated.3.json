@@ -1,0 +1,19 @@
+{
+  "sessionID": "ses_078371d7bffec466kOyHU7bHww",
+  "info": {
+    "role": "user",
+    "time": {
+      "created": 1784689517471
+    },
+    "agent": "build",
+    "model": {
+      "providerID": "moonshotai",
+      "modelID": "kimi-k3"
+    },
+    "id": "msg_f87c8e39e0011Q3GgXVII9fYjh",
+    "sessionID": "ses_078371d7bffec466kOyHU7bHww",
+    "summary": {
+      "diffs": []
+    }
+  }
+}
