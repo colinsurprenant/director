@@ -1,0 +1,13 @@
+{
+  "hooks": {
+    "SessionStart": [{ "matcher": "", "hooks": [{ "type": "command", "command": "__HOOKS_DIR__/logger.sh SessionStart" }] }],
+    "UserPromptSubmit": [{ "matcher": "", "hooks": [{ "type": "command", "command": "__HOOKS_DIR__/logger.sh UserPromptSubmit" }] }],
+    "PreToolUse": [{ "matcher": "", "hooks": [{ "type": "command", "command": "__HOOKS_DIR__/logger.sh PreToolUse" }] }],
+    "PostToolUse": [{ "matcher": "", "hooks": [{ "type": "command", "command": "__HOOKS_DIR__/logger.sh PostToolUse" }] }],
+    "Notification": [{ "matcher": "", "hooks": [{ "type": "command", "command": "__HOOKS_DIR__/logger.sh Notification" }] }],
+    "Stop": [{ "matcher": "", "hooks": [{ "type": "command", "command": "__HOOKS_DIR__/logger.sh Stop" }] }],
+    "SubagentStop": [{ "matcher": "", "hooks": [{ "type": "command", "command": "__HOOKS_DIR__/logger.sh SubagentStop" }] }],
+    "PreCompact": [{ "matcher": "", "hooks": [{ "type": "command", "command": "__HOOKS_DIR__/logger.sh PreCompact" }] }],
+    "SessionEnd": [{ "matcher": "", "hooks": [{ "type": "command", "command": "__HOOKS_DIR__/logger.sh SessionEnd" }] }]
+  }
+}
