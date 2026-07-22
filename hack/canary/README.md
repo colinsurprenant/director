@@ -38,10 +38,50 @@ that regression loud.
 
 ## Modules
 
-- `cursor-cli/` — Cursor CLI (`cursor-agent`). Implemented.
-- Planned: `claude-code/`, `codex/`, `opencode/`. `lib.sh` holds the shared
-  helpers (timestamps, results-dir creation, fired-log analysis, findings
-  header, version recording) so those modules stay thin.
+- `claude-code/` — Claude Code (`claude`).
+- `codex/` — Codex CLI (`codex`).
+- `opencode/` — OpenCode (`opencode`).
+- `cursor-cli/` — Cursor CLI (`cursor-agent`), plus the parked IDE check.
+
+`lib.sh` holds the shared helpers (timestamps, results-dir creation, fired-log
+analysis, findings header, version recording) so the modules stay thin. The
+claude-code and codex modules also probe the PostToolUse `additionalContext`
+channel (the path Director's nudges ride) with a second token; opencode probes
+its equivalents (`chat.message` synthetic-part injection and the
+`tool.execute.after` output append).
+
+## Running a module
+
+Every module has the same interface, from its own directory:
+
+```
+./probe.sh            # full probe (turns 1 and 2, then analysis)
+./probe.sh --dry-run  # set up sandbox + hooks, self-test, print the commands
+                      # it WOULD run, invoke nothing
+./probe.sh --keep     # keep the temp sandbox dirs after the run
+```
+
+Exit codes: `0` the probe ran (verdicts follow), `2` auth-blocked, `1`
+operational error.
+
+Per-module prerequisites and sandboxing:
+
+- `claude-code/` — needs a logged-in `claude`. Points `CLAUDE_CONFIG_DIR` at a
+  throwaway config dir carrying only the canary hook wiring, so the real
+  `~/.claude/settings.json` (which on a Director machine carries Director's
+  own hooks) is never read and never written. Auth rides the macOS Keychain
+  (config-dir independent); elsewhere `~/.claude/.credentials.json` is copied
+  read-only into the sandbox.
+- `codex/` — needs `~/.codex/auth.json` (run `codex login` once). Points
+  `CODEX_HOME` at a throwaway dir seeded with a read-only copy of auth.json, a
+  canary hooks.json, and a config.toml pre-trusting the throwaway workspace.
+  The in-product hook trust gate is bypassed with codex's own automation
+  affordance, `--dangerously-bypass-hook-trust` — safe because the sandbox's
+  only hooks are the canary's logger. The gate itself is therefore not under
+  test; the contract behind it is.
+- `opencode/` — needs a configured provider. Copies the canary plugin into the
+  throwaway workspace's `.opencode/plugin/` dir (project-local, loaded with no
+  registration); the real `~/.config/opencode` is never touched.
 
 ## Running the Cursor module
 
@@ -51,17 +91,7 @@ Do one of:
 - run `cursor-agent login`, or
 - export `CURSOR_API_KEY=<your key>`
 
-Then, from `hack/canary/cursor-cli/`:
-
-```
-./probe.sh            # full probe (turns 1 and 2, then analysis)
-./probe.sh --dry-run  # set up workspace + hooks, self-test the template,
-                      # print the commands it WOULD run, invoke nothing
-./probe.sh --keep     # keep the temp workspace after the run for inspection
-```
-
-Exit codes: `0` the probe ran (verdicts follow), `2` auth-blocked, `1`
-operational error.
+Then run `./probe.sh` from `hack/canary/cursor-cli/` as above.
 
 ### Sandboxing
 
@@ -75,18 +105,19 @@ nothing else is ever deleted.
 
 ## How findings are recorded
 
-Each run writes to `cursor-cli/findings/run-<UTC timestamp>-v<version>/`:
+Each run writes to `<module>/findings/run-<UTC timestamp>-v<version>/`:
 
 - `fired.log` — one `<timestamp> <event>` line per hook firing.
-- `payload.<event>.<n>.json` — the raw stdin payload for each firing.
-- `turn1.out.json` / `turn1.err`, `turn2.out.json` / `turn2.err` — agent output.
-- `findings.md` — harness and version, date, the three verdicts, a fired-event
+- `payload.<event>.<n>.json` — the raw payload for each firing (the opencode
+  module caps payload dumps at 5 per hook name; fired.log counts stay exact).
+- `turn1.out.*` / `turn1.err`, `turn2.out.*` / `turn2.err` — agent output.
+- `findings.md` — harness and version, date, the verdicts, a fired-event
   count table, per-event payload key listing, and the exact commands used.
 
 `hack/canary/last-tested.json` is merge-updated with the latest run per harness:
 
 ```json
-{ "cursor-cli": { "version": "...", "last_run": "...", "results": "relative/path" } }
+{ "claude-code": { "version": "...", "last_run": "...", "results": "relative/path" } }
 ```
 
 ## When to run it
