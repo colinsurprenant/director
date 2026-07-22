@@ -171,6 +171,7 @@ log "workspace: $WORKSPACE"
 # Render .cursor/hooks.json from the template with absolute hook paths.
 render_hooks() {
   local out="$1"
+  canary_check_hooks_path "$HOOKS_DIR" || die "cannot render hook commands" 1
   mkdir -p "$(dirname "$out")"
   # __HOOKS_DIR__ -> absolute checked-out hooks dir.
   sed "s#__HOOKS_DIR__#${HOOKS_DIR}#g" "$TEMPLATE" >"$out"
@@ -255,7 +256,7 @@ log "turn 1: injection probe (180s cap)"
 set +e
 ( cd "$WORKSPACE" && run_with_timeout 180 "$CURSOR_BIN" -p --output-format json \
     --trust --workspace "$WORKSPACE" "$TURN1_PROMPT" ) \
-  >"$RESULTS_DIR/turn1.out.json" 2>"$RESULTS_DIR/turn1.err"
+  </dev/null >"$RESULTS_DIR/turn1.out.json" 2>"$RESULTS_DIR/turn1.err"
 T1_RC=$?
 set -e
 log "turn 1 exit: $T1_RC"
@@ -267,7 +268,7 @@ log "turn 2: tool-loop probe (180s cap)"
 set +e
 ( cd "$WORKSPACE" && run_with_timeout 180 "$CURSOR_BIN" -p --output-format json \
     --trust --force --workspace "$WORKSPACE" "$TURN2_PROMPT" ) \
-  >"$RESULTS_DIR/turn2.out.json" 2>"$RESULTS_DIR/turn2.err"
+  </dev/null >"$RESULTS_DIR/turn2.out.json" 2>"$RESULTS_DIR/turn2.err"
 T2_RC=$?
 set -e
 log "turn 2 exit: $T2_RC"

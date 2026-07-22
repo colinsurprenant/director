@@ -50,11 +50,14 @@ done
 # ---------------------------------------------------------------------------
 if [ "$MODE" = "clean" ]; then
   rm -rf "$FALLBACK_DIR"
-  if [ -d "$WORKSPACE" ] && [ -f "$WORKSPACE/.cursor/hooks.json" ]; then
+  # Only remove a workspace this script created: the sentinel is the ownership
+  # claim. A hooks.json alone is not proof — a user can have their own
+  # workspace under this documented name.
+  if [ -d "$WORKSPACE" ] && [ -f "$WORKSPACE/.canary-owned" ]; then
     rm -rf "$WORKSPACE"
     log "removed $WORKSPACE and $FALLBACK_DIR"
   else
-    log "workspace absent or not ours; removed only $FALLBACK_DIR"
+    log "workspace absent or missing .canary-owned sentinel (not created by this script); removed only $FALLBACK_DIR"
   fi
   exit 0
 fi
@@ -66,7 +69,14 @@ if [ "$MODE" = "prep" ]; then
   # Start from a clean slate so --analyze reads only this check's events.
   rm -rf "$FALLBACK_DIR"
 
+  # Ownership preflight: never overwrite a workspace this script did not
+  # create. The sentinel is dropped at first prep; a pre-existing dir without
+  # it belongs to the user.
+  if [ -d "$WORKSPACE" ] && [ ! -f "$WORKSPACE/.canary-owned" ]; then
+    die "refusing to reuse $WORKSPACE: it exists without the .canary-owned sentinel (not created by this script); move it aside first"
+  fi
   mkdir -p "$WORKSPACE/.cursor"
+  touch "$WORKSPACE/.canary-owned"
   if [ ! -d "$WORKSPACE/.git" ]; then
     ( cd "$WORKSPACE" \
       && git init -q \
@@ -75,6 +85,7 @@ if [ "$MODE" = "prep" ]; then
       && printf '# Cursor IDE canary workspace\n\nThrowaway. See hack/canary/cursor-cli/ide-check.sh.\n' >README.md \
       && git add README.md && git commit -q -m "canary: initial commit" )
   fi
+  canary_check_hooks_path "$HOOKS_DIR" || die "cannot render hook commands"
   sed "s#__HOOKS_DIR__#${HOOKS_DIR}#g" "$TEMPLATE" >"$WORKSPACE/.cursor/hooks.json"
   if [ "$MULTIKEY" -eq 1 ]; then
     # Retest variant: sessionStart emits three tokens via three key shapes
@@ -125,15 +136,21 @@ TOKEN_INJECTED="UNPROVEN (read the chat reply manually)"
 if grep -ql "$TOKEN" "$FALLBACK_DIR"/payload.*.json 2>/dev/null; then
   TOKEN_INJECTED="YES (found in a hook payload)"
 else
-  transcripts="$(grep -ho '"transcript_path"[[:space:]]*:[[:space:]]*"[^"]*"' \
-      "$FALLBACK_DIR"/payload.*.json 2>/dev/null \
+  # `|| true` inside the substitution is load-bearing: with no payloads or no
+  # transcript_path field (exactly the contract-drift case this tool exists to
+  # report), an unguarded grep exits 1 and set -e would kill the script here,
+  # silently, before any verdict is written.
+  transcripts="$({ grep -ho '"transcript_path"[[:space:]]*:[[:space:]]*"[^"]*"' \
+      "$FALLBACK_DIR"/payload.*.json 2>/dev/null || true; } \
     | sed -E 's/.*:[[:space:]]*"([^"]*)"$/\1/' | sort -u)"
-  for t in $transcripts; do
+  # read -r, not word splitting: a transcript path with spaces must survive.
+  while IFS= read -r t; do
+    [ -n "$t" ] || continue
     if [ -f "$t" ] && grep -q "$TOKEN" "$t"; then
       TOKEN_INJECTED="YES (found in transcript $t)"
       break
     fi
-  done
+  done <<<"$transcripts"
 fi
 
 # Preserve the run as a findings baseline alongside the CLI runs.
@@ -170,8 +187,9 @@ canary_findings_header "$FINDINGS_MD" "$HARNESS" "$IDE_VERSION" "$RUN_TS"
   [ "$found" -eq 0 ] && printf '(no payload files captured)\n'
 } >>"$FINDINGS_MD"
 
+REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || echo "$CANARY_DIR")"
 canary_record_version "$CANARY_DIR/last-tested.json" "$HARNESS" "$IDE_VERSION" "$RUN_TS" \
-  "hack/canary/cursor-cli/$(basename "$RESULTS_DIR")"
+  "${RESULTS_DIR#"$REPO_ROOT"/}"
 
 cat <<EOF
 === Cursor IDE canary summary ===

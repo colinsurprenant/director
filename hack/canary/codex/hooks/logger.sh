@@ -34,12 +34,14 @@ record() {
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown-time)"
   printf '%s %s\n' "$ts" "$EVENT" >>"$RESULTS_DIR/fired.log" 2>/dev/null || true
 
-  # Per-event incrementing counter so repeat firings do not clobber. A simple
-  # count of existing payload files for this event is sufficient and jq-free.
+  # Per-event counter plus PID: the count alone has a read-then-write window,
+  # and codex launches multiple matching hooks for one event concurrently —
+  # two firings would land on the same n and clobber a payload. The PID makes
+  # the name unique per firing; n keeps rough arrival order.
   n="$(ls "$RESULTS_DIR"/payload."$EVENT".*.json 2>/dev/null | wc -l | tr -d ' ')"
   [ -z "$n" ] && n=0
   n=$((n + 1))
-  printf '%s' "$PAYLOAD" >"$RESULTS_DIR/payload.$EVENT.$n.json" 2>/dev/null || true
+  printf '%s' "$PAYLOAD" >"$RESULTS_DIR/payload.$EVENT.$n.$$.json" 2>/dev/null || true
 }
 
 # Record, swallowing any error.

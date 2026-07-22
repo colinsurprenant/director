@@ -186,7 +186,7 @@ fi
 log "turn 1: injection probe (300s cap)"
 set +e
 ( cd "$WORKSPACE" && run_with_timeout 300 "$OPENCODE_BIN" run "$TURN1_PROMPT" ) \
-  >"$RESULTS_DIR/turn1.out.txt" 2>"$RESULTS_DIR/turn1.err"
+  </dev/null >"$RESULTS_DIR/turn1.out.txt" 2>"$RESULTS_DIR/turn1.err"
 T1_RC=$?
 set -e
 log "turn 1 exit: $T1_RC"
@@ -211,7 +211,7 @@ fi
 log "turn 2: tool-loop probe (300s cap)"
 set +e
 ( cd "$WORKSPACE" && run_with_timeout 300 "$OPENCODE_BIN" run "$TURN2_PROMPT" ) \
-  >"$RESULTS_DIR/turn2.out.txt" 2>"$RESULTS_DIR/turn2.err"
+  </dev/null >"$RESULTS_DIR/turn2.out.txt" 2>"$RESULTS_DIR/turn2.err"
 T2_RC=$?
 set -e
 log "turn 2 exit: $T2_RC"

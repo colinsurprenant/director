@@ -1,0 +1,49 @@
+{
+  "sessionID": "ses_074b69ff1ffed7tJJxWMqgS8RP",
+  "info": {
+    "id": "ses_074b69ff1ffed7tJJxWMqgS8RP",
+    "slug": "sunny-rocket",
+    "projectID": "ddf9512893776995fd82de04b148a1a9aad07e68",
+    "directory": "/private/var/folders/0v/vw52k5gd7t9bk0v2lyj5dg780000gn/T/canary-opencode-ws.tYR1DV",
+    "path": "",
+    "title": "New session - 2026-07-22T19:24:29.582Z",
+    "agent": "build",
+    "model": {
+      "id": "kimi-k3",
+      "providerID": "moonshotai",
+      "variant": "default"
+    },
+    "version": "1.18.3",
+    "cost": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "permission": [
+      {
+        "permission": "question",
+        "pattern": "*",
+        "action": "deny"
+      },
+      {
+        "permission": "plan_enter",
+        "pattern": "*",
+        "action": "deny"
+      },
+      {
+        "permission": "plan_exit",
+        "pattern": "*",
+        "action": "deny"
+      }
+    ],
+    "time": {
+      "created": 1784748269582,
+      "updated": 1784748269910
+    }
+  }
+}

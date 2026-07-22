@@ -1,0 +1,16 @@
+{
+  "sessionID": "ses_074b69ff1ffed7tJJxWMqgS8RP",
+  "info": {
+    "id": "msg_f8b49611e0011eCmVt512fJLAI",
+    "role": "user",
+    "sessionID": "ses_074b69ff1ffed7tJJxWMqgS8RP",
+    "time": {
+      "created": 1784748269854
+    },
+    "agent": "build",
+    "model": {
+      "providerID": "moonshotai",
+      "modelID": "kimi-k3"
+    }
+  }
+}

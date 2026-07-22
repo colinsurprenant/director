@@ -148,6 +148,7 @@ log "workspace:          $WORKSPACE"
 # copy of the real credentials file. The REAL ~/.claude is never written.
 render_settings() {
   local out="$1"
+  canary_check_hooks_path "$HOOKS_DIR" || die "cannot render hook commands" 1
   mkdir -p "$(dirname "$out")"
   sed "s#__HOOKS_DIR__#${HOOKS_DIR}#g" "$TEMPLATE" >"$out"
 }
@@ -247,7 +248,7 @@ log "turn 1: injection probe (180s cap)"
 set +e
 ( cd "$WORKSPACE" && CLAUDE_CONFIG_DIR="$SANDBOX_CFG" run_with_timeout 180 \
     "$CLAUDE_BIN" -p "$TURN1_PROMPT" --output-format json --model haiku ) \
-  >"$RESULTS_DIR/turn1.out.json" 2>"$RESULTS_DIR/turn1.err"
+  </dev/null >"$RESULTS_DIR/turn1.out.json" 2>"$RESULTS_DIR/turn1.err"
 T1_RC=$?
 set -e
 log "turn 1 exit: $T1_RC"
@@ -279,7 +280,7 @@ set +e
 ( cd "$WORKSPACE" && CLAUDE_CONFIG_DIR="$SANDBOX_CFG" run_with_timeout 180 \
     "$CLAUDE_BIN" -p "$TURN2_PROMPT" --output-format json --model haiku \
     --allowedTools Bash ) \
-  >"$RESULTS_DIR/turn2.out.json" 2>"$RESULTS_DIR/turn2.err"
+  </dev/null >"$RESULTS_DIR/turn2.out.json" 2>"$RESULTS_DIR/turn2.err"
 T2_RC=$?
 set -e
 log "turn 2 exit: $T2_RC"

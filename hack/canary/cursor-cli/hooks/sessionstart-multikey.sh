@@ -17,7 +17,7 @@ RESULTS_DIR="${CANARY_RESULTS_DIR:-/tmp/canary-cursor-fallback}"
   printf '%s %s\n' "$ts" "sessionStart-multikey" >>"$RESULTS_DIR/fired.log"
   n="$(ls "$RESULTS_DIR"/payload.sessionStart-multikey.*.json 2>/dev/null | wc -l | tr -d ' ')"
   [ -z "$n" ] && n=0
-  printf '%s' "$PAYLOAD" >"$RESULTS_DIR/payload.sessionStart-multikey.$((n + 1)).json"
+  printf '%s' "$PAYLOAD" >"$RESULTS_DIR/payload.sessionStart-multikey.$((n + 1)).$$.json"
 } 2>/dev/null || true
 
 printf '%s\n' '{"additional_context": "CANARY-A-SNAKE-91F2 is present.", "additionalContext": "CANARY-B-CAMEL-4D77 is present.", "hookSpecificOutput": {"hookEventName": "sessionStart", "additionalContext": "CANARY-C-HSO-E5A3 is present."}}'

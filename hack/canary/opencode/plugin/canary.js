@@ -103,5 +103,32 @@ export const CanaryPlugin = async ({ directory } = {}) => {
         record("experimental.chat.system.transform", { sessionID: input?.sessionID })
       } catch {}
     },
+
+    // Record-only coverage of the remaining plugin hooks the tested opencode
+    // exposes, so upstream adding/removing/reshaping any of them shows up in
+    // the fired table. Outputs are never mutated here.
+    "chat.params": async (input, output) => {
+      try {
+        record("chat.params", { input, keys: Object.keys(output ?? {}) })
+      } catch {}
+    },
+
+    "chat.headers": async (input, output) => {
+      try {
+        record("chat.headers", { input, keys: Object.keys(output ?? {}) })
+      } catch {}
+    },
+
+    "experimental.chat.messages.transform": async (input) => {
+      try {
+        record("experimental.chat.messages.transform", { sessionID: input?.sessionID })
+      } catch {}
+    },
+
+    "experimental.session.compacting": async (input) => {
+      try {
+        record("experimental.session.compacting", { sessionID: input?.sessionID })
+      } catch {}
+    },
   }
 }

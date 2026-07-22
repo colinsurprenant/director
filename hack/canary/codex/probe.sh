@@ -180,6 +180,7 @@ log "workspace:          $WORKSPACE"
 
 render_hooks() {
   local out="$1"
+  canary_check_hooks_path "$HOOKS_DIR" || die "cannot render hook commands" 1
   mkdir -p "$(dirname "$out")"
   sed "s#__HOOKS_DIR__#${HOOKS_DIR}#g" "$TEMPLATE" >"$out"
 }
@@ -278,10 +279,13 @@ fi
 # ---------------------------------------------------------------------------
 log "turn 1: injection probe (300s cap)"
 set +e
+# </dev/null is load-bearing: codex exec also reads stdin ("Reading additional
+# input from stdin..." in the baselines), so an inherited non-EOF stdin (a
+# supervising process, a pipe) would stall each turn to the timeout.
 ( CODEX_HOME="$SANDBOX_HOME" run_with_timeout 300 \
     "$CODEX_BIN" exec --dangerously-bypass-hook-trust --sandbox workspace-write \
     -C "$WORKSPACE" "$TURN1_PROMPT" ) \
-  >"$RESULTS_DIR/turn1.out.txt" 2>"$RESULTS_DIR/turn1.err"
+  </dev/null >"$RESULTS_DIR/turn1.out.txt" 2>"$RESULTS_DIR/turn1.err"
 T1_RC=$?
 set -e
 log "turn 1 exit: $T1_RC"
@@ -308,7 +312,7 @@ set +e
 ( CODEX_HOME="$SANDBOX_HOME" run_with_timeout 300 \
     "$CODEX_BIN" exec --dangerously-bypass-hook-trust --sandbox workspace-write \
     -C "$WORKSPACE" "$TURN2_PROMPT" ) \
-  >"$RESULTS_DIR/turn2.out.txt" 2>"$RESULTS_DIR/turn2.err"
+  </dev/null >"$RESULTS_DIR/turn2.out.txt" 2>"$RESULTS_DIR/turn2.err"
 T2_RC=$?
 set -e
 log "turn 2 exit: $T2_RC"

@@ -75,7 +75,10 @@ canary_payload_keys() {
   [ -f "$file" ] || { printf '(missing)'; return 0; }
   if canary_have jq; then
     local keys
-    keys="$(jq -r 'if type=="object" then (keys_unsorted | join(", ")) else "(not-an-object: "+type+")" end' "$file" 2>/dev/null)"
+    # The empty object gets its own label: joined keys of {} are "", which
+    # would fall through to the grep fallback and read as a parse failure —
+    # indistinguishable from "our parser choked" in a shape-diff.
+    keys="$(jq -r 'if type=="object" then (if (keys_unsorted | length) == 0 then "(empty object)" else (keys_unsorted | join(", ")) end) else "(not-an-object: "+type+")" end' "$file" 2>/dev/null)"
     if [ -n "$keys" ]; then
       printf '%s' "$keys"
       return 0
@@ -90,6 +93,25 @@ canary_payload_keys() {
   else
     printf '(unparsed)'
   fi
+}
+
+# canary_check_hooks_path <hooks-dir>
+# Fails (return 1, message on stderr) when the hooks dir path contains
+# characters that would break the rendered shell-form hook commands (space, &,
+# #, double quote, backslash). The alternative — escaping into the sed
+# replacement and quoting the command strings — can still half-work silently;
+# a canary must fail loudly instead: a checkout under a hostile path would
+# otherwise render valid-JSON configs whose hooks never fire, burning live
+# turns to report a false contract breakage.
+canary_check_hooks_path() {
+  local dir="$1"
+  case "$dir" in
+    *[\ \&\#\"\\]*)
+      printf 'canary: hooks dir path %s contains characters unsafe for shell-form hook commands (space, &, #, ", \\); move the checkout to a plain path\n' "$dir" >&2
+      return 1
+      ;;
+  esac
+  return 0
 }
 
 # canary_findings_header <out-file> <harness> <version> <date>
@@ -115,13 +137,21 @@ canary_record_version() {
     tmp="$(mktemp "${TMPDIR:-/tmp}/canary-last-tested.XXXXXX")"
     local base='{}'
     [ -f "$file" ] && base="$(cat "$file")"
-    printf '%s' "$base" | jq \
+    if printf '%s' "$base" | jq \
       --arg h "$harness" \
       --arg v "$version" \
       --arg r "$last_run" \
       --arg p "$results_rel" \
       '. + {($h): {version: $v, last_run: $r, results: $p}}' \
-      >"$tmp" 2>/dev/null && mv "$tmp" "$file" || rm -f "$tmp"
+      >"$tmp" 2>/dev/null; then
+      mv "$tmp" "$file"
+    else
+      # A silent no-op here would let a corrupted file go permanently stale
+      # while every probe still exits 0 — the version-change trigger the
+      # README describes would quietly stop working.
+      rm -f "$tmp"
+      printf 'warning: could not merge into %s (existing content unparseable?); file left untouched\n' "$file" >&2
+    fi
   else
     # No jq: write just this harness. Loses other harnesses if present, so warn.
     if [ -f "$file" ]; then

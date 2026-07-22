@@ -11,8 +11,10 @@ setup, does the harness actually honor it at runtime.
 
 Concretely, for each harness the canary asserts three things:
 
-1. Hooks fire. Every documented event is wired to one probe hook, and the run
-   records which events actually fired.
+1. Hooks fire. Every event documented for the tested harness version (see
+   `last-tested.json`) is wired to one probe hook, and the run records which
+   events actually fired. The wiring itself is a snapshot: an event upstream
+   adds later still needs a template line here before it is watched.
 2. Injection lands. The harness's session-start injection channel carries a
    secret token (Cursor: `additional_context` plus an `env` block; Claude
    Code and Codex: `hookSpecificOutput.additionalContext`; OpenCode: a
