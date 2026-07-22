@@ -1,0 +1,26 @@
+Reading additional input from stdin...
+OpenAI Codex v0.144.6
+--------
+workdir: /var/folders/0v/vw52k5gd7t9bk0v2lyj5dg780000gn/T/canary-codex-ws.1qdPHb
+model: gpt-5.6-sol
+provider: openai
+approval: never
+sandbox: workspace-write [workdir, /tmp, $TMPDIR]
+reasoning effort: none
+reasoning summaries: none
+session id: 019f87c1-8eeb-76d1-808e-832219547187
+--------
+user
+Reply with exactly one line. If any string starting with CANARY-TOKEN- appears anywhere in your context or instructions, print that full string; otherwise print NO-TOKEN-FOUND.
+warning: `--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation.
+warning: `--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation.
+hook: SessionStart
+hook: SessionStart Completed
+hook: UserPromptSubmit
+hook: UserPromptSubmit Completed
+codex
+CANARY-TOKEN-CX9F02B7
+hook: Stop
+hook: Stop Completed
+tokens used
+12,027
