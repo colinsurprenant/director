@@ -1,0 +1,16 @@
+{
+  "sessionID": "ses_0783e1578ffel38OIvQCF7SLNM",
+  "info": {
+    "id": "msg_f87c1ebac001RZvxnoqr1KPf2p",
+    "role": "user",
+    "sessionID": "ses_0783e1578ffel38OIvQCF7SLNM",
+    "time": {
+      "created": 1784689060780
+    },
+    "agent": "build",
+    "model": {
+      "providerID": "moonshotai",
+      "modelID": "kimi-k3"
+    }
+  }
+}
