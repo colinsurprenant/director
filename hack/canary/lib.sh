@@ -95,6 +95,27 @@ canary_payload_keys() {
   fi
 }
 
+# canary_mask_user_email <results-dir>
+# Masks the VALUE of any "user_email" field in captured payload.*.json files.
+# Runs post-capture, pre-commit — never in the capture hooks themselves: the
+# loggers must stay raw verbatim recorders (and never-fail), so the account-
+# linked value is stripped only from what gets committed as a baseline. The
+# field itself is kept, so payload-key shape diffing is unaffected. Values
+# only; no structural rewrite, and unparseable files are processed as text.
+canary_mask_user_email() {
+  local dir="$1" f tmp
+  for f in "$dir"/payload.*.json; do
+    [ -f "$f" ] || continue
+    grep -q '"user_email"' "$f" 2>/dev/null || continue
+    tmp="$f.tmp.$$"
+    if sed -E 's/("user_email"[[:space:]]*:[[:space:]]*)"[^"]*"/\1"REDACTED"/g' "$f" >"$tmp"; then
+      mv "$tmp" "$f"
+    else
+      rm -f "$tmp"
+    fi
+  done
+}
+
 # canary_check_hooks_path <hooks-dir>
 # Fails (return 1, message on stderr) when the hooks dir path contains
 # characters that would break the rendered shell-form hook commands (space, &,

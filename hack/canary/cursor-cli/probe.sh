@@ -276,6 +276,10 @@ log "turn 2 exit: $T2_RC"
 # ---------------------------------------------------------------------------
 # Analyze
 # ---------------------------------------------------------------------------
+# Cursor stamps the logged-in account's user_email into every hook payload;
+# mask it before the results become a committable baseline.
+canary_mask_user_email "$RESULTS_DIR"
+
 contains() { grep -q "$1" "$2" 2>/dev/null; }
 
 # The sentinel values exist ONLY in the hook's stdout, never in a prompt, so a

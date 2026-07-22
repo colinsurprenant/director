@@ -161,6 +161,8 @@ fi
 RESULTS_DIR="$FINDINGS_DIR/ide-run-$(canary_run_stamp)-v$IDE_VERSION"
 mkdir -p "$RESULTS_DIR"
 cp "$FALLBACK_DIR"/fired.log "$FALLBACK_DIR"/payload.*.json "$RESULTS_DIR"/ 2>/dev/null || true
+# Mask the account email in the COPIES only — the fallback originals stay raw.
+canary_mask_user_email "$RESULTS_DIR"
 
 FINDINGS_MD="$RESULTS_DIR/findings.md"
 canary_findings_header "$FINDINGS_MD" "$HARNESS" "$IDE_VERSION" "$RUN_TS"
