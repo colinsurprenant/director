@@ -20,12 +20,14 @@
 #   1  operational error (setup failed, unexpected condition)
 #   2  auth-blocked (no provider configured / provider auth failed)
 #
-# Sandboxing: the probe never touches ~/.config/opencode or the OpenCode data
-# dir. The canary plugin is copied into a throwaway workspace's
-# .opencode/plugin/ dir, which OpenCode loads project-locally with no
-# registration. A globally installed Director plugin (this machine dogfoods
-# Director) also loads, but is inert evidence-wise: the canary tokens exist
-# only in canary.js, so nothing else can produce them.
+# Sandboxing: the probe never WRITES to ~/.config/opencode. The canary plugin
+# is copied into a throwaway workspace's .opencode/plugin/ dir, which OpenCode
+# loads project-locally with no registration. Full isolation is not possible:
+# the global config is still read (a globally installed Director plugin — this
+# machine dogfoods Director — also loads, but is inert evidence-wise: the
+# canary tokens exist only in canary.js, so nothing else can produce them),
+# and OpenCode records the canary sessions in its real data dir, since auth
+# lives there too. Only the workspace itself is sandboxed.
 
 set -euo pipefail
 

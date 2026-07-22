@@ -21,7 +21,7 @@
   },
   "opencode": {
     "version": "1.18.3",
-    "last_run": "2026-07-22T02:58:38Z",
-    "results": "hack/canary/opencode/findings/run-20260722-025735-v1.18.3"
+    "last_run": "2026-07-22T03:06:34Z",
+    "results": "hack/canary/opencode/findings/run-20260722-030513-v1.18.3"
   }
 }

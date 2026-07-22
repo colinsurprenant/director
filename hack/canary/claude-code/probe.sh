@@ -25,7 +25,11 @@
 # wiring, so the real settings.json is never read and never written. Auth: on
 # macOS the OAuth credential lives in the Keychain (config-dir independent);
 # elsewhere ~/.claude/.credentials.json is COPIED (read-only) into the
-# sandbox. The workspace is a throwaway git repo under mktemp.
+# sandbox. Caveat with the file copy: should the agent refresh the OAuth token
+# mid-run, the rotated token lands only in the sandbox copy and the REAL file
+# may be left holding an invalidated one — a post-canary logout on the next
+# real session traces here, not to a mystery. The workspace is a throwaway
+# git repo under mktemp.
 
 set -euo pipefail
 
@@ -151,6 +155,12 @@ render_settings() {
 seed_sandbox() {
   render_settings "$SANDBOX_CFG/settings.json"
   printf '{"hasCompletedOnboarding": true}\n' >"$SANDBOX_CFG/.claude.json"
+  # A dry run never invokes claude, so never copy credentials for it — with
+  # --keep that copy would otherwise linger in tmp.
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "dry-run: skipping credentials copy"
+    return 0
+  fi
   if [ -f "$HOME/.claude/.credentials.json" ]; then
     cp "$HOME/.claude/.credentials.json" "$SANDBOX_CFG/.credentials.json"
     chmod 600 "$SANDBOX_CFG/.credentials.json"

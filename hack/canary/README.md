@@ -13,11 +13,13 @@ Concretely, for each harness the canary asserts three things:
 
 1. Hooks fire. Every documented event is wired to one probe hook, and the run
    records which events actually fired.
-2. Injection lands. A `sessionStart` hook returns `additional_context` (and an
-   `env` block); the canary then asks the agent to echo a secret token and
-   checks the token reached the model's context.
-3. Payload shape holds. Each firing's raw stdin payload is saved and its
-   top-level JSON keys are listed, so a shape change upstream is visible.
+2. Injection lands. The harness's session-start injection channel carries a
+   secret token (Cursor: `additional_context` plus an `env` block; Claude
+   Code and Codex: `hookSpecificOutput.additionalContext`; OpenCode: a
+   `chat.message` synthetic part); the canary then asks the agent to echo the
+   token and checks it reached the model's context.
+3. Payload shape holds. Each firing's raw payload is saved and its top-level
+   JSON keys are listed, so a shape change upstream is visible.
 
 Verdicts are data, not pass/fail gates. A negative result (token not injected)
 is a real finding worth recording, not a harness error.
@@ -56,8 +58,10 @@ Every module has the same interface, from its own directory:
 
 ```
 ./probe.sh            # full probe (turns 1 and 2, then analysis)
-./probe.sh --dry-run  # set up sandbox + hooks, self-test, print the commands
-                      # it WOULD run, invoke nothing
+./probe.sh --dry-run  # set up sandbox + hooks, self-test the config template
+                      # (where the module has one; opencode ships a plugin
+                      # instead), print the commands it WOULD run, invoke
+                      # nothing — and never copy credentials
 ./probe.sh --keep     # keep the temp sandbox dirs after the run
 ```
 
@@ -81,7 +85,14 @@ Per-module prerequisites and sandboxing:
   test; the contract behind it is.
 - `opencode/` — needs a configured provider. Copies the canary plugin into the
   throwaway workspace's `.opencode/plugin/` dir (project-local, loaded with no
-  registration); the real `~/.config/opencode` is never touched.
+  registration); the real `~/.config/opencode` is read (global plugins load)
+  but never written, and OpenCode records the throwaway canary sessions in its
+  real data dir (auth lives there, so the data dir cannot be isolated).
+
+Credential-copy caveat (claude-code off-macOS, codex): should the agent
+refresh its OAuth token mid-run, the rotated token lands only in the sandbox
+copy and the real credentials file may be left holding an invalidated one — a
+logout on the next real session after a canary run traces here.
 
 ## Running the Cursor module
 

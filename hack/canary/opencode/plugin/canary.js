@@ -44,14 +44,19 @@ function record(name, payload) {
     mkdirSync(RESULTS, { recursive: true })
     const ts = new Date().toISOString().replace(/\.\d{3}Z$/, "Z")
     appendFileSync(join(RESULTS, "fired.log"), `${ts} ${name}\n`)
-    const n = readdirSync(RESULTS).filter((f) => f.startsWith(`payload.${name}.`)).length + 1
+    // Exact-match the counter files: a bare startsWith prefix would also count
+    // sibling names that extend this one (chat.message vs
+    // chat.message.injected), skipping numbers and sharing the cap.
+    const esc = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    const mine = new RegExp(`^payload\\.${esc}\\.\\d+\\.json$`)
+    const n = readdirSync(RESULTS).filter((f) => mine.test(f)).length + 1
     if (n <= MAX_PAYLOADS_PER_NAME) {
       writeFileSync(join(RESULTS, `payload.${name}.${n}.json`), safeJson(payload))
     }
   } catch {}
 }
 
-export const CanaryPlugin = async ({ directory }) => {
+export const CanaryPlugin = async ({ directory } = {}) => {
   record("plugin.init", { directory })
   return {
     event: async ({ event }) => {

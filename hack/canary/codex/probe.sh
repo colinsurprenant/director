@@ -20,7 +20,11 @@
 #   2  auth-blocked (no ~/.codex/auth.json to copy into the sandbox)
 #
 # Sandboxing: the probe NEVER touches the real ~/.codex. It points CODEX_HOME
-# at a throwaway dir seeded with (a) a READ-ONLY COPY of the real auth.json,
+# at a throwaway dir seeded with (a) a READ-ONLY COPY of the real auth.json
+# (caveat: should codex refresh the token mid-run, the rotated token lands
+# only in the sandbox copy and the real auth.json may be left holding an
+# invalidated one — a post-canary logout on the next real session traces
+# here, not to a mystery),
 # (b) a canary hooks.json, and (c) a config.toml that pre-trusts the throwaway
 # workspace. The in-product hook trust gate (a hook runs only after the human
 # trusts its exact definition; the trusted hash is a normalized-TOML sha256
@@ -97,10 +101,18 @@ fi
 log "codex: $CODEX_BIN (version $AGENT_VERSION)"
 
 # The trust bypass is what makes an unattended run possible; without it every
-# sandbox hooks.json would need an in-product trust round first.
-if [ "$DRY_RUN" -eq 0 ] \
-   && ! "$CODEX_BIN" exec --help 2>&1 | grep -q 'dangerously-bypass-hook-trust'; then
-  die "codex $AGENT_VERSION lacks --dangerously-bypass-hook-trust; upgrade codex (or trust the canary hooks in-product and drop the flag from this probe)" 1
+# sandbox hooks.json would need an in-product trust round first. Capture the
+# help text and match with `case` instead of piping into grep -q: under
+# pipefail, grep -q closing the pipe early can SIGPIPE codex and turn a found
+# flag into a false "lacks the flag" death.
+if [ "$DRY_RUN" -eq 0 ]; then
+  EXEC_HELP="$("$CODEX_BIN" exec --help 2>&1 || true)"
+  case "$EXEC_HELP" in
+    *dangerously-bypass-hook-trust*) : ;;
+    *)
+      die "codex $AGENT_VERSION lacks --dangerously-bypass-hook-trust; upgrade codex (or trust the canary hooks in-product and drop the flag from this probe)" 1
+      ;;
+  esac
 fi
 
 # ---------------------------------------------------------------------------
@@ -173,7 +185,11 @@ render_hooks() {
 }
 
 seed_sandbox() {
-  if [ -f "$REAL_AUTH" ]; then
+  # A dry run never invokes codex, so never copy auth for it — with --keep
+  # that copy would otherwise linger in tmp.
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "dry-run: skipping auth.json copy"
+  elif [ -f "$REAL_AUTH" ]; then
     cp "$REAL_AUTH" "$SANDBOX_HOME/auth.json"
     chmod 600 "$SANDBOX_HOME/auth.json"
     log "copied ~/.codex/auth.json into sandbox (read-only copy)"
