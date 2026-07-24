@@ -152,9 +152,11 @@ green does not prove the contract survived the update; that is what this
 verifies. There is no automatic detection: compare the installed version
 (`<cli> --version`) against the `version` recorded for that harness in
 `last-tested.json`, and re-run that module when they differ. The fresh run
-writes a new `findings/run-*` dir; diff its `findings.md` against the committed
-baseline (the run `last-tested.json` still points at) to spot a regression. A
-clean run becomes the new baseline: commit it and prune the previous one.
+writes a new `findings/run-*` dir and repoints `last-tested.json` at it, so
+`git diff hack/canary/last-tested.json` shows both the prior baseline path and
+the new one. Diff the new `findings.md` against that prior baseline to spot a
+regression. A clean run is already the new baseline: commit it and prune the
+prior dir.
 
 **A new harness (adapter acceptance).** Build the canary module before the
 install adapter, not after. A green contract (hooks fire, injection lands,
