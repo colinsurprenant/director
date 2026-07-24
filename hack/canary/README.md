@@ -143,7 +143,28 @@ fresh baseline lands.
 
 ## When to run it
 
-Re-run on a harness version change, not on every commit. This is a contract
-check against a moving upstream, so the trigger is "the harness updated", not
-CI-per-commit. Compare the new `findings.md` against the previous run in
-`findings/` to spot a contract regression.
+The canary is on-demand maintainer tooling, not CI: a run needs real
+per-harness auth, so it lives on the maintainer's machine and fires on one of
+two triggers.
+
+**A supported harness updated (regression check).** `director doctor` staying
+green does not prove the contract survived the update; that is what this
+verifies. There is no automatic detection: compare the installed version
+(`<cli> --version`) against the `version` recorded for that harness in
+`last-tested.json`, and re-run that module when they differ. The fresh run
+writes a new `findings/run-*` dir; diff its `findings.md` against the committed
+baseline (the run `last-tested.json` still points at) to spot a regression. A
+clean run becomes the new baseline: commit it and prune the previous one.
+
+**A new harness (adapter acceptance).** Build the canary module before the
+install adapter, not after. A green contract (hooks fire, injection lands,
+payload shape captured) is the go/no-go on whether the harness is integrable at
+all, and the probe becomes the adapter's acceptance test. The Cursor CLI module
+shipped this way, ahead of any Cursor adapter.
+
+**When a channel goes red.** A negative verdict is a finding, not a script
+error. Record it: open a tracking issue naming the harness version, the failing
+channel, an unpark condition (the release or upstream fix that would justify a
+re-test), and the exact command to reproduce. The Cursor IDE case (issue #50)
+is the worked example: injection broke upstream, so it is parked with a
+`--multikey` re-test recipe and unparks on the next IDE release.
