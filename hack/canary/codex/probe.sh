@@ -20,7 +20,7 @@
 #   2  auth-blocked (no ~/.codex/auth.json to copy into the sandbox)
 #
 # Sandboxing: the probe NEVER touches the real ~/.codex. It points CODEX_HOME
-# at a throwaway dir seeded with (a) a READ-ONLY COPY of the real auth.json
+# at a throwaway dir seeded with (a) a PRIVATE 0600 COPY of the real auth.json
 # (caveat: should codex refresh the token mid-run, the rotated token lands
 # only in the sandbox copy and the real auth.json may be left holding an
 # invalidated one — a post-canary logout on the next real session traces
@@ -193,7 +193,7 @@ seed_sandbox() {
   elif [ -f "$REAL_AUTH" ]; then
     cp "$REAL_AUTH" "$SANDBOX_HOME/auth.json"
     chmod 600 "$SANDBOX_HOME/auth.json"
-    log "copied ~/.codex/auth.json into sandbox (read-only copy)"
+    log "copied ~/.codex/auth.json into sandbox (private 0600 copy)"
   fi
   render_hooks "$SANDBOX_HOME/hooks.json"
   # Pre-trust the throwaway workspace so exec does not downgrade for an

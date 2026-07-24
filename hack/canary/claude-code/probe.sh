@@ -24,7 +24,7 @@
 # CLAUDE_CONFIG_DIR at a throwaway config dir carrying only the canary hook
 # wiring, so the real settings.json is never read and never written. Auth: on
 # macOS the OAuth credential lives in the Keychain (config-dir independent);
-# elsewhere ~/.claude/.credentials.json is COPIED (read-only) into the
+# elsewhere ~/.claude/.credentials.json is COPIED (private, mode 0600) into the
 # sandbox. Caveat with the file copy: should the agent refresh the OAuth token
 # mid-run, the rotated token lands only in the sandbox copy and the REAL file
 # may be left holding an invalidated one — a post-canary logout on the next
@@ -144,8 +144,8 @@ log "workspace:          $WORKSPACE"
 ) || die "failed to initialise temp git repo" 1
 
 # Seed the sandbox config: hooks wiring from the template, onboarding state so
-# a fresh config dir does not trip first-run flows, and (non-macOS) a read-only
-# copy of the real credentials file. The REAL ~/.claude is never written.
+# a fresh config dir does not trip first-run flows, and (non-macOS) a private
+# 0600 copy of the real credentials file. The REAL ~/.claude is never written.
 render_settings() {
   local out="$1"
   canary_check_hooks_path "$HOOKS_DIR" || die "cannot render hook commands" 1
@@ -165,7 +165,7 @@ seed_sandbox() {
   if [ -f "$HOME/.claude/.credentials.json" ]; then
     cp "$HOME/.claude/.credentials.json" "$SANDBOX_CFG/.credentials.json"
     chmod 600 "$SANDBOX_CFG/.credentials.json"
-    log "copied ~/.claude/.credentials.json into sandbox (read-only copy)"
+    log "copied ~/.claude/.credentials.json into sandbox (private 0600 copy)"
   else
     log "no ~/.claude/.credentials.json (macOS Keychain auth expected)"
   fi

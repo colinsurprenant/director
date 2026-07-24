@@ -77,9 +77,10 @@ Per-module prerequisites and sandboxing:
   `~/.claude/settings.json` (which on a Director machine carries Director's
   own hooks) is never read and never written. Auth rides the macOS Keychain
   (config-dir independent); elsewhere `~/.claude/.credentials.json` is copied
-  read-only into the sandbox.
+  into the sandbox as a private 0600 copy (owner-writable, isolated from the
+  real file).
 - `codex/` — needs `~/.codex/auth.json` (run `codex login` once). Points
-  `CODEX_HOME` at a throwaway dir seeded with a read-only copy of auth.json, a
+  `CODEX_HOME` at a throwaway dir seeded with a private 0600 copy of auth.json, a
   canary hooks.json, and a config.toml pre-trusting the throwaway workspace.
   The in-product hook trust gate is bypassed with codex's own automation
   affordance, `--dangerously-bypass-hook-trust` — safe because the sandbox's

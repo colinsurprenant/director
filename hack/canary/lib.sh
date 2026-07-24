@@ -7,13 +7,6 @@
 #
 # All functions are prefixed `canary_` to avoid colliding with a caller's names.
 
-# Directory containing this lib.sh (hack/canary), resolved absolutely.
-# shellcheck disable=SC2155
-canary_lib_dir() {
-  local src="${BASH_SOURCE[0]}"
-  cd "$(dirname "$src")" && pwd
-}
-
 # ISO 8601 UTC timestamp, e.g. 2026-07-21T18:04:12Z. Used in fired.log lines.
 canary_timestamp() {
   date -u +%Y-%m-%dT%H:%M:%SZ
@@ -33,7 +26,8 @@ canary_make_results_dir() {
   local version="$2"
   local safe_version
   safe_version="$(printf '%s' "$version" | tr -c 'A-Za-z0-9._-' '_')"
-  local dir="${findings_dir%/}/run-$(canary_run_stamp)-v${safe_version}"
+  local dir
+  dir="${findings_dir%/}/run-$(canary_run_stamp)-v${safe_version}"
   mkdir -p "$dir"
   printf '%s' "$dir"
 }
