@@ -133,6 +133,13 @@ Each run writes to `<module>/findings/run-<UTC timestamp>-v<version>/`:
 { "claude-code": { "version": "...", "last_run": "...", "results": "relative/path" } }
 ```
 
+Retention: commit only the latest baseline per harness (the run
+`last-tested.json` points at), plus any run linked from an external tracker.
+Superseded runs live in git history, not the working tree — a re-run diffs
+against the current baseline, so old generations are dead weight (and inflate
+the PR file count past review tooling's limits). Prune the previous run when a
+fresh baseline lands.
+
 ## When to run it
 
 Re-run on a harness version change, not on every commit. This is a contract
