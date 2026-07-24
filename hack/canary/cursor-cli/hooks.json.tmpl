@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [{ "command": "__HOOKS_DIR__/logger.sh sessionStart" }],
+    "sessionEnd": [{ "command": "__HOOKS_DIR__/logger.sh sessionEnd" }],
+    "preToolUse": [{ "command": "__HOOKS_DIR__/logger.sh preToolUse" }],
+    "postToolUse": [{ "command": "__HOOKS_DIR__/logger.sh postToolUse" }],
+    "postToolUseFailure": [{ "command": "__HOOKS_DIR__/logger.sh postToolUseFailure" }],
+    "subagentStart": [{ "command": "__HOOKS_DIR__/logger.sh subagentStart" }],
+    "subagentStop": [{ "command": "__HOOKS_DIR__/logger.sh subagentStop" }],
+    "beforeShellExecution": [{ "command": "__HOOKS_DIR__/logger.sh beforeShellExecution" }],
+    "afterShellExecution": [{ "command": "__HOOKS_DIR__/logger.sh afterShellExecution" }],
+    "beforeMCPExecution": [{ "command": "__HOOKS_DIR__/logger.sh beforeMCPExecution" }],
+    "afterMCPExecution": [{ "command": "__HOOKS_DIR__/logger.sh afterMCPExecution" }],
+    "beforeReadFile": [{ "command": "__HOOKS_DIR__/logger.sh beforeReadFile" }],
+    "afterFileEdit": [{ "command": "__HOOKS_DIR__/logger.sh afterFileEdit" }],
+    "beforeSubmitPrompt": [{ "command": "__HOOKS_DIR__/logger.sh beforeSubmitPrompt" }],
+    "preCompact": [{ "command": "__HOOKS_DIR__/logger.sh preCompact" }],
+    "stop": [{ "command": "__HOOKS_DIR__/logger.sh stop" }],
+    "afterAgentResponse": [{ "command": "__HOOKS_DIR__/logger.sh afterAgentResponse" }],
+    "afterAgentThought": [{ "command": "__HOOKS_DIR__/logger.sh afterAgentThought" }]
+  }
+}

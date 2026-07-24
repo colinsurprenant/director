@@ -1,0 +1,12 @@
+{
+  "sessionID": "ses_074b69ff1ffed7tJJxWMqgS8RP",
+  "part": {
+    "id": "prt_directorys8pa99z0y",
+    "sessionID": "ses_074b69ff1ffed7tJJxWMqgS8RP",
+    "messageID": "msg_f8b49611e0011eCmVt512fJLAI",
+    "type": "text",
+    "synthetic": true,
+    "text": "This is your authoritative current state; build on it, do not re-derive or re-read it.\nDELIVERY CHECK (overrides the line above when it applies): if what you received is a truncated or persisted-output rendering of this block (a 'saved to' file path plus a short preview instead of the full text), the state did NOT reach you — Read that full file before doing anything else; the file, not the preview, is the authoritative block.\n\n## CHARTER\n(no charter yet — run `director adopt` to add one)\n\n# director render — path-private-var-folders-0v-vw52k5gd7t9bk0v2lyj5dg780000gn-T-canary-opencode-ws.tYR1DV-.git\n\n## open-items\n(none)\n\n## handoffs\n(none)\n\n## decisions\n(none)\n"
+  },
+  "time": 1784748269906
+}
