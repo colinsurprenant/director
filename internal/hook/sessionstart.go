@@ -191,14 +191,14 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID, uuid, flavor string
 		}
 		// Sibling sessions live on this same workstream (same checkout). "Live"
 		// is a row with a heartbeat younger than the idle TTL — but note what a
-		// row's lifetime actually is: PostToolUse heartbeats materialize it and
-		// every allowed Stop archives it (stop.go), so a live row means a sibling
-		// is MID-TURN right now, or died ungracefully within the TTL. A sibling
-		// sitting at its prompt between turns has no row and is NOT detected —
-		// the signal is honest but narrow; widening it is a row-lifecycle design
-		// question (archive on session end rather than per-turn Stop), not a
-		// window-tuning one. Fail open like the nudge: a fleet read problem
-		// costs the hint, never the Ground Truth.
+		// row's lifetime actually is: PostToolUse heartbeats materialize it,
+		// every allowed Stop archives it per turn (stop.go), and SessionEnd reaps
+		// it when the session exits (sessionend.go), including an /exit with zero
+		// turns. So a live row means a sibling is MID-TURN right now, or was
+		// killed ungracefully within the TTL. A sibling sitting at its prompt
+		// between turns has no row and is NOT detected — the signal is honest but
+		// narrow. Fail open like the nudge: a fleet read problem costs the hint,
+		// never the Ground Truth.
 		siblings := 0
 		if uuids, err := fleet.LiveSessions(hub, workstreamID, time.Now().UTC(), render.IdleAfter); err != nil {
 			logFailure(hub, EventSessionStart, sessionID, fmt.Sprintf("concurrent-session check: %v", err))

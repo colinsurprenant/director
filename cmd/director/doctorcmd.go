@@ -246,8 +246,8 @@ func binaryResolutionCheck(in doctorInputs) check {
 	}
 }
 
-// claudeHooksCheck verifies the Claude Code side is wired: the tagged entries are
-// in settings.json AND the shims those entries point at actually exist.
+// claudeHooksCheck verifies the Claude Code side is wired: the FULL set of tagged
+// entries is in settings.json AND the shims those entries point at actually exist.
 func claudeHooksCheck(in doctorInputs) check {
 	if !install.ManagedEntriesPresent(in.settingsPath) {
 		// ManagedEntriesPresent collapses a read/parse failure to the same false as
@@ -260,7 +260,15 @@ func claudeHooksCheck(in doctorInputs) check {
 		}
 		return check{"claude code hooks", levelFail, fmt.Sprintf("no Director hooks in %s — run `director install`.", in.settingsPath)}
 	}
-	if missing := missingShims(in.hooksDir); len(missing) > 0 {
+	// Present is not complete: a binary upgrade adds hook events an older install
+	// never wrote, and the entries already there keep ManagedEntriesPresent true
+	// while the new hook silently never fires.
+	if missing := install.MissingManagedEvents(in.settingsPath, in.hooksDir); len(missing) > 0 {
+		return check{"claude code hooks", levelFail, fmt.Sprintf(
+			"%s carries Director hooks but is missing a managed entry for %s — a Director upgrade adds hook events an older install never wrote, and a missing one silently never fires. Re-run `director install`.",
+			in.settingsPath, strings.Join(missing, ", "))}
+	}
+	if missing := missingShims(in.hooksDir, install.ClaudeShims()); len(missing) > 0 {
 		return check{"claude code hooks", levelFail, fmt.Sprintf(
 			"settings.json references Director hooks, but shims are missing from %s (%s) — re-run `director install`.", in.hooksDir, strings.Join(missing, ", "))}
 	}
@@ -274,7 +282,7 @@ func codexHooksCheck(in doctorInputs) (check, bool) {
 	if !install.ManagedEntriesPresent(in.codexHooks) {
 		return check{}, false
 	}
-	if missing := missingShims(in.hooksDir); len(missing) > 0 {
+	if missing := missingShims(in.hooksDir, install.CodexShims()); len(missing) > 0 {
 		return check{"codex hooks", levelFail, fmt.Sprintf(
 			"%s references Director hooks, but shims are missing from %s (%s) — re-run `director install --codex`.", in.codexHooks, in.hooksDir, strings.Join(missing, ", "))}, true
 	}
@@ -400,11 +408,14 @@ func isExecutable(path string) bool {
 	return fi.Mode()&0o111 != 0
 }
 
-// missingShims returns the expected shim basenames absent (or non-executable) in
-// hooksDir, checked against install's own embedded set so the two never drift.
-func missingShims(hooksDir string) []string {
+// missingShims returns which of expected (a target's own shim set, from install)
+// are absent or non-executable in hooksDir. The set is per-target on purpose: the
+// hooks dir is shared, so it holds every embedded shim, but faulting a target for a
+// shim its entries never reference would fail a Codex-only machine over the
+// Claude-Code-only SessionEnd shim.
+func missingShims(hooksDir string, expected []string) []string {
 	var missing []string
-	for _, name := range install.ExpectedShims() {
+	for _, name := range expected {
 		if !isExecutable(filepath.Join(hooksDir, name)) {
 			missing = append(missing, name)
 		}

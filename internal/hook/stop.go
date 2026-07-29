@@ -14,9 +14,10 @@ import (
 	"github.com/colinsurprenant/director/internal/identity"
 )
 
-// stop.go runs at Stop: first end-of-session bookkeeping (mark the fleet row
-// done), then the emit-guard (§4.4 layer 2) — the load-bearing reinforcement
-// against the system's #1 risk, model under-emit.
+// stop.go runs at Stop: first end-of-turn bookkeeping (mark the fleet row done —
+// sessionend.go is the terminal reaper for whatever an allowed Stop never sees),
+// then the emit-guard (§4.4 layer 2) — the load-bearing reinforcement against the
+// system's #1 risk, model under-emit.
 //
 // The emit-guard is CONSERVATIVE by design (low false-positive bar). It reads the
 // CURRENT turn (everything since the last human message) and blocks the stop ONLY
@@ -103,17 +104,19 @@ const emitGuardReason = "Director emit-guard: this turn looks like it produced a
 func handleStop(in Input, out io.Writer, hub string) error {
 	// Loop guard FIRST: a re-entrant Stop (one our own block triggered) must
 	// always allow, or we trap the session in a stop→block→stop cycle (§4.4).
-	// This is a genuine end-of-session, so archive the row here.
+	// This allow is a genuine turn end, so do the per-turn archive here too.
 	if in.StopHookActive {
-		markFleetDone(in, hub)
+		markFleetDone(in, EventStop, hub)
 		logSuccess(hub, EventStop, in.SessionID, "stop_hook_active=true — allow (loop guard)")
 		return nil
 	}
 
 	block, reason := emitGuardVerdict(in.TranscriptPath)
 	if !block {
-		// The stop is allowed → the session is ending → archive the row.
-		markFleetDone(in, hub)
+		// The stop is allowed → the turn is over → archive the row. SessionEnd
+		// reaps whatever survives this (a session that exits without an allowed
+		// Stop), so archiving here is per-turn bookkeeping, not the last word.
+		markFleetDone(in, EventStop, hub)
 		logSuccess(hub, EventStop, in.SessionID, "emit-guard allow")
 		return nil
 	}
@@ -128,25 +131,29 @@ func handleStop(in Input, out io.Writer, hub string) error {
 	return nil
 }
 
-// markFleetDone is best-effort end-of-session bookkeeping: resolve the workstream
-// and archive its fleet row. Every failure degrades to a log line — a Stop hook
-// must never error out and risk interfering with the session ending, and a row
-// that wasn't found (already done, or never registered) is normal, not a fault.
-func markFleetDone(in Input, hub string) {
+// markFleetDone is the best-effort row bookkeeping both archivers share — Stop at
+// each allowed turn end, SessionEnd when the session actually exits: resolve the
+// workstream and archive its fleet row. event is the caller's hook event, so every
+// health line is attributed to the hook that ran. Every failure degrades to a log
+// line — neither hook may error out and risk interfering with the session ending,
+// and a row that wasn't found (already done, or never registered) is normal, not a
+// fault.
+func markFleetDone(in Input, event, hub string) {
 	ws, err := identity.Resolve(in.CWD)
 	if err != nil {
-		logFailure(hub, EventStop, in.SessionID, fmt.Sprintf("resolve workstream from %q: %v", in.CWD, err))
+		logFailure(hub, event, in.SessionID, fmt.Sprintf("resolve workstream from %q: %v", in.CWD, err))
 		return
 	}
 	if err := fleet.Done(hub, ws.ID, sessionUUID(in), time.Now()); err != nil {
 		// An already-gone row (archived by a previous Stop with no tool call
-		// since, or never registered) is the steady state for repeated stops —
-		// log it as quiet success so ok=false lines in health/ stay meaningful.
+		// since, or never registered) is the steady state for repeated stops and
+		// for the SessionEnd that follows a one-shot run — log it as quiet success
+		// so ok=false lines in health/ stay meaningful.
 		if errors.Is(err, fleet.ErrRowNotFound) {
-			logSuccess(hub, EventStop, in.SessionID, "fleet done: no live row (already archived or never registered)")
+			logSuccess(hub, event, in.SessionID, "fleet done: no live row (already archived or never registered)")
 			return
 		}
-		logFailure(hub, EventStop, in.SessionID, fmt.Sprintf("fleet done: %v", err))
+		logFailure(hub, event, in.SessionID, fmt.Sprintf("fleet done: %v", err))
 	}
 }
 

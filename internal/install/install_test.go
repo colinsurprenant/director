@@ -156,6 +156,9 @@ func TestInstallAddsTaggedEntriesAndPreservesGSD(t *testing.T) {
 	if !contains(commands(t, root, "Stop"), filepath.Join(hooksDir, "stop.sh")) {
 		t.Errorf("Stop shim not installed")
 	}
+	if !contains(commands(t, root, "SessionEnd"), filepath.Join(hooksDir, "sessionend.sh")) {
+		t.Errorf("SessionEnd shim not installed")
+	}
 	// Two SessionStart entries: normal + compact matcher.
 	if got := managedCount(t, root, "SessionStart"); got != 2 {
 		t.Errorf("managed SessionStart entries = %d, want 2 (normal + compact)", got)
@@ -192,6 +195,9 @@ func TestInstallIdempotent(t *testing.T) {
 	if got := managedCount(t, root, "Stop"); got != 1 {
 		t.Errorf("re-install duplicated Stop entries: got %d, want 1", got)
 	}
+	if got := managedCount(t, root, "SessionEnd"); got != 1 {
+		t.Errorf("re-install duplicated SessionEnd entries: got %d, want 1", got)
+	}
 }
 
 // TestUninstallRemovesOnlyDirector is the round-trip gate: Uninstall strips every
@@ -209,7 +215,7 @@ func TestUninstallRemovesOnlyDirector(t *testing.T) {
 	root := loadTree(t, path)
 
 	// No Director entries remain anywhere.
-	for _, event := range []string{"SessionStart", "PostToolUse", "Stop"} {
+	for _, event := range []string{"SessionStart", "PostToolUse", "Stop", "SessionEnd"} {
 		if got := managedCount(t, root, event); got != 0 {
 			t.Errorf("Uninstall left %d Director entries under %s", got, event)
 		}
@@ -218,13 +224,16 @@ func TestUninstallRemovesOnlyDirector(t *testing.T) {
 	if !contains(commands(t, root, "SessionStart"), "node /gsd/gsd-check-update.js") {
 		t.Errorf("Uninstall removed GSD's hook: %v", commands(t, root, "SessionStart"))
 	}
-	// The empty PostToolUse / Stop events Director created were pruned.
+	// The empty PostToolUse / Stop / SessionEnd events Director created were pruned.
 	hooks, _ := root["hooks"].(map[string]any)
 	if _, ok := hooks["Stop"]; ok {
 		t.Errorf("empty Stop event was not pruned after uninstall")
 	}
 	if _, ok := hooks["PostToolUse"]; ok {
 		t.Errorf("empty PostToolUse event was not pruned after uninstall")
+	}
+	if _, ok := hooks["SessionEnd"]; ok {
+		t.Errorf("empty SessionEnd event was not pruned after uninstall")
 	}
 	// permissions survives the whole round trip.
 	if _, ok := root["permissions"]; !ok {
@@ -255,7 +264,7 @@ func TestInstallCreatesMissingFile(t *testing.T) {
 // install: no manual shim placement.
 func TestInstallWritesAndUninstallRemovesShims(t *testing.T) {
 	path, hooksDir := writeFixture(t, "")
-	shims := []string{"sessionstart.sh", "posttooluse.sh", "stop.sh"}
+	shims := []string{"sessionstart.sh", "posttooluse.sh", "stop.sh", "sessionend.sh"}
 
 	if err := Install(path); err != nil {
 		t.Fatal(err)
@@ -806,7 +815,171 @@ func TestSettingsDirectorBin(t *testing.T) {
 	}
 }
 
-// TestExpectedShims locks the invariant doctor's missingShims relies on: the set
+// writeTree re-serializes a settings tree loadTree decoded, so a test can mutate
+// an install into a state a REAL older binary would have left (an entry set from
+// before a hook event existed) instead of hand-writing the whole file.
+func writeTree(t *testing.T, path string, root map[string]any) {
+	t.Helper()
+	out, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, out, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestMissingManagedEventsDetectsStaleEntrySet is the upgrade-without-reinstall
+// gate. ManagedEntriesPresent asks only "is ANY Director entry here", so the entry
+// set a pre-SessionEnd binary wrote still reads as wired while the SessionEnd hook
+// never fires — invisible until the per-event answer exists.
+func TestMissingManagedEventsDetectsStaleEntrySet(t *testing.T) {
+	path, hooksDir := writeFixture(t, gsdFixture)
+	if err := Install(path); err != nil {
+		t.Fatal(err)
+	}
+	if got := MissingManagedEvents(path, hooksDir); len(got) != 0 {
+		t.Fatalf("fresh install: MissingManagedEvents = %v, want none", got)
+	}
+
+	root := loadTree(t, path)
+	hooks, _ := root["hooks"].(map[string]any)
+	delete(hooks, "SessionEnd") // exactly what the pre-SessionEnd install wrote
+	writeTree(t, path, root)
+
+	if !ManagedEntriesPresent(path) {
+		t.Fatal("setup: the stale set must still read as present — that collapse is the hole being closed")
+	}
+	got := MissingManagedEvents(path, hooksDir)
+	if len(got) != 1 || got[0] != "SessionEnd" {
+		t.Fatalf("stale set: MissingManagedEvents = %v, want [SessionEnd]", got)
+	}
+	// And a re-install closes it, which is the remedy doctor prints.
+	if err := Install(path); err != nil {
+		t.Fatal(err)
+	}
+	if got := MissingManagedEvents(path, hooksDir); len(got) != 0 {
+		t.Fatalf("after re-install: MissingManagedEvents = %v, want none", got)
+	}
+}
+
+// TestMissingManagedEventsMatchesInstallCriteria: presence is judged exactly as the
+// merge judges it — the matcher group AND the tagged command path — so a dropped
+// matcher group (the `compact` SessionStart) reports its event, and an untagged
+// command at the right path does not count as Director's.
+func TestMissingManagedEventsMatchesInstallCriteria(t *testing.T) {
+	path, hooksDir := writeFixture(t, gsdFixture)
+	if err := Install(path); err != nil {
+		t.Fatal(err)
+	}
+
+	root := loadTree(t, path)
+	hooks, _ := root["hooks"].(map[string]any)
+	groups, _ := hooks["SessionStart"].([]any)
+	kept := make([]any, 0, len(groups))
+	for _, g := range groups {
+		if gm, _ := g.(map[string]any); gm != nil && gm["matcher"] == "compact" {
+			continue
+		}
+		kept = append(kept, g)
+	}
+	hooks["SessionStart"] = kept
+	// Strip Director's tag from the Stop command: same path, no longer ours.
+	stopGroups, _ := hooks["Stop"].([]any)
+	for _, g := range stopGroups {
+		gm, _ := g.(map[string]any)
+		cmds, _ := gm["hooks"].([]any)
+		for _, c := range cmds {
+			if cm, _ := c.(map[string]any); cm != nil {
+				delete(cm, managedByKey)
+			}
+		}
+	}
+	writeTree(t, path, root)
+
+	got := MissingManagedEvents(path, hooksDir)
+	want := map[string]bool{"SessionStart": true, "Stop": true}
+	if len(got) != len(want) {
+		t.Fatalf("MissingManagedEvents = %v, want %v", got, want)
+	}
+	for _, e := range got {
+		if !want[e] {
+			t.Errorf("unexpected missing event %q; want %v", e, want)
+		}
+	}
+
+	// A hooks dir that isn't the one the entries point at is not this check's
+	// business, but it must not read as wired either: the command path is half the
+	// criteria, and a moved hooks dir means those entries invoke nothing.
+	if got := MissingManagedEvents(path, filepath.Join(hooksDir, "moved")); len(got) == 0 {
+		t.Error("entries pointing at a different hooks dir must not read as wired")
+	}
+}
+
+// TestMissingManagedEventsFailsOpen: an unreadable or malformed hooks file reports
+// nothing missing, the same direction ManagedEntriesPresent fails. doctor already
+// reports a broken settings.json as its own failure with its own remedy; a second
+// verdict from here would just double-report one file.
+func TestMissingManagedEventsFailsOpen(t *testing.T) {
+	dir := t.TempDir()
+	bad := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(bad, []byte("{ this is not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := MissingManagedEvents(bad, dir); got != nil {
+		t.Errorf("malformed file: got %v, want nil (fail open)", got)
+	}
+	wrongShape := filepath.Join(dir, "wrong-shape.json")
+	if err := os.WriteFile(wrongShape, []byte(`{"hooks": "not an object"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := MissingManagedEvents(wrongShape, dir); got != nil {
+		t.Errorf("foreign hooks shape: got %v, want nil (fail open)", got)
+	}
+	// A readable file with no hooks at all is NOT a read error: everything is missing.
+	empty := filepath.Join(dir, "empty.json")
+	if err := os.WriteFile(empty, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := MissingManagedEvents(empty, dir); len(got) == 0 {
+		t.Error("an empty settings file must report the whole set missing")
+	}
+}
+
+// TestTargetShimSets pins the divergence a per-target shim check needs: the Claude
+// Code entry set references sessionend.sh and the Codex set cannot (Codex has no
+// session-end event), while both stay subsets of what install actually writes.
+func TestTargetShimSets(t *testing.T) {
+	embedded := map[string]bool{}
+	for _, name := range ExpectedShims() {
+		embedded[name] = true
+	}
+	cases := map[string]struct {
+		got  []string
+		want map[string]bool
+	}{
+		"claude": {ClaudeShims(), map[string]bool{"sessionstart.sh": true, "posttooluse.sh": true, "stop.sh": true, "sessionend.sh": true}},
+		"codex":  {CodexShims(), map[string]bool{"sessionstart.sh": true, "posttooluse.sh": true, "stop.sh": true}},
+	}
+	for name, tc := range cases {
+		// Length + membership together also pin the dedup: two SessionStart entries
+		// reference sessionstart.sh, and it must appear once.
+		if len(tc.got) != len(tc.want) {
+			t.Errorf("%s shims = %v, want the %d in %v", name, tc.got, len(tc.want), tc.want)
+			continue
+		}
+		for _, shim := range tc.got {
+			if !tc.want[shim] {
+				t.Errorf("%s shims returned unexpected %q; want exactly %v", name, shim, tc.want)
+			}
+			if !embedded[shim] {
+				t.Errorf("%s references %q, which install never writes", name, shim)
+			}
+		}
+	}
+}
+
+// TestExpectedShims locks the invariant the shim checks rely on: the set
 // is sourced from the embedded shims/ dir, which `//go:embed shims/*.sh` requires
 // be non-empty at BUILD time (the build fails otherwise), so fs.ReadDir cannot
 // fail and the nil-on-error path is unreachable in a real binary. Asserting the
@@ -814,7 +987,7 @@ func TestSettingsDirectorBin(t *testing.T) {
 // rather than a silently-empty expected set (which would weaken the shim check).
 func TestExpectedShims(t *testing.T) {
 	got := ExpectedShims()
-	want := map[string]bool{"sessionstart.sh": true, "posttooluse.sh": true, "stop.sh": true}
+	want := map[string]bool{"sessionstart.sh": true, "posttooluse.sh": true, "stop.sh": true, "sessionend.sh": true}
 	if len(got) != len(want) {
 		t.Fatalf("ExpectedShims() = %v, want the %d embedded shims %v", got, len(want), want)
 	}
