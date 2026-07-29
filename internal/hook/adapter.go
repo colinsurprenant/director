@@ -2,8 +2,9 @@
 // Director's coordination core (§5.4, §15.7). ALL knowledge of CC's hook wire
 // shape — the stdin JSON fields, the stdout control protocol, the exit-code
 // semantics — is isolated here so a CC contract change is a one-file edit
-// (§15.7). The handlers (sessionstart/posttooluse/stop) work against the typed
-// Input/control helpers in this file and never touch raw JSON or os.Stdin.
+// (§15.7). The handlers (sessionstart/posttooluse/stop/sessionend) work against
+// the typed Input/control helpers in this file and never touch raw JSON or
+// os.Stdin.
 //
 // The cardinal rule (§13 t5, §5.4): a hook must NEVER block a session on
 // internal failure. Dispatch wraps every handler so a panic or an error is
@@ -26,6 +27,7 @@ const (
 	EventSessionStart = "sessionstart"
 	EventPostToolUse  = "posttooluse"
 	EventStop         = "stop"
+	EventSessionEnd   = "sessionend"
 )
 
 // maxHookStdinBytes bounds the hook payload read. Real SessionStart/Stop payloads
@@ -83,6 +85,11 @@ type Input struct {
 
 	// PreCompact: manual | auto. Unused in v1 beyond presence.
 	Trigger string `json:"trigger"`
+
+	// SessionEnd only: clear | logout | prompt_input_exit | other. How the session
+	// ended; carried for health-log attribution, never for a branch — every reason
+	// reaps the row alike.
+	Reason string `json:"reason"`
 
 	// Agent is a Director extension, NOT a CC wire field: an adapter that
 	// fabricates payloads (the OpenCode plugin) names itself here so flavor
@@ -264,6 +271,8 @@ func route(event string) (handler, bool) {
 		return handlePostToolUse, true
 	case EventStop:
 		return handleStop, true
+	case EventSessionEnd:
+		return handleSessionEnd, true
 	default:
 		return nil, false
 	}

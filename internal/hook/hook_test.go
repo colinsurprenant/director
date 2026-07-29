@@ -961,6 +961,84 @@ func TestStopAllowArchivesFleetRow(t *testing.T) {
 	}
 }
 
+// --- SessionEnd reaper ------------------------------------------------------
+
+// TestSessionEndArchivesFleetRow verifies the leak SessionEnd exists to close: a
+// session that registers at SessionStart and exits without ever reaching an
+// allowed Stop (/exit at the first prompt) leaves NO live row behind. It also
+// pins the two contract halves — no control output, and a health line attributed
+// to sessionend carrying the reason.
+func TestSessionEndArchivesFleetRow(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+
+	ssIn := `{"session_id":"s-real","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	if code := Dispatch(EventSessionStart, strings.NewReader(ssIn), &bytes.Buffer{}, hub); code != 0 {
+		t.Fatalf("setup session start exit = %d", code)
+	}
+	if !fleetRowExists(t, hub, ws.ID) {
+		t.Fatal("setup: expected a live row after SessionStart")
+	}
+
+	var out bytes.Buffer
+	if code := Dispatch(EventSessionEnd, strings.NewReader(sessionEndInput(repo, "prompt_input_exit")), &out, hub); code != 0 {
+		t.Fatalf("session end exit = %d, want 0", code)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("SessionEnd must emit no control output, got %q", out.String())
+	}
+	if fleetRowExists(t, hub, ws.ID) {
+		t.Error("session end should have archived the live row — a phantom sibling survives otherwise")
+	}
+	if !fleetArchivedRowExists(t, hub, ws.ID) {
+		t.Error("session end should have moved the row to the archive")
+	}
+	health := readHealth(t, hub)
+	if !strings.Contains(health, "sessionend\tok=true") {
+		t.Errorf("expected a sessionend-attributed success line, got:\n%s", health)
+	}
+	if !strings.Contains(health, "reason=prompt_input_exit") {
+		t.Errorf("health line should carry the SessionEnd reason, got:\n%s", health)
+	}
+	if strings.Contains(health, "ok=false") {
+		t.Errorf("reaping a live row must not produce failure lines, got:\n%s", health)
+	}
+}
+
+// TestSessionEndAlreadyArchivedRowIsQuietSuccess: SessionEnd firing with no live
+// row is the COMMON path (a one-shot `claude -p` run whose Stop already archived,
+// or a repeated end), so it must land in health/ as ok=true, never as failure
+// spam. The first SessionEnd archives the live row; the second finds nothing.
+func TestSessionEndAlreadyArchivedRowIsQuietSuccess(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+
+	ws, err := identity.Resolve(repo)
+	if err != nil {
+		t.Fatalf("identity.Resolve: %v", err)
+	}
+	// Same uuid as sessionEndInput's session_id, so both ends target this row.
+	if err := fleet.Heartbeat(hub, ws.ID, "s-real", time.Now()); err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+
+	in := sessionEndInput(repo, "clear")
+	for i := 0; i < 2; i++ {
+		var out bytes.Buffer
+		if code := Dispatch(EventSessionEnd, strings.NewReader(in), &out, hub); code != 0 {
+			t.Fatalf("session end %d: exit code = %d, want 0", i+1, code)
+		}
+	}
+	health := readHealth(t, hub)
+	if n := strings.Count(health, "sessionend\tok=true\tsession=s-real\tfleet done: no live row"); n != 1 {
+		t.Fatalf("quiet no-live-row line count = %d, want 1; health log:\n%s", n, health)
+	}
+	if strings.Contains(health, "ok=false") {
+		t.Errorf("a benign repeated session end must not produce failure lines, got:\n%s", health)
+	}
+}
+
 // --- PostToolUse nudge ------------------------------------------------------
 
 // TestPostToolUseDisabledByDefault verifies the flush nudge is OFF unless opted
@@ -1355,6 +1433,14 @@ func stopInput(cwd, transcript string, stopHookActive bool) string {
 	return `{"session_id":"s-real","cwd":` + jsonString(cwd) +
 		`,"transcript_path":` + jsonString(transcript) +
 		`,"hook_event_name":"Stop","stop_hook_active":` + active + `}`
+}
+
+// sessionEndInput builds a real SessionEnd payload (the keys CC sends, per the
+// canary baseline), carrying the same session_id as stopInput so both terminal
+// hooks target the same fleet row.
+func sessionEndInput(cwd, reason string) string {
+	return `{"session_id":"s-real","cwd":` + jsonString(cwd) +
+		`,"hook_event_name":"SessionEnd","reason":` + jsonString(reason) + `}`
 }
 
 // TestSessionStartBudgetDegradesDeterministically locks the §15.5 self-measure:

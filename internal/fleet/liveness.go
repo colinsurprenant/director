@@ -44,8 +44,9 @@ type Liveness struct {
 	// ActiveSessions counts the rows whose OWN heartbeat is younger than the idle
 	// TTL — the concurrent-session signal. > 1 means several sessions are working
 	// this workstream (same checkout) right now, so their handoffs interleave
-	// under one label. Distinct from Sessions, which also counts stale rows a
-	// crashed session never archived.
+	// under one label. Distinct from Sessions, which also counts stale rows an
+	// ungracefully-killed session left behind (neither its Stop nor its SessionEnd
+	// ever archived them).
 	ActiveSessions int `json:"active_sessions"`
 }
 
@@ -149,8 +150,9 @@ func List(hub string, now time.Time, idleAfter, dormantAfter time.Duration, bran
 // OTHER sessions live on this checkout (excluding its own uuid), so the signal
 // stays precise even for a session that never registered a row (a throwaway's
 // uuid simply matches nothing). A row's lifetime bounds what "live" can mean
-// here: Stop archives it at each allowed turn end, so a fresh row is a session
-// mid-turn or a recent ungraceful death — never a sibling idling at its prompt.
+// here: Stop archives it at each allowed turn end and SessionEnd reaps it when the
+// session exits, so a fresh row is a session mid-turn or a recent ungraceful death
+// — never a sibling idling at its prompt.
 // Corrupt rows and unparseable heartbeats are skipped with List's leniency — a
 // concurrency hint must never fail a session start. A missing fleet dir yields
 // an empty result, not an error.

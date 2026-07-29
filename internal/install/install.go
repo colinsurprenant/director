@@ -70,19 +70,22 @@ const settingsPathEnv = "DIRECTOR_SETTINGS_PATH"
 // managedEntry describes one hook Director installs: which CC event it attaches
 // to, the matcher (empty = all), and the shim filename under the hooks dir.
 type managedEntry struct {
-	event   string // CC hook event key: SessionStart / PostToolUse / Stop
+	event   string // CC hook event key: SessionStart / PostToolUse / Stop / SessionEnd
 	matcher string // CC matcher; "" means "every invocation"
 	shim    string // shim filename under the hooks dir
 }
 
 // directorEntries is the full set Director manages. SessionStart is installed
 // twice — once for normal starts, once for the `compact` source — so the
-// Ground-Truth re-injection fires after an autocompaction (§5.4).
+// Ground-Truth re-injection fires after an autocompaction (§5.4). SessionEnd is
+// the terminal fleet-row reaper (sessionend.go): Stop alone leaves a live row
+// behind whenever a session exits without an allowed Stop.
 var directorEntries = []managedEntry{
 	{event: "SessionStart", matcher: "", shim: "sessionstart.sh"},
 	{event: "SessionStart", matcher: "compact", shim: "sessionstart.sh"},
 	{event: "PostToolUse", matcher: "", shim: "posttooluse.sh"},
 	{event: "Stop", matcher: "", shim: "stop.sh"},
+	{event: "SessionEnd", matcher: "", shim: "sessionend.sh"},
 }
 
 // DefaultSettingsPath resolves the standard user settings file,

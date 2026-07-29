@@ -156,6 +156,9 @@ func TestInstallAddsTaggedEntriesAndPreservesGSD(t *testing.T) {
 	if !contains(commands(t, root, "Stop"), filepath.Join(hooksDir, "stop.sh")) {
 		t.Errorf("Stop shim not installed")
 	}
+	if !contains(commands(t, root, "SessionEnd"), filepath.Join(hooksDir, "sessionend.sh")) {
+		t.Errorf("SessionEnd shim not installed")
+	}
 	// Two SessionStart entries: normal + compact matcher.
 	if got := managedCount(t, root, "SessionStart"); got != 2 {
 		t.Errorf("managed SessionStart entries = %d, want 2 (normal + compact)", got)
@@ -192,6 +195,9 @@ func TestInstallIdempotent(t *testing.T) {
 	if got := managedCount(t, root, "Stop"); got != 1 {
 		t.Errorf("re-install duplicated Stop entries: got %d, want 1", got)
 	}
+	if got := managedCount(t, root, "SessionEnd"); got != 1 {
+		t.Errorf("re-install duplicated SessionEnd entries: got %d, want 1", got)
+	}
 }
 
 // TestUninstallRemovesOnlyDirector is the round-trip gate: Uninstall strips every
@@ -209,7 +215,7 @@ func TestUninstallRemovesOnlyDirector(t *testing.T) {
 	root := loadTree(t, path)
 
 	// No Director entries remain anywhere.
-	for _, event := range []string{"SessionStart", "PostToolUse", "Stop"} {
+	for _, event := range []string{"SessionStart", "PostToolUse", "Stop", "SessionEnd"} {
 		if got := managedCount(t, root, event); got != 0 {
 			t.Errorf("Uninstall left %d Director entries under %s", got, event)
 		}
@@ -218,13 +224,16 @@ func TestUninstallRemovesOnlyDirector(t *testing.T) {
 	if !contains(commands(t, root, "SessionStart"), "node /gsd/gsd-check-update.js") {
 		t.Errorf("Uninstall removed GSD's hook: %v", commands(t, root, "SessionStart"))
 	}
-	// The empty PostToolUse / Stop events Director created were pruned.
+	// The empty PostToolUse / Stop / SessionEnd events Director created were pruned.
 	hooks, _ := root["hooks"].(map[string]any)
 	if _, ok := hooks["Stop"]; ok {
 		t.Errorf("empty Stop event was not pruned after uninstall")
 	}
 	if _, ok := hooks["PostToolUse"]; ok {
 		t.Errorf("empty PostToolUse event was not pruned after uninstall")
+	}
+	if _, ok := hooks["SessionEnd"]; ok {
+		t.Errorf("empty SessionEnd event was not pruned after uninstall")
 	}
 	// permissions survives the whole round trip.
 	if _, ok := root["permissions"]; !ok {
@@ -255,7 +264,7 @@ func TestInstallCreatesMissingFile(t *testing.T) {
 // install: no manual shim placement.
 func TestInstallWritesAndUninstallRemovesShims(t *testing.T) {
 	path, hooksDir := writeFixture(t, "")
-	shims := []string{"sessionstart.sh", "posttooluse.sh", "stop.sh"}
+	shims := []string{"sessionstart.sh", "posttooluse.sh", "stop.sh", "sessionend.sh"}
 
 	if err := Install(path); err != nil {
 		t.Fatal(err)
@@ -814,7 +823,7 @@ func TestSettingsDirectorBin(t *testing.T) {
 // rather than a silently-empty expected set (which would weaken the shim check).
 func TestExpectedShims(t *testing.T) {
 	got := ExpectedShims()
-	want := map[string]bool{"sessionstart.sh": true, "posttooluse.sh": true, "stop.sh": true}
+	want := map[string]bool{"sessionstart.sh": true, "posttooluse.sh": true, "stop.sh": true, "sessionend.sh": true}
 	if len(got) != len(want) {
 		t.Fatalf("ExpectedShims() = %v, want the %d embedded shims %v", got, len(want), want)
 	}

@@ -104,9 +104,9 @@ installed Director hooks into /Users/you/.claude/settings.json (set DIRECTOR_SET
 
 `director install` is **self-contained and idempotent**:
 
-- It writes the three hook **shims** (embedded in the binary) into `~/.claude/director/hooks/`, executable.
+- It writes the four hook **shims** (embedded in the binary) into `~/.claude/director/hooks/`, executable.
   There is no manual copy step.
-- It merges three hooks into `~/.claude/settings.json` (`SessionStart`, `PostToolUse`, `Stop`), each tagged
+- It merges four hooks into `~/.claude/settings.json` (`SessionStart`, `PostToolUse`, `Stop`, `SessionEnd`), each tagged
   `"_managedBy":"director"` so they coexist with GSD and any hand-rolled hooks. Re-running changes nothing.
 - It materializes the three slash commands: `/director:adopt` (informed adoption, see section 3),
   `/director:handoff` (pause a workstream, record the resume point) and `/director:complete` (close out a finished,
@@ -180,7 +180,8 @@ Codex-specific notes:
   equivalently on OpenCode (same injected state, different mechanism: its plugin injects on the first
   user message because OpenCode has no session-start hook; see "Using OpenCode?" below). The Stop
   emit-guard and the context-fill handoff nudge are Claude Code-only for now (they read CC's transcript
-  format and stay safely inert on Codex and OpenCode).
+  format and stay safely inert on Codex and OpenCode), and so is the `SessionEnd` row reaper (Codex
+  and OpenCode expose no session-end event; a row an ungraceful exit leaves behind ages out by TTL).
 - Codex exposes no session id to shell commands, so a hand-run `director done` (including
   `$director-complete`'s final step) may report "row not found" there, not a failure: the Stop hook
   archives the session's row at turn end, and everything durable was already written. Targeted
@@ -215,7 +216,9 @@ at `~/.config/opencode/command/`, invoked as `/director-adopt`, `/director-compl
   Claude Code's session-start injection.
 - The Stop emit-guard and the context-fill handoff nudge read CC's transcript format and stay safely
   inert on OpenCode; end-of-turn fleet bookkeeping still runs (OpenCode's `session.idle` is a
-  turn-end signal, so liveness matches Claude Code's).
+  turn-end signal, so it matches Claude Code's `Stop`). OpenCode has no session-end event, so it
+  gets no equivalent of Claude Code's `SessionEnd` row reaping: a row an ungraceful exit leaves
+  behind ages out by TTL instead.
 - The plugin resolves the `director` binary the same way the shims do: `DIRECTOR_BIN`, then `PATH`,
   then the symlink `install` drops at `<hooks root>/bin/director`.
 
@@ -288,7 +291,8 @@ Just start Claude Code (or Codex, or OpenCode) in the adopted repo as usual. Dir
   any entry in full.
 
 You don't run anything. The session is now coordinating. As it works, its `PostToolUse` hook keeps the
-liveness heartbeat fresh, and its `Stop` hook does end-of-session bookkeeping.
+liveness heartbeat fresh, its `Stop` hook does end-of-turn bookkeeping, and its `SessionEnd` hook archives
+the liveness row when the session exits (including an `/exit` before the first turn).
 
 ---
 
