@@ -104,7 +104,7 @@ const emitGuardReason = "Director emit-guard: this turn looks like it produced a
 func handleStop(in Input, out io.Writer, hub string) error {
 	// Loop guard FIRST: a re-entrant Stop (one our own block triggered) must
 	// always allow, or we trap the session in a stop→block→stop cycle (§4.4).
-	// This is a genuine end-of-session, so archive the row here.
+	// This allow is a genuine turn end, so do the per-turn archive here too.
 	if in.StopHookActive {
 		markFleetDone(in, EventStop, hub)
 		logSuccess(hub, EventStop, in.SessionID, "stop_hook_active=true — allow (loop guard)")
