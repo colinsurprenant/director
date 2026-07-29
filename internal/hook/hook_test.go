@@ -1039,6 +1039,34 @@ func TestSessionEndAlreadyArchivedRowIsQuietSuccess(t *testing.T) {
 	}
 }
 
+// TestSessionEndResolveFailureDegradesToLog is the reaper's fail-safe half: with a
+// cwd that resolves to no workstream (a session started outside any git repo) there
+// is no row to reap, and the failure must stay inside the health log. CC reads no
+// control output from SessionEnd and cannot be blocked by it, so anything louder
+// than a log line — a non-zero exit, output, a panic escaping Dispatch — would be a
+// hook interfering with a session exit.
+func TestSessionEndResolveFailureDegradesToLog(t *testing.T) {
+	hub := t.TempDir()
+	notARepo := t.TempDir()
+
+	var out bytes.Buffer
+	if code := Dispatch(EventSessionEnd, strings.NewReader(sessionEndInput(notARepo, "other")), &out, hub); code != 0 {
+		t.Fatalf("session end exit = %d, want 0", code)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("SessionEnd must emit no control output, got %q", out.String())
+	}
+	health := readHealth(t, hub)
+	if !strings.Contains(health, "sessionend\tok=false\tsession=s-real\tresolve workstream from") {
+		t.Errorf("expected a sessionend-attributed resolve failure line, got:\n%s", health)
+	}
+	// The reaper still records that it ran: a resolve failure degrades the archive,
+	// not the handler, so the panic path (which logs a different detail) is excluded.
+	if !strings.Contains(health, "sessionend\tok=true\tsession=s-real\tsession end (reason=other)") {
+		t.Errorf("expected the reaper's own success line alongside the failure, got:\n%s", health)
+	}
+}
+
 // --- PostToolUse nudge ------------------------------------------------------
 
 // TestPostToolUseDisabledByDefault verifies the flush nudge is OFF unless opted

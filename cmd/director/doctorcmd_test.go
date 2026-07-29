@@ -365,6 +365,90 @@ func TestDoctorMissingShimFails(t *testing.T) {
 	}
 }
 
+// TestDoctorStaleEntrySetFails is the upgrade-without-reinstall state: settings.json
+// carries the entry set an older binary wrote, so "any Director hook present" reads
+// wired while the event this binary added never fires. doctor must name the missing
+// event and the remedy, not report healthy.
+func TestDoctorStaleEntrySetFails(t *testing.T) {
+	in := installedFixture(t)
+	dropHookEvent(t, in.settingsPath, "SessionEnd")
+
+	rep := diagnose(in)
+	if lv := levelOf(t, rep, "claude code hooks"); lv != levelFail {
+		t.Fatalf("an incomplete managed-entry set must FAIL, got %v", lv)
+	}
+	if rep.healthy {
+		t.Fatal("report must be unhealthy: the SessionEnd reaper silently never fires")
+	}
+	for _, c := range rep.checks {
+		if c.title != "claude code hooks" {
+			continue
+		}
+		if !strings.Contains(c.detail, "SessionEnd") {
+			t.Errorf("failure should name the missing event, got: %s", c.detail)
+		}
+		if !strings.Contains(c.detail, "director install") {
+			t.Errorf("failure should name the remedy, got: %s", c.detail)
+		}
+	}
+}
+
+// TestDoctorMissingSessionEndShimFails: the CC check's shim set is derived from the
+// CC entries, so the shim only CC fires is still required there — the counterpart to
+// TestDoctorCodexPreUpgradeHooksDirIsHealthy below.
+func TestDoctorMissingSessionEndShimFails(t *testing.T) {
+	in := installedFixture(t)
+	if err := os.Remove(filepath.Join(in.hooksDir, "sessionend.sh")); err != nil {
+		t.Fatal(err)
+	}
+	if levelOf(t, diagnose(in), "claude code hooks") != levelFail {
+		t.Fatal("a missing sessionend.sh must FAIL the Claude Code check")
+	}
+}
+
+// TestDoctorCodexPreUpgradeHooksDirIsHealthy: Codex's entries reference three shims,
+// so a Codex-only machine whose hooks dir predates sessionend.sh must stay healthy —
+// Codex exposes no session-end event and could never fire that shim. Checking the
+// full embedded set here would fail an install with nothing wrong with it.
+func TestDoctorCodexPreUpgradeHooksDirIsHealthy(t *testing.T) {
+	skipUnixOnlyDoctor(t)
+	root := t.TempDir()
+	hooksDir := filepath.Join(root, "hooks")
+	t.Setenv("DIRECTOR_HOOKS_DIR", hooksDir)
+	t.Setenv("DIRECTOR_CODEX_SKILLS_DIR", filepath.Join(root, "skills"))
+	t.Setenv("DIRECTOR_SETTINGS_PATH", filepath.Join(root, "no-settings.json"))
+	codexHooks := filepath.Join(root, "codex-hooks.json")
+	t.Setenv("DIRECTOR_CODEX_HOOKS_PATH", codexHooks)
+	if err := install.InstallCodex(codexHooks); err != nil {
+		t.Fatalf("InstallCodex fixture: %v", err)
+	}
+	// Roll the shared hooks dir back to what a pre-SessionEnd binary wrote.
+	if err := os.Remove(filepath.Join(hooksDir, "sessionend.sh")); err != nil {
+		t.Fatal(err)
+	}
+	binPath, err := install.DefaultBinPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := doctorInputs{
+		lookDirector:   func() (string, bool) { return "", false },
+		settingsPath:   filepath.Join(root, "no-settings.json"),
+		hooksDir:       hooksDir,
+		binPath:        binPath,
+		codexHooks:     codexHooks,
+		opencodePlugin: filepath.Join(root, "no-plugin.js"),
+		hub:            root,
+	}
+
+	rep := diagnose(in)
+	if lv := levelOf(t, rep, "codex hooks"); lv != levelOK {
+		t.Errorf("codex check must not fault a shim Codex can never fire, got %v (%+v)", lv, rep.checks)
+	}
+	if !rep.healthy {
+		t.Fatalf("a Codex-only install missing only the CC-only shim must be healthy, got %+v", rep.checks)
+	}
+}
+
 func TestDoctorCodexReportedWhenInstalled(t *testing.T) {
 	in := installedFixture(t)
 	t.Setenv("DIRECTOR_CODEX_SKILLS_DIR", filepath.Join(t.TempDir(), "skills"))
@@ -575,6 +659,33 @@ func TestDoctorHubUnwritableAncestorFails(t *testing.T) {
 	in.hub = filepath.Join(locked, "hub") // missing; nearest ancestor is unwritable
 	if levelOf(t, diagnose(in), "hub") != levelFail {
 		t.Fatal("a missing hub under an unwritable parent must FAIL")
+	}
+}
+
+// dropHookEvent deletes one whole hook event from a settings.json file, rolling a
+// real install back to the entry set a binary predating that event would have
+// written — the stale state an upgrade without a re-install leaves behind.
+func dropHookEvent(t *testing.T, path, event string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(data, &root); err != nil {
+		t.Fatal(err)
+	}
+	hooks, _ := root["hooks"].(map[string]any)
+	if _, ok := hooks[event]; !ok {
+		t.Fatalf("setup: %s carries no %s entries to drop", path, event)
+	}
+	delete(hooks, event)
+	out, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, out, 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

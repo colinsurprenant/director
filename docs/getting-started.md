@@ -180,8 +180,10 @@ Codex-specific notes:
   equivalently on OpenCode (same injected state, different mechanism: its plugin injects on the first
   user message because OpenCode has no session-start hook; see "Using OpenCode?" below). The Stop
   emit-guard and the context-fill handoff nudge are Claude Code-only for now (they read CC's transcript
-  format and stay safely inert on Codex and OpenCode), and so is the `SessionEnd` row reaper (Codex
-  and OpenCode expose no session-end event; a row an ungraceful exit leaves behind ages out by TTL).
+  format and stay safely inert on Codex and OpenCode), and so is the `SessionEnd` row reaper: neither
+  agent exposes a session-end event. On Codex the liveness row registers at session start and only a
+  turn end archives it, so a row still live when the session exits, gracefully or not, ages out by TTL
+  instead (OpenCode's case differs slightly; see below).
 - Codex exposes no session id to shell commands, so a hand-run `director done` (including
   `$director-complete`'s final step) may report "row not found" there, not a failure: the Stop hook
   archives the session's row at turn end, and everything durable was already written. Targeted
@@ -217,8 +219,10 @@ at `~/.config/opencode/command/`, invoked as `/director-adopt`, `/director-compl
 - The Stop emit-guard and the context-fill handoff nudge read CC's transcript format and stay safely
   inert on OpenCode; end-of-turn fleet bookkeeping still runs (OpenCode's `session.idle` is a
   turn-end signal, so it matches Claude Code's `Stop`). OpenCode has no session-end event, so it
-  gets no equivalent of Claude Code's `SessionEnd` row reaping: a row an ungraceful exit leaves
-  behind ages out by TTL instead.
+  gets no equivalent of Claude Code's `SessionEnd` row reaping. It needs one less than Codex does:
+  the liveness row registers on that same first user message and every turn end archives it, so an
+  exit at the prompt leaves nothing behind. A session that dies before a turn ends leaves a row that
+  ages out by TTL.
 - The plugin resolves the `director` binary the same way the shims do: `DIRECTOR_BIN`, then `PATH`,
   then the symlink `install` drops at `<hooks root>/bin/director`.
 

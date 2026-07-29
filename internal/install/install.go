@@ -409,10 +409,98 @@ func ManagedEntriesPresent(path string) bool {
 	return false
 }
 
+// MissingManagedEvents reports which of Director's Claude Code hook events are NOT
+// wired in the hooks file at path, deduplicated and in directorEntries order. An
+// entry counts as present under exactly the criteria mergeManagedEntries uses for
+// idempotency (matcher group + tagged command path under hooksDir), so an empty
+// result means "Install would add nothing".
+//
+// This is the question ManagedEntriesPresent cannot answer: it reports whether ANY
+// Director entry exists, which reads as wired on an install predating a hook event
+// a later binary added — the state a binary upgrade without a re-run leaves behind,
+// where the new hook silently never fires. Read errors and foreign shapes fail open
+// (nothing missing), matching ManagedEntriesPresent's direction: doctor already
+// reports an unreadable settings file as its own failure, and reporting it twice
+// would invent a second verdict for one broken file.
+func MissingManagedEvents(path, hooksDir string) []string {
+	root, err := loadSettings(path)
+	if err != nil {
+		return nil
+	}
+	hooks, ok := typedMap(root, "hooks")
+	if !ok {
+		return nil
+	}
+	var missing []string
+	for _, e := range directorEntries {
+		if managedEntryPresent(hooks, e, hooksDir) || containsName(missing, e.event) {
+			continue
+		}
+		missing = append(missing, e.event)
+	}
+	return missing
+}
+
+// managedEntryPresent reports whether e is already wired in the decoded hooks map:
+// the read-only half of mergeManagedEntries' idempotency test, built from the same
+// primitives (findMatcherGroup, hasManagedCommand, commandFor) so the two can never
+// disagree about what "already installed" means.
+func managedEntryPresent(hooks map[string]any, e managedEntry, hooksDir string) bool {
+	groups, ok := typedArray(hooks, e.event)
+	if !ok {
+		return false
+	}
+	gi := findMatcherGroup(groups, e.matcher)
+	if gi < 0 {
+		return false
+	}
+	cmds, ok := typedArray(asMap(groups[gi]), "hooks")
+	if !ok {
+		return false
+	}
+	return hasManagedCommand(cmds, commandFor(hooksDir, e.shim))
+}
+
+// ClaudeShims and CodexShims return the shim basenames each target's entry set
+// actually references. The sets differ — Codex exposes no SessionEnd event, so
+// codexEntries never names sessionend.sh — and a verifier must check each target
+// against its OWN set: the full embedded set (ExpectedShims) would fault a
+// Codex-only machine for lacking a shim Codex can never fire. Install still writes
+// every embedded shim on both paths; the hooks dir is shared, so a superset on disk
+// is correct.
+func ClaudeShims() []string {
+	return shimsFor(directorEntries)
+}
+
+func CodexShims() []string {
+	return shimsFor(codexEntries)
+}
+
+// shimsFor returns the unique shim basenames entries reference, in first-use order.
+func shimsFor(entries []managedEntry) []string {
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if !containsName(names, e.shim) {
+			names = append(names, e.shim)
+		}
+	}
+	return names
+}
+
+func containsName(names []string, name string) bool {
+	for _, n := range names {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
 // ExpectedShims returns the basenames of the hook shim scripts install writes
-// into the hooks dir. The embedded shims/ dir is the single source of truth, so a
-// consumer that verifies an install (`director doctor`) checks exactly the set
-// install materializes — no drift between what is written and what is checked.
+// into the hooks dir — the FULL embedded set, which is what both install forms
+// materialize and what uninstall reclaims. A consumer verifying one target's
+// wiring wants that target's own set instead (ClaudeShims / CodexShims): the
+// embedded dir is a superset of what any single entry set references.
 func ExpectedShims() []string {
 	entries, err := fs.ReadDir(shimFS, "shims")
 	if err != nil {
