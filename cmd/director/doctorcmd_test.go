@@ -37,6 +37,9 @@ func installedFixture(t *testing.T) doctorInputs {
 	hooksDir := filepath.Join(root, "hooks")
 	t.Setenv("DIRECTOR_HOOKS_DIR", hooksDir)
 	t.Setenv("DIRECTOR_COMMANDS_DIR", filepath.Join(root, "commands"))
+	// Pin the hub form install grants (and the check reads) to the default,
+	// independent of the developer's exported DIRECTOR_HUB.
+	t.Setenv("DIRECTOR_HUB", "")
 	settings := filepath.Join(root, "settings.json")
 	if err := install.Install(settings); err != nil {
 		t.Fatalf("install fixture: %v", err)
@@ -46,13 +49,14 @@ func installedFixture(t *testing.T) doctorInputs {
 		t.Fatalf("resolve bin path: %v", err)
 	}
 	return doctorInputs{
-		directorBin:  "",
-		lookDirector: func() (string, bool) { return "", false }, // rely on the symlink tier
-		settingsPath: settings,
-		hooksDir:     hooksDir,
-		binPath:      binPath,
-		codexHooks:   filepath.Join(root, "no-codex.json"),
-		hub:          root, // a writable directory
+		directorBin:   "",
+		lookDirector:  func() (string, bool) { return "", false }, // rely on the symlink tier
+		settingsPath:  settings,
+		hooksDir:      hooksDir,
+		binPath:       binPath,
+		codexHooks:    filepath.Join(root, "no-codex.json"),
+		hub:           root, // a writable directory
+		hubAllowWrite: install.HubAllowWriteValue(),
 	}
 }
 
@@ -81,11 +85,17 @@ func TestDoctorHealthy(t *testing.T) {
 	if !rep.healthy {
 		t.Fatalf("want healthy, got %+v", rep.checks)
 	}
+	if rep.hasWarn() {
+		t.Errorf("a fresh install must report no warnings at all, got %+v", rep.checks)
+	}
 	if lv := levelOf(t, rep, "binary"); lv != levelOK {
 		t.Errorf("binary check: got %v, want OK", lv)
 	}
 	if lv := levelOf(t, rep, "claude code hooks"); lv != levelOK {
 		t.Errorf("hooks check: got %v, want OK", lv)
+	}
+	if lv := levelOf(t, rep, "sandbox write access"); lv != levelOK {
+		t.Errorf("sandbox check: got %v, want OK", lv)
 	}
 	if hasCheck(rep, "codex hooks") {
 		t.Errorf("codex check must be absent without a Codex install")
@@ -659,6 +669,199 @@ func TestDoctorHubUnwritableAncestorFails(t *testing.T) {
 	in.hub = filepath.Join(locked, "hub") // missing; nearest ancestor is unwritable
 	if levelOf(t, diagnose(in), "hub") != levelFail {
 		t.Fatal("a missing hub under an unwritable parent must FAIL")
+	}
+}
+
+// TestDoctorUntaggedEntriesWarn: Claude Code sometimes rewrites settings.json
+// without unknown fields, stripping `"_managedBy":"director"` from hooks that
+// still fire. doctor must SAY so — naming the events and the re-tag remedy — but
+// as a warning: the entries work, and Director still recognizes them by their shim
+// path. A failure here would tell users their working install is broken.
+func TestDoctorUntaggedEntriesWarn(t *testing.T) {
+	in := installedFixture(t)
+	stripManagedTags(t, in.settingsPath)
+
+	rep := diagnose(in)
+	if lv := levelOf(t, rep, "claude code hooks"); lv != levelWarn {
+		t.Fatalf("tag-stripped install: claude check = %v, want a warning (%+v)", lv, rep.checks)
+	}
+	if !rep.healthy {
+		t.Fatal("stripped tags must not sink the report — the hooks still fire")
+	}
+	for _, c := range rep.checks {
+		if c.title != "claude code hooks" {
+			continue
+		}
+		for _, event := range []string{"SessionStart", "PostToolUse", "Stop", "SessionEnd"} {
+			if !strings.Contains(c.detail, event) {
+				t.Errorf("warning should name the affected event %s, got: %s", event, c.detail)
+			}
+		}
+		if !strings.Contains(c.detail, "director install") {
+			t.Errorf("warning should name the remedy, got: %s", c.detail)
+		}
+	}
+}
+
+// TestRunDoctorUntaggedEntriesExitsZero drives the same state through the CLI
+// wrapper: a warning is not a failure, so the exit code stays 0 and a re-install
+// clears it.
+func TestRunDoctorUntaggedEntriesExitsZero(t *testing.T) {
+	skipUnixOnlyDoctor(t)
+	root := t.TempDir()
+	settings := filepath.Join(root, "settings.json")
+	t.Setenv("DIRECTOR_HOOKS_DIR", filepath.Join(root, "hooks"))
+	t.Setenv("DIRECTOR_COMMANDS_DIR", filepath.Join(root, "commands"))
+	t.Setenv("DIRECTOR_SETTINGS_PATH", settings)
+	t.Setenv("DIRECTOR_CODEX_HOOKS_PATH", filepath.Join(root, "no-codex.json"))
+	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", filepath.Join(root, "no-plugin.js"))
+	t.Setenv("DIRECTOR_HUB", root)
+	t.Setenv("DIRECTOR_BIN", "")
+	if err := install.Install(settings); err != nil {
+		t.Fatal(err)
+	}
+	stripManagedTags(t, settings)
+
+	if code := runDoctor(nil); code != 0 {
+		t.Fatalf("a tag-stripped install must warn, not fail: runDoctor exit = %d, want 0", code)
+	}
+	if err := install.Install(settings); err != nil {
+		t.Fatal(err)
+	}
+	if code := runDoctor(nil); code != 0 {
+		t.Fatalf("after the re-install: runDoctor exit = %d, want 0", code)
+	}
+}
+
+// TestDoctorSandboxGrantMissingWarns: an install predating the sandbox grant (or
+// a settings.json a user edited) leaves the hub unwritable from a sandboxed
+// session — a permission prompt on the first coordination write, which from a
+// hook looks like Director doing nothing. Warning-grade: unsandboxed sessions are
+// unaffected, and the remedy is one re-install.
+func TestDoctorSandboxGrantMissingWarns(t *testing.T) {
+	in := installedFixture(t)
+	dropSandboxBlock(t, in.settingsPath)
+
+	rep := diagnose(in)
+	if lv := levelOf(t, rep, "sandbox write access"); lv != levelWarn {
+		t.Fatalf("missing hub grant: sandbox check = %v, want a warning (%+v)", lv, rep.checks)
+	}
+	if !rep.healthy {
+		t.Fatal("a missing sandbox grant must not sink the report")
+	}
+	for _, c := range rep.checks {
+		if c.title == "sandbox write access" && !strings.Contains(c.detail, "director install") {
+			t.Errorf("warning should name the remedy, got: %s", c.detail)
+		}
+	}
+}
+
+// TestDoctorSandboxCheckAbsentWithoutClaudeInstall: the grant is a Claude Code
+// setting, so with no CC install there is nothing to assess — the claude check
+// already carries the "run director install" remedy, and a second line about the
+// same file would just double-report it.
+func TestDoctorSandboxCheckAbsentWithoutClaudeInstall(t *testing.T) {
+	in := installedFixture(t)
+	in.settingsPath = filepath.Join(t.TempDir(), "no-settings.json")
+	if hasCheck(diagnose(in), "sandbox write access") {
+		t.Error("sandbox check must stand down when no Claude Code install is present")
+	}
+}
+
+// TestDoctorSandboxCheckHonorsHubOverride: with DIRECTOR_HUB set, install grants
+// that exact path and doctor must look for the same one. A check keyed on the
+// default `~/.director` would warn forever on an overridden hub.
+func TestDoctorSandboxCheckHonorsHubOverride(t *testing.T) {
+	skipUnixOnlyDoctor(t)
+	root := t.TempDir()
+	hub := filepath.Join(root, "custom-hub")
+	settings := filepath.Join(root, "settings.json")
+	t.Setenv("DIRECTOR_HOOKS_DIR", filepath.Join(root, "hooks"))
+	t.Setenv("DIRECTOR_COMMANDS_DIR", filepath.Join(root, "commands"))
+	t.Setenv("DIRECTOR_SETTINGS_PATH", settings)
+	t.Setenv("DIRECTOR_CODEX_HOOKS_PATH", filepath.Join(root, "no-codex.json"))
+	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", filepath.Join(root, "no-plugin.js"))
+	t.Setenv("DIRECTOR_HUB", hub)
+	t.Setenv("DIRECTOR_BIN", "")
+	if err := install.Install(settings); err != nil {
+		t.Fatal(err)
+	}
+
+	in, err := doctorInputsFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.lookDirector = func() (string, bool) { return "", false } // rely on the symlink tier
+	if in.hub != hub {
+		t.Errorf("hubRoot did not honor DIRECTOR_HUB: got %q, want %q", in.hub, hub)
+	}
+	if in.hubAllowWrite != hub {
+		t.Errorf("granted hub value = %q, want the override %q verbatim", in.hubAllowWrite, hub)
+	}
+	rep := diagnose(in)
+	if lv := levelOf(t, rep, "sandbox write access"); lv != levelOK {
+		t.Errorf("overridden hub: sandbox check = %v, want OK (%+v)", lv, rep.checks)
+	}
+	if code := runDoctor(nil); code != 0 {
+		t.Fatalf("overridden hub: runDoctor exit = %d, want 0", code)
+	}
+}
+
+// stripManagedTags removes the `_managedBy` tag from every command object in a
+// settings.json, reproducing a Claude Code rewrite that drops unknown fields. The
+// commands themselves are left alone: the hooks still fire.
+func stripManagedTags(t *testing.T, path string) {
+	t.Helper()
+	root := readSettingsTree(t, path)
+	hooks, _ := root["hooks"].(map[string]any)
+	for _, groups := range hooks {
+		gs, _ := groups.([]any)
+		for _, g := range gs {
+			gm, _ := g.(map[string]any)
+			cmds, _ := gm["hooks"].([]any)
+			for _, c := range cmds {
+				if cm, _ := c.(map[string]any); cm != nil {
+					delete(cm, "_managedBy")
+				}
+			}
+		}
+	}
+	writeSettingsTree(t, path, root)
+}
+
+// dropSandboxBlock removes the whole sandbox block, rolling a settings.json back
+// to what an install predating the hub grant wrote.
+func dropSandboxBlock(t *testing.T, path string) {
+	t.Helper()
+	root := readSettingsTree(t, path)
+	if _, ok := root["sandbox"]; !ok {
+		t.Fatalf("setup: %s carries no sandbox block to drop", path)
+	}
+	delete(root, "sandbox")
+	writeSettingsTree(t, path, root)
+}
+
+func readSettingsTree(t *testing.T, path string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(data, &root); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+func writeSettingsTree(t *testing.T, path string, root map[string]any) {
+	t.Helper()
+	out, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, out, 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

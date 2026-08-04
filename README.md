@@ -145,15 +145,16 @@ Then wire it into your agent. The one-liner already wired Claude Code; the secti
 director install
 ```
 
-`director install` does three things, all idempotent and self-contained:
+`director install` does four things, all idempotent and self-contained:
 
 1. **Writes the hook shims.** The shims are embedded in the binary, so `install` materializes them (executable) into the hooks dir. There is **no manual copy step**.
-2. **Merges the hooks into `~/.claude/settings.json`.** Every entry it writes carries a `"_managedBy":"director"` tag, so Director's hooks run **alongside** GSD's and any hand-rolled hooks without clobbering them. Re-running adds nothing; `director uninstall` removes only Director's tagged entries **and** the shims and command files it wrote. Pass `--settings <path>` to target a project or test settings file.
+2. **Merges the hooks into `~/.claude/settings.json`.** Every entry it writes carries a `"_managedBy":"director"` tag, so Director's hooks run **alongside** GSD's and any hand-rolled hooks without clobbering them. Re-running adds nothing; `director uninstall` removes only Director's own entries (tagged, or untagged at its shim paths) **and** the shims and command files it wrote. Pass `--settings <path>` to target a project or test settings file.
 3. **Materializes the slash commands.** The `/director:adopt`, `/director:complete`, and `/director:handoff` commands (also embedded) are written under `~/.claude/commands/director/`, namespaced so they never clobber a user's own commands.
+4. **Grants the hub sandbox write access.** A sandboxed session can write only its working directory and session tmp by default, so the first coordination write would stop on a permission prompt. `install` adds the hub (`~/.director`, or your `DIRECTOR_HUB`) to `sandbox.filesystem.allowWrite` in `settings.json`, leaving any entries you added there untouched.
 
 The installed hook commands point at the **shims**, not the binary directly, so rebuilding or relocating `director` never requires rewriting `settings.json` (re-run `install` to refresh the shims to the current binary). If `~/.claude/settings.json` already has a malformed (non-object) `hooks` value, `install` refuses rather than overwrite it.
 
-Confirm the wiring will actually fire with `director doctor`. The shims fail safe (a missing binary exits 0 and coordination silently no-ops), so a broken install is otherwise invisible; `doctor` walks the same binary-resolution ladder the shims walk and reports each link (binary, Claude Code hooks, Codex and OpenCode hooks if present, hub). It exits non-zero when the install is broken, and warns (without failing) on a partial one, such as a terminal-only install the desktop app would miss:
+Confirm the wiring will actually fire with `director doctor`. The shims fail safe (a missing binary exits 0 and coordination silently no-ops), so a broken install is otherwise invisible; `doctor` walks the same binary-resolution ladder the shims walk and reports each link (binary, Claude Code hooks, Codex and OpenCode hooks if present, the hub's sandbox write grant, hub). It exits non-zero when the install is broken, and warns (without failing) on a partial one, such as a terminal-only install the desktop app would miss:
 
 ```bash
 director doctor

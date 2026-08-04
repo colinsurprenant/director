@@ -74,6 +74,7 @@ type doctorInputs struct {
 	codexHooks              string                // ~/.codex/hooks.json
 	opencodePlugin          string                // ~/.config/opencode/plugin/director.js
 	hub                     string                // the coordination hub root
+	hubAllowWrite           string                // the hub form install grants in sandbox.filesystem.allowWrite
 }
 
 // runDoctor is the CLI wrapper: resolve the environment, diagnose, print, and
@@ -165,6 +166,7 @@ func doctorInputsFromEnv() (doctorInputs, error) {
 		codexHooks:              codexHooks,
 		opencodePlugin:          opencodePlugin,
 		hub:                     hub,
+		hubAllowWrite:           install.HubAllowWriteValue(),
 	}, nil
 }
 
@@ -182,7 +184,8 @@ func diagnose(in doctorInputs) doctorReport {
 	// standalone) would deterministically exit unhealthy.
 	codexCheck, codexPresent := codexHooksCheck(in)
 	opencodeCheck, opencodePresent := opencodeHooksCheck(in)
-	claudeAbsent := !install.ManagedEntriesPresent(in.settingsPath) && install.SettingsParseError(in.settingsPath) == nil
+	claudePresent := install.ManagedEntriesPresent(in.settingsPath, in.hooksDir)
+	claudeAbsent := !claudePresent && install.SettingsParseError(in.settingsPath) == nil
 	if !claudeAbsent || (!codexPresent && !opencodePresent) {
 		r.checks = append(r.checks, claudeHooksCheck(in))
 	}
@@ -191,6 +194,13 @@ func diagnose(in doctorInputs) doctorReport {
 	}
 	if opencodePresent {
 		r.checks = append(r.checks, opencodeCheck)
+	}
+	// The sandbox grant is a Claude Code setting, so it is only assessable where a
+	// CC install actually exists: on an absent or malformed settings.json the
+	// claude check above already carries the remedy, and a second warning about
+	// the same file would just double-report it.
+	if claudePresent {
+		r.checks = append(r.checks, sandboxWriteCheck(in))
 	}
 	r.checks = append(r.checks, hubCheck(in.hub))
 
@@ -246,10 +256,10 @@ func binaryResolutionCheck(in doctorInputs) check {
 	}
 }
 
-// claudeHooksCheck verifies the Claude Code side is wired: the FULL set of tagged
+// claudeHooksCheck verifies the Claude Code side is wired: the FULL set of
 // entries is in settings.json AND the shims those entries point at actually exist.
 func claudeHooksCheck(in doctorInputs) check {
-	if !install.ManagedEntriesPresent(in.settingsPath) {
+	if !install.ManagedEntriesPresent(in.settingsPath, in.hooksDir) {
 		// ManagedEntriesPresent collapses a read/parse failure to the same false as
 		// "no managed entries", but the remedies differ: a malformed settings.json
 		// needs fixing (install would refuse to overwrite it), not a re-run. Split
@@ -272,14 +282,40 @@ func claudeHooksCheck(in doctorInputs) check {
 		return check{"claude code hooks", levelFail, fmt.Sprintf(
 			"settings.json references Director hooks, but shims are missing from %s (%s) — re-run `director install`.", in.hooksDir, strings.Join(missing, ", "))}
 	}
+	// Wired but untagged: Claude Code sometimes rewrites settings.json without
+	// unknown fields, taking `"_managedBy":"director"` with it. The hooks still
+	// fire (the shim path is what CC runs) and install/uninstall still recognize
+	// them by that path, so this is a warning, not a failure — but it is worth
+	// surfacing, because a re-install is what puts the tag back.
+	if untagged := install.UntaggedManagedEntries(in.settingsPath, in.hooksDir); len(untagged) > 0 {
+		return check{"claude code hooks", levelWarn, fmt.Sprintf(
+			"Director hooks in %s have lost their \"_managedBy\" tag (%s) — Claude Code rewrites settings.json without unknown fields. They still fire, and Director still recognizes them by their shim path; re-run `director install` to re-tag them.",
+			in.settingsPath, strings.Join(untagged, ", "))}
+	}
 	return check{"claude code hooks", levelOK, fmt.Sprintf("wired in %s; shims present in %s", in.settingsPath, in.hooksDir)}
+}
+
+// sandboxWriteCheck verifies the hub is listed in settings.json's
+// sandbox.filesystem.allowWrite. A sandboxed Claude Code session may write only
+// its cwd and session tmp by default, so without the grant the first coordination
+// write into the hub stops on a permission prompt — and from a hook, a blocked
+// write reads as Director quietly doing nothing. Warning-grade: an unsandboxed
+// session is unaffected, and the remedy is one re-install.
+func sandboxWriteCheck(in doctorInputs) check {
+	if install.SettingsAllowsHubWrite(in.settingsPath, in.hubAllowWrite) {
+		return check{"sandbox write access", levelOK, fmt.Sprintf(
+			"%s grants write access to the hub (%s)", in.settingsPath, in.hubAllowWrite)}
+	}
+	return check{"sandbox write access", levelWarn, fmt.Sprintf(
+		"%s does not list the hub (%s) in sandbox.filesystem.allowWrite — in a sandboxed session, coordination writes will hit a permission prompt. Re-run `director install`.",
+		in.settingsPath, in.hubAllowWrite)}
 }
 
 // codexHooksCheck reports the Codex side only when a Codex install is present, so
 // it never nags a Claude-Code-only user. The bool is false when there is nothing
 // to report.
 func codexHooksCheck(in doctorInputs) (check, bool) {
-	if !install.ManagedEntriesPresent(in.codexHooks) {
+	if !install.ManagedEntriesPresent(in.codexHooks, in.hooksDir) {
 		return check{}, false
 	}
 	if missing := missingShims(in.hooksDir, install.CodexShims()); len(missing) > 0 {

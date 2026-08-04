@@ -101,8 +101,9 @@ func InstallCodex(hooksPath string) error {
 	return mergeManagedEntries(hooksPath, codexEntries, hooksDir)
 }
 
-// UninstallCodex removes Director's tagged entries from hooksPath and the
-// Director-owned skill directories. A missing hooks file means no Codex install
+// UninstallCodex removes Director's entries from hooksPath (tagged, or untagged
+// at one of our shim paths) and the Director-owned skill directories. A missing
+// hooks file means no Codex install
 // to undo — touch nothing, mirroring the CC Uninstall. The shared shims (and
 // the bin symlink that travels with them) are spared while EITHER default
 // install still references them: the default CC settings.json carrying
@@ -118,20 +119,22 @@ func UninstallCodex(hooksPath string) error {
 	if _, err := os.Stat(hooksPath); os.IsNotExist(err) {
 		return nil
 	}
-	if err := removeManagedEntries(hooksPath); err != nil {
+	// Resolved before the removal, not just for the reclaim: the shim paths under
+	// it are what identify an entry of ours whose `_managedBy` tag was stripped.
+	// A failure (no HOME) degrades to tag-only removal, mirroring Uninstall.
+	hooksDir, hooksErr := DefaultHooksDir()
+	if err := removeManagedEntries(hooksPath, hooksDir); err != nil {
 		return err
 	}
 	if skillsDir, err := DefaultCodexSkillsDir(); err == nil {
 		removeCodexSkills(skillsDir)
 	}
-	if !claudeInstallPresent() && !codexInstallPresent() {
-		if hooksDir, err := DefaultHooksDir(); err == nil {
-			removeShims(hooksDir)
-			// The bin symlink outlives the shims when an OpenCode install remains:
-			// its plugin probes the same fallback path without using the shims.
-			if !opencodeInstallPresent() {
-				removeBinSymlink(hooksDir)
-			}
+	if !claudeInstallPresent() && !codexInstallPresent() && hooksErr == nil {
+		removeShims(hooksDir)
+		// The bin symlink outlives the shims when an OpenCode install remains:
+		// its plugin probes the same fallback path without using the shims.
+		if !opencodeInstallPresent() {
+			removeBinSymlink(hooksDir)
 		}
 	}
 	return nil
@@ -157,7 +160,11 @@ func codexInstallPresent() bool {
 	if err != nil {
 		return false
 	}
-	return ManagedEntriesPresent(hooksPath)
+	hooksDir, err := DefaultHooksDir()
+	if err != nil {
+		hooksDir = "" // degrade to the tag-only reading, as claudeInstallPresent does
+	}
+	return ManagedEntriesPresent(hooksPath, hooksDir)
 }
 
 // codexSkillName maps an embedded command filename to its skill name:
