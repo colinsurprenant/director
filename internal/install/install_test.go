@@ -3,6 +3,7 @@ package install
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -1483,6 +1484,53 @@ func TestInstallSkipsWrongTypedMatcherGroup(t *testing.T) {
 		t.Errorf("hooks.Stop tagged commands = %d, want 1", got)
 	}
 	assertInstallByteStable(t, path)
+}
+
+// TestForeignTypeAtShimPathIsNeverOurs: path ownership applies only to
+// "command"-typed objects. A foreign object of another type that happens to
+// reference one of our shim paths must never be adopted, collapsed, removed, or
+// counted as a Director install.
+func TestForeignTypeAtShimPathIsNeverOurs(t *testing.T) {
+	path, hooksDir := writeFixture(t, "")
+	stop := filepath.Join(hooksDir, "stop.sh")
+	fixture := fmt.Sprintf(`{"hooks": {"Stop": [{"matcher": "", "hooks": [
+		{"type": "tool", "command": %q, "note": "foreign"}
+	]}]}}`, stop)
+	if err := os.WriteFile(path, []byte(fixture), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if present := ManagedEntriesPresent(path, hooksDir); present {
+		t.Errorf("ManagedEntriesPresent = true on a foreign-typed object at our path, want false")
+	}
+
+	if err := Install(path); err != nil {
+		t.Fatal(err)
+	}
+	root := loadTree(t, path)
+	// The foreign object survives verbatim beside our appended canonical command.
+	cmds := commands(t, root, "Stop")
+	if len(cmds) != 2 {
+		t.Fatalf("hooks.Stop carries %d commands, want 2 (foreign-typed + ours): %v", len(cmds), cmds)
+	}
+	if got := managedCount(t, root, "Stop"); got != 1 {
+		t.Errorf("hooks.Stop tagged commands = %d, want 1", got)
+	}
+	if untagged := UntaggedManagedEntries(path, hooksDir); len(untagged) != 0 {
+		t.Errorf("UntaggedManagedEntries = %v, want none (the foreign-typed object is not ours)", untagged)
+	}
+	assertInstallByteStable(t, path)
+
+	if err := Uninstall(path); err != nil {
+		t.Fatal(err)
+	}
+	root = loadTree(t, path)
+	cmds = commands(t, root, "Stop")
+	if len(cmds) != 1 || cmds[0] != stop {
+		t.Fatalf("after uninstall hooks.Stop = %v, want only the foreign-typed object at %s", cmds, stop)
+	}
+	if got := managedCount(t, root, "Stop"); got != 0 {
+		t.Errorf("after uninstall tagged commands = %d, want 0", got)
+	}
 }
 
 // TestUninstallRemovesUntaggedEntries: the removal half of the same failure. With

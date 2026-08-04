@@ -753,7 +753,7 @@ func eventHasUntaggedCommand(hooks map[string]any, event string, commands []stri
 		}
 		for _, c := range cmds {
 			m := asMap(c)
-			if m == nil || isManaged(m) {
+			if m == nil || isManaged(m) || !commandTyped(m) {
 				continue
 			}
 			if containsName(commands, stringAt(m, "command")) {
@@ -1161,17 +1161,27 @@ func directorCommands(hooksDir string) []string {
 }
 
 // directorOwned reports whether a command object is Director's: it carries the
-// tag, or its "command" is one of our shim paths. The second proof is what
-// survives Claude Code rewriting settings.json without unknown fields.
+// tag, or it is a "command"-typed object whose "command" is one of our shim
+// paths. The second proof is what survives Claude Code rewriting settings.json
+// without unknown fields. The type gate keeps the proof honest: only actual
+// command hooks are ours by construction; some other object shape that happens
+// to reference a shim path is foreign data and must never be matched.
 func directorOwned(c any, commands []string) bool {
 	if isManaged(c) {
 		return true
 	}
 	m := asMap(c)
-	if m == nil {
+	if m == nil || !commandTyped(m) {
 		return false
 	}
 	return containsName(commands, stringAt(m, "command"))
+}
+
+// commandTyped reports whether the object is a Claude Code command hook — the
+// only shape Director ever writes (managedCommand), and a KNOWN field CC's
+// settings rewrite preserves, so an entry of ours always still carries it.
+func commandTyped(m map[string]any) bool {
+	return stringAt(m, "type") == "command"
 }
 
 // hasDirectorCommand reports whether cmds already carries Director's command
@@ -1181,7 +1191,7 @@ func directorOwned(c any, commands []string) bool {
 // a settings.json rewrite drops the tag.
 func hasDirectorCommand(cmds []any, command string) bool {
 	for _, c := range cmds {
-		if m := asMap(c); m != nil && stringAt(m, "command") == command {
+		if m := asMap(c); m != nil && commandTyped(m) && stringAt(m, "command") == command {
 			return true
 		}
 	}
@@ -1221,8 +1231,8 @@ func ensureManagedCommand(cmds []any, command string, survivor bool) ([]any, boo
 	var present bool
 	for _, c := range cmds {
 		m := asMap(c)
-		if m == nil || stringAt(m, "command") != command {
-			kept = append(kept, c) // not ours; position preserved
+		if m == nil || !commandTyped(m) || stringAt(m, "command") != command {
+			kept = append(kept, c) // not ours (wrong shape, type, or path); position preserved
 			continue
 		}
 		present = true
