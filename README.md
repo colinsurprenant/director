@@ -5,6 +5,8 @@
 
 **Save the work, not the chat.**
 
+[![A Claude Code session records decisions, open items, and handoffs to an append-only log; a Codex session a day later starts with them injected and appends to the same log.](site/hero.svg)](https://colinsurprenant.github.io/director/)
+
 **[The two-minute tour: colinsurprenant.github.io/director](https://colinsurprenant.github.io/director/)**
 
 The session is long past its best. You keep pushing it anyway, because it holds everything you accumulated on the way here: the decisions, the dead ends, the loose ends, where you were going.

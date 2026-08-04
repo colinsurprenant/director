@@ -9,9 +9,10 @@
 <meta property="og:description" content="Sessions are disposable. The state of the work isn't. Director is a ledger your agent writes as it works, injected into every new session as ground truth.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://colinsurprenant.github.io/director/">
-<meta property="og:image" content="https://colinsurprenant.github.io/director/og.png">
+<meta property="og:image" content="https://colinsurprenant.github.io/director/og-v2.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="A Claude Code session records decisions, open items, and handoffs to an append-only log; a Codex session a day later starts with them injected and appends to the same log.">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230a0e0b'/%3E%3Cpath d='M11 8l12 8-12 8z' fill='%235fdc94'/%3E%3C/svg%3E">
 <style>
@@ -182,7 +183,7 @@
   .term .amber { color: var(--amber); }
   .term .cyan { color: var(--cyan); }
   .term .red { color: var(--red); }
-  .term-cap {
+  .term-cap, .diagram figcaption {
     margin-top: .9rem;
     font-family: var(--mono); font-size: .7rem; color: var(--ink-faint);
     text-align: center;
@@ -190,6 +191,20 @@
 
   /* ------- sections ------- */
   section { padding-top: 4.5rem; }
+  /* The prose column is 46rem, narrower than GitHub's README column. Text inside the SVG
+     scales with its frame, so the diagram breaks out of the column to stay legible.
+     Centred with margins, not a transform: .reveal animates to `transform: none`, which
+     would clobber a translateX and shove the figure off-centre once the animation settles. */
+  .diagram {
+    --w: min(64rem, calc(100vw - 2.5rem));
+    margin: 1.8rem 0 .4rem;
+    width: var(--w);
+    margin-left: calc((100% - var(--w)) / 2);
+  }
+  .diagram img {
+    display: block; width: 100%; height: auto;
+    border: 1px solid var(--line); border-radius: 8px;
+  }
   .kicker {
     font-family: var(--mono); font-size: .72rem;
     color: var(--accent); letter-spacing: .14em; text-transform: uppercase;
@@ -236,6 +251,9 @@
 
   @media (max-width: 640px) {
     header { padding-top: 3rem; }
+    /* at phone widths the SVG type falls below legibility (~5px); the grid cells
+       below carry the same explanation in prose */
+    .diagram { display: none; }
     .grid { grid-template-columns: 1fr; }
     .vs > div { grid-template-columns: 1fr; gap: .35rem; }
     .qa p { grid-template-columns: 1fr; gap: .1rem; }
@@ -316,6 +334,10 @@
 <section class="wrap">
   <p class="kicker">how it works</p>
   <h2>An append-only log per repo. Deterministic projections. A push at session start.</h2>
+  <figure class="diagram reveal d2">
+    <img src="hero.svg" width="1200" height="630" alt="A Claude Code session records decisions, open items, and handoffs to an append-only log; a Codex session a day later starts with them injected and appends to the same log.">
+    <figcaption>sessions end · the log doesn&rsquo;t · one file, any harness</figcaption>
+  </figure>
   <div class="grid">
     <div class="cell">
       <h3><span class="p">$</span> director emit</h3>

@@ -1,0 +1,167 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630" role="img" aria-label="A Claude Code session records decisions, open items, and handoffs to an append-only log; a Codex session a day later starts with them injected and appends to the same log.">
+  <title>Director: the ledger runs past every session boundary</title>
+
+  <style>
+    .mono  { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; }
+    .serif { font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, serif; }
+    .ink   { fill: #e8e6df; }
+    .dim   { fill: #a3a296; }
+    .faint { fill: #7f7e72; }
+    .cyan  { fill: #6cc3dc; }
+    .amber { fill: #e0b25b; }
+    .green { fill: #5fdc94; }
+    .red   { fill: #e07a6a; }
+  </style>
+
+  <defs>
+    <radialGradient id="glow" cx="34%" cy="0%" r="76%">
+      <stop offset="0%"   stop-color="#5fdc94" stop-opacity=".075"/>
+      <stop offset="100%" stop-color="#5fdc94" stop-opacity="0"/>
+    </radialGradient>
+    <!-- the log does not end at the frame, it fades out of it. Masking only the spine and the
+         lanes means the type underneath keeps full strength. -->
+    <linearGradient id="tailgrad" gradientUnits="userSpaceOnUse" x1="0" y1="598" x2="0" y2="630">
+      <stop offset="0%"   stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#000000"/>
+    </linearGradient>
+    <mask id="tail" maskUnits="userSpaceOnUse" x="0" y="0" width="1200" height="630"><rect width="1200" height="630" fill="url(#tailgrad)"/></mask>
+  </defs>
+
+  <!-- ============================== ground ============================== -->
+  <rect width="1200" height="630" fill="#0a0e0b"/>
+  <rect width="1200" height="630" fill="url(#glow)"/>
+
+  <!-- ====== titles, centred in the space the boxed block leaves (x 406..1160) ====== -->
+  <g text-anchor="middle">
+    <text class="mono green" x="783" y="38" font-size="11" letter-spacing="2.6">DIRECTOR &#183; A COORDINATION LEDGER FOR CODING AGENTS</text>
+    <text class="serif ink"  x="783" y="74"  font-size="28">Sessions are disposable.</text>
+    <text class="serif ink"  x="783" y="106" font-size="28">The state of the work isn&#8217;t.</text>
+    <text class="serif dim"  x="783" y="132" font-size="16" font-style="italic">Save the work, not the chat.</text>
+  </g>
+
+  <!-- ====== the file, what it holds, and who writes it: one boxed block sitting directly
+       on top of the column, with a short arrow down into it. This block is the key to the
+       whole picture, so it is set large enough to survive the 890px README column. ====== -->
+  <g>
+    <rect x="36" y="28" width="370" height="98" rx="6" fill="#0d120e" stroke="#e8e6df" stroke-opacity=".14"/>
+
+    <text class="mono dim"   x="50" y="50" font-size="13">~/.director/projects/acme-api/log.ndjson</text>
+    <text class="mono faint" x="50" y="72" font-size="12">one append-only event file per repo, any harness</text>
+
+    <text class="mono faint" x="50" y="96" font-size="12">holds:</text>
+    <circle cx="103" cy="92" r="4" fill="#6cc3dc"/>
+    <text class="mono dim" x="115" y="96" font-size="12">decision</text>
+    <circle cx="185" cy="92" r="3.6" fill="none" stroke="#e0b25b" stroke-width="2"/>
+    <text class="mono dim" x="197" y="96" font-size="12">open-item</text>
+    <polygon points="269,88 277,92 269,96" fill="#5fdc94"/>
+    <text class="mono dim" x="289" y="96" font-size="12">handoff</text>
+    <g stroke="#a99ddf" stroke-width="1.8"><path d="M350 89h9M350 95h9"/></g>
+    <text class="mono dim" x="363" y="96" font-size="12">note</text>
+
+    <text class="mono faint" x="50" y="118" font-size="12">written into the log as the work happens</text>
+
+    <!-- down into the column -->
+    <line x1="72" y1="126" x2="72" y2="146" stroke="#e8e6df" stroke-opacity=".3" stroke-width="1.2"/>
+    <polygon points="66,146 78,146 72,158" fill="#e8e6df" fill-opacity=".34"/>
+  </g>
+
+  <!-- ======= boundary: drawn first. The gap spans the spine AND every lane,
+       so the boundary is what breaks, never the log ======= -->
+  <g stroke="#e8e6df" stroke-width="1">
+    <line x1="40"  y1="292" x2="60"  y2="292" stroke-opacity=".30"/>
+    <line x1="110" y1="292" x2="404" y2="292" stroke-opacity=".30"/>
+    <line x1="640" y1="292" x2="1160" y2="292" stroke-opacity=".30"/>
+  </g>
+  <text class="mono ink" x="428" y="297" font-size="13" fill-opacity=".92">session ends &#183; /clear</text>
+
+  <!-- ======= the log: one file, one spine ======= -->
+  <g>
+    <line x1="72" y1="158" x2="72" y2="630" stroke="#e8e6df" stroke-opacity=".5" stroke-width="3.5" mask="url(#tail)"/>
+  </g>
+
+  <!-- ======= one straight lane per kind, in the key's order: decision, open-item, handoff.
+       Each lane opens at its first event and runs on down the log. ======= -->
+  <g fill="none" stroke-width="2.4" mask="url(#tail)">
+    <line x1="82"  y1="194" x2="82"  y2="630" stroke="#6cc3dc" stroke-opacity=".5"/>
+    <line x1="92"  y1="228" x2="92"  y2="630" stroke="#e0b25b" stroke-opacity=".5"/>
+    <line x1="102" y1="262" x2="102" y2="630" stroke="#5fdc94" stroke-opacity=".5"/>
+  </g>
+
+  <!-- ======= session 1: claude code writes into the log as it works ======= -->
+  <g>
+    <text class="mono" x="160" y="170" font-size="12" letter-spacing="1.8" xml:space="preserve"><tspan class="faint">SESSION 1 &#183; </tspan><tspan class="dim">CLAUDE CODE</tspan></text>
+
+    <!-- arrows pointing INTO the log: the write side -->
+    <g stroke-width="1.6">
+      <line x1="148" y1="194" x2="100" y2="194" stroke="#6cc3dc" stroke-opacity=".85"/>
+      <line x1="148" y1="228" x2="110" y2="228" stroke="#e0b25b" stroke-opacity=".85"/>
+      <line x1="148" y1="262" x2="120" y2="262" stroke="#5fdc94" stroke-opacity=".85"/>
+    </g>
+    <g>
+      <polygon points="100,189 90,194 100,199"  fill="#6cc3dc"/>
+      <polygon points="110,223 100,228 110,233" fill="#e0b25b"/>
+      <polygon points="120,257 110,262 120,267" fill="#5fdc94"/>
+    </g>
+
+    <!-- each dot sits on its own lane -->
+    <circle cx="82" cy="194" r="4.5" fill="#6cc3dc"/>
+    <circle cx="92" cy="228" r="4.5" fill="none" stroke="#e0b25b" stroke-width="2.4"/>
+    <polygon points="97.5,257 107,262 97.5,267" fill="#5fdc94"/>
+
+    <text class="mono" x="160" y="200" font-size="18" xml:space="preserve"><tspan class="cyan">&#9656; decision</tspan><tspan class="faint">   recorded &#183; </tspan><tspan class="ink">cursor pagination, not offset; offsets break under deletes</tspan></text>
+    <text class="mono" x="160" y="234" font-size="18" xml:space="preserve"><tspan class="amber">&#9656; open-item</tspan><tspan class="faint">  recorded &#183; </tspan><tspan class="ink">timezone edge case before the backfill merges</tspan></text>
+    <text class="mono" x="160" y="268" font-size="18" xml:space="preserve"><tspan class="green">&#9656; handoff</tspan><tspan class="faint">    parked   &#183; </tspan><tspan class="ink">cursor rework done &#183; next: the backfill script &#183; watch the p99</tspan></text>
+  </g>
+
+  <!-- ======= session 2: opens FROM the log, then carries on ======= -->
+  <g>
+    <text class="mono" x="160" y="320" font-size="12" letter-spacing="1.8" xml:space="preserve"><tspan class="faint">SESSION 2 &#183; </tspan><tspan class="dim">CODEX</tspan><tspan class="faint">  &#183; A DAY LATER, FRESH PROCESS, ZERO MEMORY</tspan></text>
+
+    <text class="mono" x="160" y="350" font-size="18" xml:space="preserve"><tspan class="green">&gt; </tspan><tspan class="ink">where were we?</tspan></text>
+    <text class="mono" x="160" y="380" font-size="18" xml:space="preserve"><tspan class="green">&#9656; Director:</tspan><tspan class="faint"> acme-api-main-7c21e9d4</tspan><tspan class="dim"> &#183; 1 open-item(s), </tspan><tspan class="green">1 need-you</tspan></text>
+    <text class="mono faint" x="1160" y="380" font-size="12" text-anchor="end">the session opens already holding this</text>
+
+    <!-- branches back OUT of the log, cased so lane crossings read as hops -->
+    <g fill="none">
+      <path d="M92 408 Q92 420 104 420 H136"   stroke="#0a0e0b" stroke-width="6.5"/>
+      <path d="M92 408 Q92 420 104 420 H136"   stroke="#e0b25b" stroke-width="2.4"/>
+      <path d="M102 452 Q102 464 114 464 H136" stroke="#0a0e0b" stroke-width="6.5"/>
+      <path d="M102 452 Q102 464 114 464 H136" stroke="#5fdc94" stroke-width="2.4"/>
+      <path d="M82 496 Q82 508 94 508 H136"    stroke="#0a0e0b" stroke-width="6.5"/>
+      <path d="M82 496 Q82 508 94 508 H136"    stroke="#6cc3dc" stroke-width="2.4"/>
+    </g>
+    <g>
+      <polygon points="136,414 148,420 136,426" fill="#e0b25b"/>
+      <polygon points="136,458 148,464 136,470" fill="#5fdc94"/>
+      <polygon points="136,502 148,508 136,514" fill="#6cc3dc"/>
+    </g>
+
+    <text class="mono faint" x="160" y="404" font-size="12">## open-items</text>
+    <text class="mono" x="160" y="426" font-size="16" xml:space="preserve"><tspan class="faint">01KWJ4X2&#8230;  </tspan><tspan class="amber">open-item  </tspan><tspan class="ink">timezone edge case before the backfill merges  </tspan><tspan class="red">[risk:escalate]</tspan></text>
+
+    <!-- the human rides the escalate row, because that is the row that is about them -->
+    <g stroke="#5fdc94" fill="none" stroke-width="1.5">
+      <circle cx="1006" cy="414" r="4.2"/>
+      <path d="M998 426 a8 8 0 0 1 16 0"/>
+    </g>
+    <text class="mono green" x="1022" y="426" font-size="13">you</text>
+
+    <text class="mono faint" x="160" y="448" font-size="12">## handoffs</text>
+    <text class="mono" x="160" y="470" font-size="16" xml:space="preserve"><tspan class="faint">01KWJ9RM&#8230;  </tspan><tspan class="green">handoff    </tspan><tspan class="ink">cursor rework done &#183; next: the backfill script &#183; watch the p99</tspan></text>
+
+    <text class="mono faint" x="160" y="492" font-size="12">## decisions</text>
+    <text class="mono" x="160" y="514" font-size="16" xml:space="preserve"><tspan class="faint">01KWJ4W8&#8230;  </tspan><tspan class="cyan">decision   </tspan><tspan class="ink">cursor pagination, not offset; offsets break under deletes</tspan></text>
+
+    <!-- ...and the session carries on, appending to the same lane it just read from -->
+    <text class="mono faint" x="160" y="546" font-size="14">&#8230; picks up the backfill from there &#8230;</text>
+
+    <path d="M148 566 H100" stroke="#0a0e0b" stroke-width="6.5" fill="none"/>
+    <path d="M148 566 H100" stroke="#6cc3dc" stroke-width="1.6" stroke-opacity=".85" fill="none"/>
+    <polygon points="100,561 90,566 100,571" fill="#6cc3dc"/>
+    <circle cx="82" cy="566" r="4.5" fill="#6cc3dc"/>
+    <text class="mono" x="160" y="572" font-size="18" xml:space="preserve"><tspan class="cyan">&#9656; decision</tspan><tspan class="faint">   recorded &#183; </tspan><tspan class="ink">backfill in batches of 5k, not one pass</tspan></text>
+    <text class="mono faint" x="1160" y="572" font-size="12" text-anchor="end">and keeps appending to the same log</text>
+  </g>
+
+  <text class="mono faint" x="1160" y="606" font-size="11" text-anchor="end">no daemon &#183; no database &#183; no cloud</text>
+</svg>
