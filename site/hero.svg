@@ -11,7 +11,6 @@
     .amber { fill: #e0b25b; }
     .green { fill: #5fdc94; }
     .red   { fill: #e07a6a; }
-    .violet{ fill: #a99ddf; }
   </style>
 
   <defs>
@@ -25,7 +24,7 @@
       <stop offset="0%"   stop-color="#ffffff"/>
       <stop offset="100%" stop-color="#000000"/>
     </linearGradient>
-    <mask id="tail"><rect width="1200" height="630" fill="url(#tailgrad)"/></mask>
+    <mask id="tail" maskUnits="userSpaceOnUse" x="0" y="0" width="1200" height="630"><rect width="1200" height="630" fill="url(#tailgrad)"/></mask>
   </defs>
 
   <!-- ============================== ground ============================== -->
