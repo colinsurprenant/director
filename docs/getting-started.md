@@ -99,6 +99,7 @@ Bare `install` wires Claude Code. The target flags mirror the one-liner's wire f
 installed Director hooks into /Users/you/.claude/settings.json (set DIRECTOR_SETTINGS_PATH to override)
   shims written to /Users/you/.claude/director/hooks (set DIRECTOR_HOOKS_DIR to override)
   commands written to /Users/you/.claude/commands/director (/director:adopt, /director:complete, /director:handoff; set DIRECTOR_COMMANDS_DIR to override)
+  hub ~/.director granted write access in settings.json (sandbox.filesystem.allowWrite, so sandboxed sessions can record coordination state; set DIRECTOR_HUB to override)
   binary symlinked at /Users/you/.claude/director/bin/director (hook fallback when director is not on PATH, e.g. desktop app launches)
 ```
 
@@ -111,10 +112,14 @@ installed Director hooks into /Users/you/.claude/settings.json (set DIRECTOR_SET
 - It materializes the three slash commands: `/director:adopt` (informed adoption, see section 3),
   `/director:handoff` (pause a workstream, record the resume point) and `/director:complete` (close out a finished,
   merged workstream). More on the boundary pair in section 5.
+- It grants the hub write access in `sandbox.filesystem.allowWrite`. A sandboxed session may write only its
+  working directory and session tmp, so without this the first write into `~/.director` (or your `DIRECTOR_HUB`)
+  stops on a permission prompt: from a hook, that reads as Director silently doing nothing. Your own
+  `allowWrite` entries are preserved, and `director uninstall` takes back only Director's.
 
 Verify it took. `director doctor` is the thorough check: it walks the same binary-resolution ladder
-the hooks walk and reports each link (binary, Claude Code hooks, Codex and OpenCode hooks if present, hub), so a
-broken install becomes loud instead of a silent no-op. It exits non-zero when the install is broken,
+the hooks walk and reports each link (binary, Claude Code hooks, Codex and OpenCode hooks if present, the hub's
+sandbox write grant, hub), so a broken install becomes loud instead of a silent no-op. It exits non-zero when the install is broken,
 and warns (without failing) on a partial one, such as a terminal-only install the desktop app would miss.
 
 ```bash
@@ -124,6 +129,7 @@ director doctor
 ```text
 ✓ binary: director resolves on your PATH (/usr/local/bin/director), and the install symlink ~/.claude/director/bin/director backs desktop-app (Dock/Launchpad) launches — both launch contexts covered
 ✓ claude code hooks: wired in ~/.claude/settings.json; shims present in ~/.claude/director/hooks
+✓ sandbox write access: ~/.claude/settings.json grants write access to the hub (~/.director)
 ✓ hub: ~/.director does not exist yet — it is created on first write
 
 ✓ Director is healthy: the hooks will fire and coordination is live.
@@ -193,7 +199,7 @@ The rest of this guide uses the Claude Code command names (`/director:adopt` etc
 as its `$director-*` skill twin, and on OpenCode as its flat `/director-*` custom command: same command,
 same behavior.
 
-`director uninstall --codex` removes only the tagged entries and the three skill directories. The hook
+`director uninstall --codex` removes only Director's own entries (tagged, or untagged at its shim paths) and the three skill directories. The hook
 shims are shared between the two agents: either uninstall form leaves them in place while the other
 agent's install still references them, and reclaims them once neither does, so uninstalling one agent
 never silently breaks the other, and uninstalling the last one leaves no shim files behind.
@@ -398,7 +404,7 @@ what `brief` shows and what the next session starts from.
 ## 6. Troubleshooting
 
 Start with **`director doctor`**: it checks the whole install chain (binary resolution, Claude Code,
-Codex, and OpenCode hooks, shims present, hub writable) and names the broken link, exiting non-zero when coordination
+Codex, and OpenCode hooks, shims present, the hub's sandbox write grant, hub writable) and names the broken link, exiting non-zero when coordination
 would not fire. The table covers the specifics.
 
 | Symptom | Cause & fix |

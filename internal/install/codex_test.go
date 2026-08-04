@@ -105,6 +105,39 @@ func TestInstallCodexMergesAndPreservesForeign(t *testing.T) {
 	}
 }
 
+// TestInstallCodexCollapsesDuplicateEntries pins the duplicate collapse on the
+// SHARED merge core: Codex's hooks.json is tagged by the same mechanism, so a
+// stripped tag followed by a pre-fix install doubles its entries the same way, and
+// InstallCodex must heal it to one tagged copy per event just as Install does.
+func TestInstallCodexCollapsesDuplicateEntries(t *testing.T) {
+	hooksPath, hooksDir, _ := setupCodex(t, codexFixture)
+	if err := InstallCodex(hooksPath); err != nil {
+		t.Fatalf("InstallCodex: %v", err)
+	}
+	stripDirectorTags(t, hooksPath, true)
+	duplicateDirectorCommands(t, hooksPath, hooksDir, true)
+	if got := directorCommandCount(t, loadTree(t, hooksPath), "Stop", hooksDir); got != 2 {
+		t.Fatalf("fixture setup: hooks.Stop carries %d Director commands, want 2", got)
+	}
+
+	if err := InstallCodex(hooksPath); err != nil {
+		t.Fatalf("re-InstallCodex: %v", err)
+	}
+	root := loadTree(t, hooksPath)
+	for _, event := range []string{"SessionStart", "PostToolUse", "Stop"} {
+		if got := directorCommandCount(t, root, event, hooksDir); got != 1 {
+			t.Errorf("hooks.%s carries %d Director commands after install, want 1 (%v)",
+				event, got, commands(t, root, event))
+		}
+		if got := managedCount(t, root, event); got != 1 {
+			t.Errorf("hooks.%s survivors tagged = %d, want 1", event, got)
+		}
+	}
+	if !contains(commands(t, root, "PreToolUse"), "my-own-guard.sh") {
+		t.Errorf("user's own PreToolUse hook was lost in the collapse")
+	}
+}
+
 // TestInstallCodexWritesSkills: the boundary commands materialize as agent
 // skills — one <skillsDir>/<director-name>/SKILL.md each, carrying the required
 // name: frontmatter and with every CC-namespaced cross-reference rewritten to

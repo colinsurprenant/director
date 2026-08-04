@@ -110,6 +110,7 @@ func installOne(target, path string) int {
 		return 0
 	}
 	fmt.Printf("  commands written to %s (/director:adopt, /director:complete, /director:handoff; set DIRECTOR_COMMANDS_DIR to override)\n", commandsDir)
+	fmt.Printf("  hub %s granted write access in settings.json (sandbox.filesystem.allowWrite, so sandboxed sessions can record coordination state; set DIRECTOR_HUB to override)\n", install.HubAllowWriteValue())
 	printBinLine()
 	return 0
 }

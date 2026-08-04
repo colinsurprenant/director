@@ -3,24 +3,21 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/colinsurprenant/director/internal/identity"
+	"github.com/colinsurprenant/director/internal/install"
 )
 
 // hubRoot resolves the central hub directory — where cross-worktree coordination
 // state (projects/, fleet/) lives (§5.1). DIRECTOR_HUB overrides; otherwise it
 // defaults to ~/.director. (Dogfooding the Director repo as its own hub sets
 // DIRECTOR_HUB to the repo root.)
+//
+// The resolution itself lives in internal/install, which needs the same answer to
+// grant the hub Claude Code sandbox write access at install time. One resolver
+// means an install can never authorize a directory the CLI does not write to.
 func hubRoot() (string, error) {
-	if h := os.Getenv("DIRECTOR_HUB"); h != "" {
-		return h, nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve hub: %w", err)
-	}
-	return filepath.Join(home, ".director"), nil
+	return install.DefaultHubRoot()
 }
 
 // resolveContext gathers what every working command needs: the hub root and the
