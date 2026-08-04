@@ -5,6 +5,8 @@
 
 **Save the work, not the chat.**
 
+![One append-only event file per repo. A Claude Code session writes a decision, an open-item and a handoff into it as the work happens. The session ends. A Codex session opens a day later with those events injected back as its digest, then carries on and appends to the same log.](site/hero.svg)
+
 **[The two-minute tour: colinsurprenant.github.io/director](https://colinsurprenant.github.io/director/)**
 
 The session is long past its best. You keep pushing it anyway, because it holds everything you accumulated on the way here: the decisions, the dead ends, the loose ends, where you were going.

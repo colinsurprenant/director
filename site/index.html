@@ -190,6 +190,19 @@
 
   /* ------- sections ------- */
   section { padding-top: 4.5rem; }
+  /* The prose column is 46rem, narrower than GitHub's README column. Text inside the SVG
+     scales with its frame, so the diagram breaks out of the column to stay legible.
+     Centred with margins, not a transform: .reveal animates to `transform: none`, which
+     would clobber a translateX and shove the figure off-centre once the animation settles. */
+  .diagram {
+    margin: 1.8rem 0 .4rem;
+    width: min(64rem, calc(100vw - 2.5rem));
+    margin-left: calc((100% - min(64rem, 100vw - 2.5rem)) / 2);
+  }
+  .diagram img {
+    display: block; width: 100%; height: auto;
+    border: 1px solid var(--line); border-radius: 8px;
+  }
   .kicker {
     font-family: var(--mono); font-size: .72rem;
     color: var(--accent); letter-spacing: .14em; text-transform: uppercase;
@@ -316,6 +329,9 @@
 <section class="wrap">
   <p class="kicker">how it works</p>
   <h2>An append-only log per repo. Deterministic projections. A push at session start.</h2>
+  <figure class="diagram reveal d2">
+    <img src="hero.svg" alt="One append-only event file per repo. A Claude Code session writes a decision, an open-item and a handoff into it as the work happens. The session ends. A Codex session opens a day later with those events injected back as its digest, then carries on and appends to the same log.">
+  </figure>
   <div class="grid">
     <div class="cell">
       <h3><span class="p">$</span> director emit</h3>
