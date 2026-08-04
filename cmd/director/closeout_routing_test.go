@@ -1,7 +1,6 @@
 package main
 
 import (
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -98,34 +97,10 @@ func gitRun(t *testing.T, dir string, args ...string) {
 	}
 }
 
-// captureStdout runs fn with os.Stdout redirected to a pipe and returns what it
-// printed — the CLI verbs print with fmt.Print, so routing tests that assert on
-// output need the real fd swapped, not a passed writer.
+// captureStdout runs fn and returns what it printed to stdout (see
+// captureStreams in emit_test.go for why the real fd is swapped).
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
-	orig := os.Stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	os.Stdout = w
-	defer func() { os.Stdout = orig }()
-
-	done := make(chan string)
-	go func() {
-		var b strings.Builder
-		buf := make([]byte, 4096)
-		for {
-			n, err := r.Read(buf)
-			b.Write(buf[:n])
-			if err != nil {
-				break
-			}
-		}
-		done <- b.String()
-	}()
-
-	fn()
-	w.Close()
-	return <-done
+	out, _ := captureStreams(t, fn)
+	return out
 }

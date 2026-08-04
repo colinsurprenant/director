@@ -12,8 +12,9 @@ import (
 
 // runEmit is the model-facing write path: it derives the workstream, builds the
 // event from flags + body, and appends it (§5.3). It prints the new event's ULID
-// to stdout so the model can copy it into a later resolve (§15.6). This is the
-// only sanctioned way a semantic event reaches the log.
+// to stdout so the model can copy it into a later resolve (§15.6), and echoes the
+// resolved route to stderr. This is the only sanctioned way a semantic event
+// reaches the log.
 func runEmit(args []string) int {
 	fs := flag.NewFlagSet("emit", flag.ContinueOnError)
 	var typ, area, risk, to, refs string
@@ -55,7 +56,12 @@ func runEmit(args []string) int {
 		fmt.Fprintf(os.Stderr, "emit: %v\n", err)
 		return 1
 	}
+	// stdout stays the bare ULID and nothing else: callers capture it, sometimes
+	// through command substitution. The routing echo therefore goes to stderr,
+	// naming the project and workstream the event actually landed in so a session
+	// whose cwd drifted sees the misroute in its own transcript.
 	fmt.Println(ev.ID)
+	fmt.Fprintf(os.Stderr, "→ %s · %s\n", ws.RepoKey, ws.ID)
 	return 0
 }
 

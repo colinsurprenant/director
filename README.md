@@ -265,6 +265,8 @@ director emit --type decision|open-item|handoff|note --area <subsystem> \
 
 `emit` prints the **new event's ULID to stdout**: note it; that is the id used to `--refs` or `resolve` the event later. (One `--refs` pairing is load-bearing: a `note` ref naming a **handoff** concludes it — see the kind table's lifecycle column below.)
 
+`emit` also echoes a routing line to **stderr** (`→ <repo-key> · <workstream-id>`) naming the project it wrote to. If that is not the project the session expects, its cwd drifted and the event landed in the wrong log.
+
 ### resolve: close an open-item
 
 ```bash

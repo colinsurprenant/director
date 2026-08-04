@@ -84,7 +84,9 @@ when it doesn't.
 ### emit returns the new event's ULID
 
 `director emit` prints the new event's **ULID to stdout**. Note it — that is the id others (and
-you) use to `--refs` or `resolve` it later.
+you) use to `--refs` or `resolve` it later. It also echoes a routing line to **stderr**
+(`→ <repo-key> · <workstream-id>`) naming the project it wrote to; if that is not the project you
+expect, your cwd drifted and the event landed in the wrong log.
 
 ## 3. Closing open-items — resolve discipline
 
