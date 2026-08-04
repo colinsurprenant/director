@@ -5,6 +5,8 @@
 
 **Save the work, not the chat.**
 
+One shared log across **Claude Code · Codex · OpenCode**: build in one, resume or review in another.
+
 [![A Claude Code session records decisions, open items, and handoffs to an append-only log; a Codex session a day later starts with them injected and appends to the same log.](site/hero.svg)](https://colinsurprenant.github.io/director/)
 
 **[The two-minute tour: colinsurprenant.github.io/director](https://colinsurprenant.github.io/director/)**
@@ -24,7 +26,7 @@ $ claude
 
 ──────────── session ends ────────────
 
-$ claude
+$ codex
 > where were we?
 ▸ Director: acme-api-main-7c21e9d4 · 1 open-item(s), 1 need-you
 
@@ -58,11 +60,13 @@ Under the hood, deliberately boring:
 - one concurrency-safe static binary
 - a plain NDJSON log file
 
-Install is one line (macOS / Linux / WSL):
+Install is one line (macOS / Linux / WSL); it wires Claude Code:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/colinsurprenant/director/main/install.sh | sh
 ```
+
+Wire Codex instead with `… | sh -s -- --codex`, OpenCode with `--opencode`, all three with `--all` (flags combine; see [Install](#install)).
 
 > **Scope:** single-machine for now, single-human by design; multi-machine sync is on the roadmap (see [Status & scope](#status--scope)).
 >
