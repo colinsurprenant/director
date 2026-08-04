@@ -72,13 +72,17 @@ func captureStreams(t *testing.T, fn func()) (stdout, stderr string) {
 	outR, outW := mustPipe(t)
 	errR, errW := mustPipe(t)
 	os.Stdout, os.Stderr = outW, errW
-	defer func() { os.Stdout, os.Stderr = origOut, origErr }()
-
 	outDone, errDone := drainPipe(outR), drainPipe(errR)
+	// Deferred so the fds are restored, the writers closed, and the drain
+	// goroutines collected even when fn panics mid-capture.
+	defer func() {
+		os.Stdout, os.Stderr = origOut, origErr
+		outW.Close()
+		errW.Close()
+		stdout, stderr = <-outDone, <-errDone
+	}()
 	fn()
-	outW.Close()
-	errW.Close()
-	return <-outDone, <-errDone
+	return
 }
 
 func mustPipe(t *testing.T) (*os.File, *os.File) {
@@ -104,6 +108,7 @@ func drainPipe(r *os.File) <-chan string {
 				break
 			}
 		}
+		r.Close()
 		done <- b.String()
 	}()
 	return done
