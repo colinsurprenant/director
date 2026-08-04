@@ -66,19 +66,6 @@
     <polygon points="66,146 78,146 72,158" fill="#e8e6df" fill-opacity=".34"/>
   </g>
 
-  <!-- =================== time axis: the whole picture runs downward =================== -->
-  <g>
-    <text class="mono faint" x="28" y="180" font-size="9" letter-spacing="1.4" text-anchor="middle">TIME</text>
-    <line x1="28" y1="190" x2="28" y2="594" stroke="#e8e6df" stroke-opacity=".22" stroke-width="1"/>
-    <polygon points="23,594 33,594 28,606" fill="#e8e6df" fill-opacity=".28"/>
-  </g>
-
-  <!-- =================== session spans =================== -->
-  <g>
-    <path d="M54 176 H46 V282 H54" fill="none" stroke="#e8e6df" stroke-opacity=".26" stroke-width="1.6"/>
-    <path d="M54 306 H46 V590 H54" fill="none" stroke="#e8e6df" stroke-opacity=".42" stroke-width="1.6"/>
-  </g>
-
   <!-- ======= boundary: drawn first. The gap spans the spine AND every lane,
        so the boundary is what breaks, never the log ======= -->
   <g stroke="#e8e6df" stroke-width="1">
@@ -90,8 +77,6 @@
 
   <!-- ======= the log: one file, one spine ======= -->
   <g>
-    <path d="M56 172h9M56 194h9M56 216h9M56 238h9M56 260h9M56 282h9M56 304h9M56 326h9M56 348h9M56 370h9M56 392h9M56 414h9M56 436h9M56 458h9M56 480h9M56 502h9M56 524h9M56 546h9M56 568h9M56 590h9M56 612h9"
-          stroke="#e8e6df" stroke-opacity=".15" stroke-width="1"/>
     <line x1="72" y1="158" x2="72" y2="630" stroke="#e8e6df" stroke-opacity=".5" stroke-width="3.5" mask="url(#tail)"/>
   </g>
 
