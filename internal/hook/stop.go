@@ -111,6 +111,26 @@ func handleStop(in Input, out io.Writer, hub string) error {
 		return nil
 	}
 
+	// The guard parses a CLAUDE CODE transcript. Copilot's Stop payload does carry
+	// a transcript_path, but it names Copilot's own
+	// ~/.copilot/session-state/<uuid>/events.jsonl, a different format entirely
+	// (verified live on copilot 1.0.80). Skip the guard there rather than let it
+	// read a file it cannot understand: the verdict is a foregone allow, so the
+	// read buys nothing, and it is not free — that file grows all session and this
+	// runs at EVERY turn end. Enforcing the skip also retires the standing risk
+	// that lastAssistantTurn's deliberately loose projection (type +
+	// message.content) one day matches a Copilot record shape and blocks a turn
+	// on a transcript it was never validated against. Inertness by enforcement,
+	// not by assumption.
+	//
+	// Everything else in this handler still runs on Copilot, per-turn fleet
+	// archiving included.
+	if agentFlavor(in) == "copilot" {
+		markFleetDone(in, EventStop, hub)
+		logSuccess(hub, EventStop, in.SessionID, "copilot flavor — emit-guard skipped (it needs a Claude Code transcript)")
+		return nil
+	}
+
 	block, reason := emitGuardVerdict(in.TranscriptPath)
 	if !block {
 		// The stop is allowed → the turn is over → archive the row. SessionEnd
@@ -163,12 +183,9 @@ func markFleetDone(in Input, event, hub string) {
 // A guard that can't read confidently must not block (§13 t5 spirit: never trap
 // a session on our own uncertainty).
 //
-// That fail-open is also what makes the guard INERT (not wrong) on Copilot. Its
-// Stop payload does carry a transcript_path, but it points at Copilot's own
-// ~/.copilot/session-state/<uuid>/events.jsonl, which is NOT the CC transcript
-// format (verified live on copilot 1.0.80): lastAssistantTurn finds no assistant
-// text there and the stop is allowed. Deliberate for v1 — the rest of the Stop
-// handler (per-turn fleet-row archiving) still does its work.
+// The Copilot flavor never reaches here at all: handleStop skips the guard
+// before this point rather than relying on the parser to conclude nothing from
+// Copilot's events.jsonl (see the comment on that gate).
 func emitGuardVerdict(transcriptPath string) (block bool, reason string) {
 	if strings.TrimSpace(transcriptPath) == "" {
 		return false, ""

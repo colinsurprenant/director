@@ -572,3 +572,259 @@ func TestCopilotHooksFilePresentIgnoresUnparseable(t *testing.T) {
 		t.Error("an absent hooks file must not read as Director-managed")
 	}
 }
+
+// --- ownership vs liveness -------------------------------------------------
+
+// mixedCopilotFile installs, then adds one command of the USER's into our file:
+// the state where Director may no longer rewrite the file, but its own commands
+// in it are still live. Returns the hooks path.
+func mixedCopilotFile(t *testing.T, hooksPath string) string {
+	t.Helper()
+	if err := InstallCopilot(hooksPath); err != nil {
+		t.Fatalf("InstallCopilot: %v", err)
+	}
+	file := loadCopilotFile(t, hooksPath)
+	file.Hooks["PreToolUse"] = []copilotHookEntry{{Type: "command", Bash: "my-own-guard.sh", TimeoutSec: 5}}
+	data, err := json.MarshalIndent(file, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hooksPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return hooksPath
+}
+
+// TestCopilotMixedFileIsLiveButNotOwned pins the split the sparing gates depend
+// on: a file the user added their own command to is NOT ours to rewrite or
+// delete (both verbs refuse), yet our commands in it still fire, so every
+// presence probe must keep reading it as a live install.
+func TestCopilotMixedFileIsLiveButNotOwned(t *testing.T) {
+	hooksPath, _, _ := setupCopilot(t, "")
+	mixedCopilotFile(t, hooksPath)
+
+	if !CopilotHooksFilePresent(hooksPath) {
+		t.Error("a file still carrying Director commands must read as PRESENT (liveness)")
+	}
+	if !copilotInstallPresent() {
+		t.Error("the sparing probe must read a mixed file as a live Copilot install")
+	}
+	if err := InstallCopilot(hooksPath); err == nil {
+		t.Error("install must refuse a file it does not fully own")
+	}
+	if err := UninstallCopilot(hooksPath); err == nil {
+		t.Error("uninstall must refuse a file it does not fully own")
+	}
+	if got := CopilotForeignEvents(hooksPath); len(got) != 1 || got[0] != "PreToolUse" {
+		t.Errorf("CopilotForeignEvents = %v, want [PreToolUse]", got)
+	}
+}
+
+// TestUninstallCodexSparesSharedWhenCopilotFileIsMixed is the consequence that
+// matters: a Codex uninstall must not reclaim the shims and skills a mixed
+// Copilot file's live commands still need. Ownership says "not ours"; liveness
+// says "still firing", and the sparing gate must ask liveness.
+func TestUninstallCodexSparesSharedWhenCopilotFileIsMixed(t *testing.T) {
+	hooksPath, hooksDir, skillsDir := setupCopilot(t, "")
+	mixedCopilotFile(t, hooksPath)
+	codexHooks := os.Getenv(codexHooksPathEnv)
+	if err := InstallCodex(codexHooks); err != nil {
+		t.Fatalf("InstallCodex: %v", err)
+	}
+
+	if err := UninstallCodex(codexHooks); err != nil {
+		t.Fatalf("UninstallCodex: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(hooksDir, "sessionstart.sh")); err != nil {
+		t.Errorf("codex uninstall reclaimed shims a live (mixed) Copilot file still invokes: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(skillsDir, "director-complete", "SKILL.md")); err != nil {
+		t.Errorf("codex uninstall reclaimed skills a live (mixed) Copilot install still lists: %v", err)
+	}
+}
+
+// TestUninstallSparesShimsWhenCopilotFileIsMixed: same rule on the CC side.
+func TestUninstallSparesShimsWhenCopilotFileIsMixed(t *testing.T) {
+	hooksPath, hooksDir, _ := setupCopilot(t, "")
+	mixedCopilotFile(t, hooksPath)
+	settings := os.Getenv(settingsPathEnv)
+	if err := Install(settings); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	if err := Uninstall(settings); err != nil {
+		t.Fatalf("Uninstall: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(hooksDir, "sessionstart.sh")); err != nil {
+		t.Errorf("CC uninstall reclaimed shims a live (mixed) Copilot file still invokes: %v", err)
+	}
+}
+
+// TestCopilotRejectsEntryWithForeignField: the recognizer decodes entries as raw
+// key/value maps precisely so a field it does not write is VISIBLE. A
+// `powershell` sibling added inside one of our entries (Copilot's own Windows
+// form) is the user's work: install must not overwrite the file, uninstall must
+// not delete it.
+func TestCopilotRejectsEntryWithForeignField(t *testing.T) {
+	hooksPath, _, _ := setupCopilot(t, "")
+	if err := InstallCopilot(hooksPath); err != nil {
+		t.Fatalf("InstallCopilot: %v", err)
+	}
+	// Inject the field the typed struct would silently drop.
+	var raw map[string]any
+	b, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatal(err)
+	}
+	hooks := raw["hooks"].(map[string]any)
+	entry := hooks["Stop"].([]any)[0].(map[string]any)
+	entry["powershell"] = "my-hook.ps1"
+	edited, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hooksPath, edited, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := InstallCopilot(hooksPath); err == nil {
+		t.Error("install must refuse an entry carrying a field Director never writes")
+	}
+	if err := UninstallCopilot(hooksPath); err == nil {
+		t.Error("uninstall must refuse an entry carrying a field Director never writes")
+	}
+	after, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatalf("the user's edited file was removed: %v", err)
+	}
+	if !strings.Contains(string(after), "my-hook.ps1") {
+		t.Errorf("the user's powershell command did not survive:\n%s", after)
+	}
+	// Liveness still holds: the other three entries are untouched and firing.
+	if !CopilotHooksFilePresent(hooksPath) {
+		t.Error("the file's remaining Director commands must still read as live")
+	}
+}
+
+// TestCopilotTagNeedsWordBoundary: the agent tag is matched as a whole shell
+// word. A longer assignment that merely starts with ours (another agent's
+// DIRECTOR_HOOK_AGENT=copilotng) is NOT our tag — the hook process compares the
+// env value exactly, so a value we would never have written must not make a
+// foreign file look Director-owned.
+func TestCopilotTagNeedsWordBoundary(t *testing.T) {
+	near := `{"version":1,"hooks":{"Stop":[{"type":"command","bash":"DIRECTOR_HOOK_AGENT=copilotng /elsewhere/hook.sh","timeoutSec":5}]}}`
+	hooksPath, _, _ := setupCopilot(t, near)
+
+	if CopilotHooksFilePresent(hooksPath) {
+		t.Error("a near-miss tag (DIRECTOR_HOOK_AGENT=copilotng) must not read as Director-owned")
+	}
+	if err := InstallCopilot(hooksPath); err == nil {
+		t.Error("install must refuse a file whose only claim is a near-miss tag")
+	}
+	if err := UninstallCopilot(hooksPath); err == nil {
+		t.Error("uninstall must refuse a file whose only claim is a near-miss tag")
+	}
+	b, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != near {
+		t.Errorf("the near-miss file was modified:\n%s", b)
+	}
+	// The exact tag, as its own word, IS ours — including behind another
+	// assignment, which is still valid shell.
+	for _, bash := range []string{
+		"DIRECTOR_HOOK_AGENT=copilot /elsewhere/hook.sh",
+		"FOO=1 DIRECTOR_HOOK_AGENT=copilot /elsewhere/hook.sh",
+	} {
+		if !copilotTaggedCommand(bash) {
+			t.Errorf("copilotTaggedCommand(%q) = false, want true", bash)
+		}
+	}
+	for _, bash := range []string{
+		"DIRECTOR_HOOK_AGENT=copilotng /x.sh",
+		"XDIRECTOR_HOOK_AGENT=copilot /x.sh",
+		"DIRECTOR_HOOK_AGENT=claude /x.sh",
+	} {
+		if copilotTaggedCommand(bash) {
+			t.Errorf("copilotTaggedCommand(%q) = true, want false", bash)
+		}
+	}
+}
+
+// TestCopilotMissingAndUntaggedEvents pins the two doctor predicates against
+// hand-damaged files: a trimmed event reads as missing, and a command stripped
+// of its tag reads as untagged (still owned, via its shim path — which is
+// exactly the state where hooks fire but injection silently dies).
+func TestCopilotMissingAndUntaggedEvents(t *testing.T) {
+	hooksPath, _, _ := setupCopilot(t, "")
+	if err := InstallCopilot(hooksPath); err != nil {
+		t.Fatalf("InstallCopilot: %v", err)
+	}
+	if got := CopilotMissingEvents(hooksPath); len(got) != 0 {
+		t.Errorf("fresh install: CopilotMissingEvents = %v, want none", got)
+	}
+	if got := CopilotUntaggedEvents(hooksPath); len(got) != 0 {
+		t.Errorf("fresh install: CopilotUntaggedEvents = %v, want none", got)
+	}
+
+	// Trim one event, and strip the tag from another (leaving the shim path, so
+	// the command is still recognizably ours).
+	file := loadCopilotFile(t, hooksPath)
+	delete(file.Hooks, "SessionEnd")
+	stop := file.Hooks["Stop"][0]
+	stop.Bash = strings.TrimPrefix(stop.Bash, copilotAgentMarker+" ")
+	file.Hooks["Stop"] = []copilotHookEntry{stop}
+	data, err := json.MarshalIndent(file, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hooksPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := CopilotMissingEvents(hooksPath); len(got) != 1 || got[0] != "SessionEnd" {
+		t.Errorf("CopilotMissingEvents = %v, want [SessionEnd]", got)
+	}
+	if got := CopilotUntaggedEvents(hooksPath); len(got) != 1 || got[0] != "Stop" {
+		t.Errorf("CopilotUntaggedEvents = %v, want [Stop]", got)
+	}
+	// Untagged is still OWNED (shim path), so both verbs still work on it.
+	if !CopilotHooksFilePresent(hooksPath) {
+		t.Error("an untagged command at our shim path is still Director's")
+	}
+	if err := InstallCopilot(hooksPath); err != nil {
+		t.Errorf("install must heal an untagged file, not refuse it: %v", err)
+	}
+	if got := CopilotUntaggedEvents(hooksPath); len(got) != 0 {
+		t.Errorf("re-install did not re-tag the file: %v", got)
+	}
+}
+
+// TestCopilotRefusalNamesTheRealCause: the two refusals need different remedies,
+// so they must not share one message. A file with a foreign command alongside
+// ours points at the per-command fix (Copilot loads every *.json in the
+// directory); a file with nothing of ours is simply someone else's.
+func TestCopilotRefusalNamesTheRealCause(t *testing.T) {
+	hooksPath, _, _ := setupCopilot(t, "")
+	mixedCopilotFile(t, hooksPath)
+	err := InstallCopilot(hooksPath)
+	if err == nil {
+		t.Fatal("install over a mixed file should refuse")
+	}
+	if !strings.Contains(err.Error(), "PreToolUse") || !strings.Contains(err.Error(), "another *.json") {
+		t.Errorf("mixed-file refusal should name the foreign event and the per-command remedy, got: %v", err)
+	}
+
+	foreignPath, _, _ := setupCopilot(t, copilotForeignFile)
+	err = InstallCopilot(foreignPath)
+	if err == nil {
+		t.Fatal("install over a foreign file should refuse")
+	}
+	if !strings.Contains(err.Error(), copilotAgentMarker) || !strings.Contains(err.Error(), copilotHooksPathEnv) {
+		t.Errorf("foreign-file refusal should name the tag and the env override, got: %v", err)
+	}
+}

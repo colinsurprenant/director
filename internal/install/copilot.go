@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -68,10 +69,17 @@ var copilotEntries = []managedEntry{
 	{event: "SessionEnd", matcher: "", shim: "sessionend.sh"},
 }
 
-// copilotHooksFile is the on-disk shape, generated through encoding/json and
-// never string templating, so no path content can corrupt the file. The events
-// map keys are Copilot's PascalCase event names; Go sorts map keys when
-// encoding, which is what makes a re-install byte-identical.
+// copilotWrittenFields is exactly what a Director-written entry contains. It is
+// the ownership bar as well as the write shape: an entry carrying anything else
+// is a user's edit of our entry (Copilot supports a `powershell` sibling, and
+// the schema can grow), and the whole point of the recognizer is to notice that
+// before an install overwrites the file or an uninstall deletes it.
+var copilotWrittenFields = map[string]bool{"type": true, "bash": true, "timeoutSec": true}
+
+// copilotHooksFile is the on-disk shape used for WRITING, generated through
+// encoding/json and never string templating, so no path content can corrupt the
+// file. The events map keys are Copilot's PascalCase event names; Go sorts map
+// keys when encoding, which is what makes a re-install byte-identical.
 type copilotHooksFile struct {
 	Version int                           `json:"version"`
 	Hooks   map[string][]copilotHookEntry `json:"hooks"`
@@ -85,6 +93,28 @@ type copilotHookEntry struct {
 	Type       string `json:"type"`
 	Bash       string `json:"bash"`
 	TimeoutSec int    `json:"timeoutSec"`
+}
+
+// copilotHooksProbe is the READING shape, and it deliberately does NOT reuse
+// copilotHookEntry: decoding into a typed struct silently discards every field
+// it does not model, and an ownership test that cannot SEE a field cannot notice
+// the user's `"powershell": "my-hook.ps1"` added inside one of our entries —
+// after which a re-install would overwrite their work and an uninstall would
+// delete it. Raw key/value maps keep every field visible to the key-set check.
+type copilotHooksProbe struct {
+	Hooks map[string][]map[string]json.RawMessage `json:"hooks"`
+}
+
+// copilotEventState is what one event key in a hooks file holds, from the
+// recognizer's point of view. The three facts are separate on purpose: OWNERSHIP
+// (may Director rewrite or delete this file) and LIVENESS (do Director commands
+// in it still need the shared shims) are different questions, and conflating
+// them is how a file with one user-added command gets its shims reclaimed out
+// from under Director's still-live entries.
+type copilotEventState struct {
+	owned   bool // holds a Director command
+	tagged  bool // every Director command here carries the agent tag
+	foreign bool // holds a command Director does not own
 }
 
 // DefaultCopilotHooksPath resolves the managed hooks file,
@@ -120,7 +150,7 @@ func InstallCopilot(hooksPath string) error {
 	switch data, err := os.ReadFile(hooksPath); {
 	case err == nil:
 		if !copilotManaged(data) {
-			return fmt.Errorf("install: refusing to overwrite %s: it exists and is not a Director-managed Copilot hooks file (every command in one carries the %s tag); move it aside or set %s", hooksPath, copilotAgentMarker, copilotHooksPathEnv)
+			return fmt.Errorf("install: refusing to overwrite %s: %s; move it aside or set %s", hooksPath, copilotRefusalReason(data), copilotHooksPathEnv)
 		}
 	case !os.IsNotExist(err):
 		return fmt.Errorf("install: inspect copilot hooks path %s: %w", hooksPath, err)
@@ -180,7 +210,7 @@ func UninstallCopilot(hooksPath string) error {
 		// removeManagedEntries): the CLI wraps them with its verb.
 		return fmt.Errorf("read copilot hooks file %s: %w", hooksPath, err)
 	case !copilotManaged(data):
-		return fmt.Errorf("refusing to remove %s: it is not a Director-managed Copilot hooks file (every command in one carries the %s tag)", hooksPath, copilotAgentMarker)
+		return fmt.Errorf("refusing to remove %s: %s", hooksPath, copilotRefusalReason(data))
 	}
 	if err := os.Remove(hooksPath); err != nil {
 		return fmt.Errorf("remove copilot hooks file %s: %w", hooksPath, err)
@@ -202,9 +232,12 @@ func UninstallCopilot(hooksPath string) error {
 	return nil
 }
 
-// copilotInstallPresent reports whether the default Copilot hooks file holds a
-// Director-managed file — the signal the CC/Codex/OpenCode uninstalls use to
-// spare the shared shims, skills, and symlink. Same fail-open stance and KNOWN
+// copilotInstallPresent reports whether the default Copilot hooks file still
+// holds a live Director command — the signal the CC/Codex/OpenCode uninstalls
+// use to spare the shared shims, skills, and symlink. It asks LIVENESS, not
+// ownership: a file the user has added their own command to is no longer ours to
+// rewrite, but our entries in it still fire, and reclaiming the shims they
+// invoke would kill a working install. Same fail-open stance and KNOWN
 // LIMIT as codexInstallPresent: an unreadable or missing file reads as "no
 // Copilot install" (fail-safe in the other direction would make shim reclaim
 // permanently leaky), and only the default path — or DIRECTOR_COPILOT_HOOKS_PATH
@@ -220,35 +253,163 @@ func copilotInstallPresent() bool {
 	return CopilotHooksFilePresent(hooksPath)
 }
 
-// CopilotHooksFilePresent reports whether path holds a Director-managed Copilot
-// hooks file — the shared recognizer behind the install/uninstall ownership
-// preflights, copilotInstallPresent, and `director doctor`. Read errors, parse
-// errors, and foreign shapes all read as "not ours" (see copilotInstallPresent
-// for why that direction).
+// CopilotHooksFilePresent reports whether path holds ANY Director command — the
+// LIVENESS question, and the one the shared-artifact sparing gates
+// (copilotInstallPresent) and `director doctor` ask. It is deliberately weaker
+// than the ownership rule the install/uninstall preflights apply: a file a user
+// has added their own command to is no longer ours to rewrite, but Director's
+// entries in it still FIRE, and reclaiming the shims they invoke would break a
+// live install. Read errors, parse errors, and foreign shapes read as "not
+// present" (see copilotInstallPresent for why that direction).
 func CopilotHooksFilePresent(path string) bool {
-	data, err := os.ReadFile(path)
-	if err != nil {
+	states, ok := copilotScanFile(path)
+	if !ok {
 		return false
 	}
-	return copilotManaged(data)
+	for _, s := range states {
+		if s.owned {
+			return true
+		}
+	}
+	return false
 }
 
-// copilotManaged reports whether the file bytes are a Director-owned Copilot
-// hooks file: valid JSON of the expected shape, carrying at least one command,
-// with EVERY command ours. Ownership of one command mirrors directorOwned's two
-// proofs — the DIRECTOR_HOOK_AGENT=copilot tag we write into every command
-// string, OR the command naming one of our shim paths under the current hooks
-// dir (which survives a hand-edited prefix, and is why the tag alone isn't the
-// only test).
+// CopilotMissingEvents reports which of Director's Copilot events carry NO
+// Director command in the hooks file at path, deduplicated and in copilotEntries
+// order. It is the Copilot analog of MissingManagedEvents and answers the
+// question presence cannot: a file wired by an older binary, or hand-trimmed,
+// still reads present while the missing hook silently never fires. Read/parse
+// failures report nothing (fail-open, as their CC counterparts do).
+func CopilotMissingEvents(path string) []string {
+	states, ok := copilotScanFile(path)
+	if !ok {
+		return nil
+	}
+	var missing []string
+	for _, e := range copilotEntries {
+		if states[e.event].owned || containsName(missing, e.event) {
+			continue
+		}
+		missing = append(missing, e.event)
+	}
+	return missing
+}
+
+// CopilotUntaggedEvents reports which events hold a Director command that has
+// LOST its DIRECTOR_HOOK_AGENT=copilot prefix (hand-edited, or written by a
+// binary that predates the tag), deduplicated and in copilotEntries order.
 //
-// The two quantifiers are both load-bearing. "At least one" keeps an unrelated
-// JSON file with no hooks at all from passing vacuously; "every" keeps a file
-// where the user added their own command from being deleted wholesale by an
-// uninstall — Director owns this file completely or not at all.
+// Unlike the Claude Code untagged case — cosmetic, since CC only needs the
+// command path — this state silently breaks Copilot: the hook still fires, but
+// agentFlavor falls back to "claude", the adapter emits CC's hookSpecificOutput
+// wrapper, and Copilot ignores it. Injection dies with no error anywhere, which
+// is exactly the failure doctor exists to make loud.
+func CopilotUntaggedEvents(path string) []string {
+	states, ok := copilotScanFile(path)
+	if !ok {
+		return nil
+	}
+	var untagged []string
+	for _, e := range copilotEntries {
+		s := states[e.event]
+		if !s.owned || s.tagged || containsName(untagged, e.event) {
+			continue
+		}
+		untagged = append(untagged, e.event)
+	}
+	return untagged
+}
+
+// CopilotForeignEvents reports which events hold a command Director does not
+// own, in sorted order (any event key can carry one, not just ours). Their
+// presence is not a coordination failure — everything of ours still fires — but
+// it is why `install --copilot` and `uninstall --copilot` refuse the file, so
+// doctor names it rather than leaving the refusal unexplained.
+func CopilotForeignEvents(path string) []string {
+	states, ok := copilotScanFile(path)
+	if !ok {
+		return nil
+	}
+	var foreign []string
+	for event, s := range states {
+		if s.foreign {
+			foreign = append(foreign, event)
+		}
+	}
+	sort.Strings(foreign) // map iteration order is not a user-facing order
+	return foreign
+}
+
+// copilotManaged reports whether the file bytes are a Director-OWNED Copilot
+// hooks file: valid JSON of the expected shape, carrying at least one command,
+// with EVERY command ours. This is the strict rule behind the install and
+// uninstall preflights, the two operations that write or delete the file whole.
+//
+// Both quantifiers are load-bearing. "At least one" keeps an unrelated JSON file
+// with no commands from passing vacuously; "every" keeps a file the user added
+// their own command to from being overwritten or deleted — Director owns this
+// file completely or not at all. Liveness asks a weaker question on purpose (see
+// CopilotHooksFilePresent).
 func copilotManaged(data []byte) bool {
-	var file copilotHooksFile
-	if err := json.Unmarshal(data, &file); err != nil {
+	states, ok := copilotScan(data)
+	if !ok {
 		return false
+	}
+	owned := false
+	for _, s := range states {
+		if s.foreign {
+			return false
+		}
+		owned = owned || s.owned
+	}
+	return owned
+}
+
+// copilotRefusalReason explains, in the user's terms, why a file is not one
+// Director may rewrite or delete. The two cases need different remedies and the
+// scan already knows which applies: a file holding Director commands PLUS
+// someone else's has a per-command fix (Copilot loads every *.json in the
+// directory, so their commands can simply live in a neighbouring file), while a
+// file with nothing of ours is just somebody else's director.json.
+func copilotRefusalReason(data []byte) string {
+	states, ok := copilotScan(data)
+	if !ok {
+		return "it exists and is not readable as a Copilot hooks file (Director rewrites this file whole, so it will not touch one it cannot parse)"
+	}
+	var owned, foreign []string
+	for event, s := range states {
+		if s.owned {
+			owned = append(owned, event)
+		}
+		if s.foreign {
+			foreign = append(foreign, event)
+		}
+	}
+	if len(owned) > 0 {
+		sort.Strings(foreign)
+		return fmt.Sprintf("it carries commands Director does not own (under %s) and this verb rewrites the file whole; move those to another *.json in the same directory, which Copilot loads too", strings.Join(foreign, ", "))
+	}
+	return fmt.Sprintf("it exists and is not a Director-managed Copilot hooks file (every command in one carries the %s tag)", copilotAgentMarker)
+}
+
+// copilotScanFile is copilotScan against a file; an unreadable file reads as a
+// failed scan, the same direction as a parse failure.
+func copilotScanFile(path string) (map[string]copilotEventState, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+	return copilotScan(data)
+}
+
+// copilotScan classifies every event key in a hooks file. It is the ONE walk
+// behind every Copilot predicate, so ownership, liveness, completeness, and the
+// tag check can never disagree about what a given entry is. ok is false when the
+// bytes are not JSON of the expected shape.
+func copilotScan(data []byte) (map[string]copilotEventState, bool) {
+	var probe copilotHooksProbe
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return nil, false
 	}
 	// An unresolvable hooks dir degrades to the tag-only reading rather than
 	// matching a bare relative name, exactly as directorCommands does.
@@ -256,26 +417,79 @@ func copilotManaged(data []byte) bool {
 	if hooksDir, err := DefaultHooksDir(); err == nil {
 		commands = copilotShimCommands(hooksDir)
 	}
-	seen := 0
-	for _, entries := range file.Hooks {
+	states := make(map[string]copilotEventState, len(probe.Hooks))
+	for event, entries := range probe.Hooks {
+		s := copilotEventState{tagged: true} // vacuous until a Director command says otherwise
 		for _, e := range entries {
-			if !copilotOwnedCommand(e.Bash, commands) {
-				return false
+			if !copilotOwnedEntry(e, commands) {
+				s.foreign = true
+				continue
 			}
-			seen++
+			s.owned = true
+			if !copilotTaggedCommand(copilotStringField(e, "bash")) {
+				s.tagged = false
+			}
+		}
+		states[event] = s
+	}
+	return states, true
+}
+
+// copilotOwnedEntry reports whether one decoded entry is Director's. Three
+// proofs, all required: it carries NO field beyond the ones Director writes (see
+// copilotWrittenFields — a `powershell` sibling or any future key means the user
+// edited our entry, and what we do not fully understand we must not overwrite),
+// it is a command hook, and its command is ours.
+func copilotOwnedEntry(e map[string]json.RawMessage, commands []string) bool {
+	for k := range e {
+		if !copilotWrittenFields[k] {
+			return false
 		}
 	}
-	return seen > 0
+	if copilotStringField(e, "type") != "command" {
+		return false
+	}
+	return copilotOwnedCommand(copilotStringField(e, "bash"), commands)
+}
+
+// copilotStringField decodes one entry field as a string; anything absent or
+// wrong-typed reads as "" (a read-only coercion, matching stringAt's leniency).
+func copilotStringField(e map[string]json.RawMessage, key string) string {
+	raw, ok := e[key]
+	if !ok {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return ""
+	}
+	return s
 }
 
 // copilotOwnedCommand reports whether one command string is Director's: it
-// carries our agent tag, or it invokes one of our shim paths.
+// carries our agent tag, or it invokes one of our shim paths. Two proofs, the
+// same pair (and the same reasoning) as directorOwned's tag-or-path test.
 func copilotOwnedCommand(bash string, commands []string) bool {
-	if strings.Contains(bash, copilotAgentMarker) {
+	if copilotTaggedCommand(bash) {
 		return true
 	}
 	for _, c := range commands {
 		if strings.Contains(bash, c) {
+			return true
+		}
+	}
+	return false
+}
+
+// copilotTaggedCommand reports whether a command string carries Director's agent
+// tag as its own shell word. Fields rather than a substring scan: strings.Contains
+// would also match a longer assignment that merely STARTS with our tag
+// (DIRECTOR_HOOK_AGENT=copilotng), and neither ownership nor the flavor signal
+// may hinge on a prefix collision — the hook process compares the env value
+// exactly, so a value we would not have written must not read as ours.
+func copilotTaggedCommand(bash string) bool {
+	for _, f := range strings.Fields(bash) {
+		if f == copilotAgentMarker {
 			return true
 		}
 	}

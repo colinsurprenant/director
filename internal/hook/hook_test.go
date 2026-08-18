@@ -1871,3 +1871,48 @@ func TestSessionStartCopilotDialect(t *testing.T) {
 		t.Errorf("without DIRECTOR_HOOK_AGENT the CC command names must be kept:\n%s", out.String())
 	}
 }
+
+// TestStopCopilotSkipsEmitGuard: the guard is inert on Copilot by ENFORCEMENT,
+// not because the parser happens to conclude nothing. The transcript here is the
+// exact fixture that blocks on Claude Code, so if the gate were removed the test
+// would see a block; under the copilot flavor the stop must be allowed (no
+// output) and the fleet row archived like any other allowed turn end.
+func TestStopCopilotSkipsEmitGuard(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+	transcript := writeTranscript(t, assistantLine("I've decided to use NDJSON for the log. The plan is to ship it next."))
+
+	// Sanity: without the flavor this very payload blocks.
+	var ccOut bytes.Buffer
+	if code := Dispatch(EventStop, strings.NewReader(stopInput(repo, transcript, false)), &ccOut, hub); code != 0 {
+		t.Fatalf("cc exit code = %d, want 0", code)
+	}
+	if !strings.Contains(ccOut.String(), `"decision":"block"`) {
+		t.Fatalf("fixture no longer blocks on Claude Code, so the copilot assertion below would be vacuous: %q", ccOut.String())
+	}
+
+	t.Setenv(hookAgentEnv, "copilot")
+	// Register a live row under the SAME session id stopInput carries, so the
+	// archive half of the gate is observable on the row this Stop targets.
+	if code := Dispatch(EventSessionStart, strings.NewReader(
+		`{"session_id":"s-real","cwd":`+jsonString(repo)+`,"hook_event_name":"SessionStart","source":"new"}`), &bytes.Buffer{}, hub); code != 0 {
+		t.Fatalf("session start exit = %d", code)
+	}
+	if !fleetRowExists(t, hub, ws.ID) {
+		t.Fatal("fixture: expected a live fleet row before the stop")
+	}
+	var out bytes.Buffer
+	if code := Dispatch(EventStop, strings.NewReader(stopInput(repo, transcript, false)), &out, hub); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("copilot stop must allow (no output); the emit-guard should never read its transcript, got %q", out.String())
+	}
+	if !strings.Contains(readHealth(t, hub), "emit-guard skipped") {
+		t.Errorf("the skip should be visible in health/ so the inertness is observable:\n%s", readHealth(t, hub))
+	}
+	if fleetRowExists(t, hub, ws.ID) {
+		t.Errorf("an allowed copilot stop must still archive the fleet row")
+	}
+}

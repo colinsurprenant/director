@@ -1009,3 +1009,123 @@ func pinSettingsEnv(t *testing.T, path, key, val string) {
 		t.Fatal(err)
 	}
 }
+
+// copilotFixture installs Copilot into temp dirs on top of a healthy CC fixture
+// and returns the inputs plus the managed hooks path, so the copilot-specific
+// states below start from a genuinely installed file.
+func copilotFixture(t *testing.T) (doctorInputs, string) {
+	t.Helper()
+	in := installedFixture(t)
+	t.Setenv("DIRECTOR_CODEX_SKILLS_DIR", filepath.Join(t.TempDir(), "skills"))
+	copilotHooks := filepath.Join(t.TempDir(), "copilot", "director.json")
+	if err := install.InstallCopilot(copilotHooks); err != nil {
+		t.Fatal(err)
+	}
+	in.copilotHooks = copilotHooks
+	return in, copilotHooks
+}
+
+// rewriteCopilotHooks applies fn to the decoded hooks file and writes it back —
+// the hand-damage the doctor states below model.
+func rewriteCopilotHooks(t *testing.T, path string, fn func(hooks map[string]any)) {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatal(err)
+	}
+	hooks, ok := raw["hooks"].(map[string]any)
+	if !ok {
+		t.Fatalf("hooks is not an object in %s", path)
+	}
+	fn(hooks)
+	out, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, out, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestDoctorCopilotUntaggedFails is the silent-injection state: the hooks still
+// fire, but without DIRECTOR_HOOK_AGENT=copilot the adapter answers in Claude
+// Code's envelope, which Copilot ignores — ground truth stops arriving with no
+// error anywhere. Doctor must fail, not warn.
+func TestDoctorCopilotUntaggedFails(t *testing.T) {
+	in, hooksPath := copilotFixture(t)
+	if lv := levelOf(t, diagnose(in), "copilot hooks"); lv != levelOK {
+		t.Fatalf("fixture: fresh copilot install should be OK, got %v", lv)
+	}
+
+	rewriteCopilotHooks(t, hooksPath, func(hooks map[string]any) {
+		entry := hooks["SessionStart"].([]any)[0].(map[string]any)
+		bash, _ := entry["bash"].(string)
+		entry["bash"] = strings.TrimPrefix(bash, "DIRECTOR_HOOK_AGENT=copilot ")
+	})
+
+	rep := diagnose(in)
+	if lv := levelOf(t, rep, "copilot hooks"); lv != levelFail {
+		t.Errorf("untagged copilot command: got %v, want fail (%+v)", lv, rep.checks)
+	}
+	if rep.healthy {
+		t.Error("a copilot install whose injection silently dies must not read healthy")
+	}
+	if !strings.Contains(detailOf(t, rep, "copilot hooks"), "SessionStart") {
+		t.Errorf("the failure should name the affected event: %s", detailOf(t, rep, "copilot hooks"))
+	}
+}
+
+// TestDoctorCopilotMissingEventFails: a file wired by an older binary reads
+// present, but the event it never wrote silently never fires.
+func TestDoctorCopilotMissingEventFails(t *testing.T) {
+	in, hooksPath := copilotFixture(t)
+	rewriteCopilotHooks(t, hooksPath, func(hooks map[string]any) {
+		delete(hooks, "SessionEnd")
+	})
+
+	rep := diagnose(in)
+	if lv := levelOf(t, rep, "copilot hooks"); lv != levelFail {
+		t.Errorf("missing copilot event: got %v, want fail (%+v)", lv, rep.checks)
+	}
+	if d := detailOf(t, rep, "copilot hooks"); !strings.Contains(d, "SessionEnd") || !strings.Contains(d, "install --copilot") {
+		t.Errorf("the failure should name the missing event and the remedy: %s", d)
+	}
+}
+
+// TestDoctorCopilotForeignCommandWarns: someone else's command in our file
+// breaks nothing that fires, but it IS why install/uninstall refuse — a warning
+// that explains the refusal, not a failure.
+func TestDoctorCopilotForeignCommandWarns(t *testing.T) {
+	in, hooksPath := copilotFixture(t)
+	rewriteCopilotHooks(t, hooksPath, func(hooks map[string]any) {
+		hooks["PreToolUse"] = []any{map[string]any{"type": "command", "bash": "my-own-guard.sh", "timeoutSec": 5}}
+	})
+
+	rep := diagnose(in)
+	if lv := levelOf(t, rep, "copilot hooks"); lv != levelWarn {
+		t.Errorf("foreign command in our file: got %v, want warn (%+v)", lv, rep.checks)
+	}
+	if !rep.healthy {
+		t.Error("a foreign command does not stop coordination, so the install stays healthy")
+	}
+	if d := detailOf(t, rep, "copilot hooks"); !strings.Contains(d, "PreToolUse") {
+		t.Errorf("the warning should name where the foreign command sits: %s", d)
+	}
+}
+
+// detailOf returns a check's detail text, so a test can assert the message says
+// what a user needs (the affected event, the remedy) and not merely its level.
+func detailOf(t *testing.T, rep doctorReport, title string) string {
+	t.Helper()
+	for _, c := range rep.checks {
+		if c.title == title {
+			return c.detail
+		}
+	}
+	t.Fatalf("no check titled %q in %+v", title, rep.checks)
+	return ""
+}

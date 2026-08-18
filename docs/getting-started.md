@@ -267,10 +267,13 @@ Copilot-specific notes:
 - The hooks resolve the `director` binary exactly as the Claude Code path does: `DIRECTOR_BIN`, then
   `PATH`, then the symlink `install` drops at `<hooks dir>/../bin/director`.
 
-`director uninstall --copilot` removes only the Director-owned hooks file (it refuses to touch a
-`director.json` it does not own), plus the three skill directories once no Codex install still needs
-them; the shared shims survive while a Claude Code or Codex install still references them, and the bin
-symlink while any install (OpenCode included) still probes it.
+`director uninstall --copilot` removes only the Director-owned hooks file, and refuses to touch a
+`director.json` it does not fully own (one you wrote, or one of ours you have since added your own
+command to). Every shared surface is spared while anything still needs it: the three skill directories
+go only once neither a Codex install nor another Copilot install still lists them, the shims survive
+while a Claude Code, Codex, or other Copilot install still references them, and the bin symlink while
+any install at all (OpenCode included) still probes it. "Another Copilot install" is not hypothetical:
+it is what a `--settings <path>` uninstall leaves untouched at the default path.
 
 ---
 
@@ -456,6 +459,7 @@ would not fire. The table covers the specifics.
 | **`status` shows "N unreadable fleet row(s) skipped"** | One or more row files under `$DIRECTOR_HUB/fleet/` are corrupt; the cockpit skips them rather than failing. Inspect/remove the bad files there. |
 | **`adopt` imported nothing** | By design: the CLI registers only (identity + CHARTER stub + fleet row). The import path is `/director:adopt` in an agent session: it triages the repo's real open loops and imports only what you confirm. |
 | **`install` refused** | Your `~/.claude/settings.json` has a malformed (non-object) `hooks` value. Director won't overwrite data it doesn't understand: fix the file, then re-run. |
+| **`install --copilot` or `uninstall --copilot` refused** | `~/.copilot/hooks/director.json` exists and is not fully Director's: either it is a file you wrote, or you added a command of your own (or a `powershell` field) to one of ours. Both verbs rewrite or delete that file whole, so Director refuses rather than destroy your work. Move your commands into another `*.json` in the same directory (Copilot loads them all), or point Director elsewhere with `DIRECTOR_COPILOT_HOOKS_PATH`, then re-run. `director doctor` names the events involved. |
 
 ---
 

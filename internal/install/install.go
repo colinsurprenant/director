@@ -516,22 +516,30 @@ func Uninstall(settingsPath string) error {
 	}
 	// Remove the Director-owned shims too — the inverse of Install's writeShims
 	// (best-effort: only the exact Director filenames, never foreign files) —
-	// UNLESS a Codex or Copilot install still references them: the shims are
-	// shared by all three command-hook agents, and a CC uninstall must not
-	// silently break a coexisting one (the mirror of UninstallCodex /
-	// UninstallCopilot leaving them for CC). The bin symlink is wider than the
-	// shims: the OpenCode plugin's fallback tier probes it too (no shims
+	// UNLESS an install still references them. Three probes, three distinct
+	// reasons: a Codex or Copilot install shares the shims outright (the mirror
+	// of UninstallCodex / UninstallCopilot leaving them for CC), and the CC
+	// SELF-probe covers the custom-`--settings` form, where the DEFAULT
+	// settings.json still carries live entries pointing at these exact files. On
+	// the default-path uninstall the entries were just stripped above, so that
+	// probe reads absent and the reclaim proceeds. The bin symlink is wider than
+	// the shims: the OpenCode plugin's fallback tier probes it too (no shims
 	// involved), so its reclaim additionally gates on that install.
-	if !codexInstallPresent() && !copilotInstallPresent() && hooksErr == nil {
+	if !claudeInstallPresent() && !codexInstallPresent() && !copilotInstallPresent() && hooksErr == nil {
 		removeShims(hooksDir)
 		if !opencodeInstallPresent() {
 			removeBinSymlink(hooksDir)
 		}
 	}
 	// And the Director-owned slash commands — the inverse of writeCommands, same
-	// best-effort, exact-filenames-only discipline.
-	if commandsDir, err := DefaultCommandsDir(); err == nil {
-		removeCommands(commandsDir)
+	// best-effort, exact-filenames-only discipline. Gated on the same CC
+	// self-probe: the commands are read by Claude Code alone, but a
+	// custom-`--settings` uninstall must not strip /director:complete from under
+	// the default install that still has the hooks wired.
+	if !claudeInstallPresent() {
+		if commandsDir, err := DefaultCommandsDir(); err == nil {
+			removeCommands(commandsDir)
+		}
 	}
 	return nil
 }

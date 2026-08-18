@@ -348,3 +348,47 @@ func TestUninstallSparesSymlinkWhenOpenCodePresent(t *testing.T) {
 		t.Errorf("CC uninstall removed the bin symlink the OpenCode plugin still probes: %v", err)
 	}
 }
+
+// TestUninstallOpenCodeSparesSharedWhenDefaultInstallPresent is the OpenCode
+// half of the self-probe rule: a custom-path plugin uninstall while the DEFAULT
+// plugin is still in place must leave the /director-* commands that install
+// writes for it (and the bin symlink its fallback tier probes). Only the
+// default-path uninstall, which removes that plugin first, reclaims.
+func TestUninstallOpenCodeSparesSharedWhenDefaultInstallPresent(t *testing.T) {
+	defaultPath, commandsDir, hooksDir := setupOpenCode(t)
+	if err := InstallOpenCode(defaultPath); err != nil {
+		t.Fatalf("InstallOpenCode (default path): %v", err)
+	}
+	customPath := filepath.Join(t.TempDir(), "custom", "director.js")
+	if err := InstallOpenCode(customPath); err != nil {
+		t.Fatalf("InstallOpenCode (custom path): %v", err)
+	}
+
+	if err := UninstallOpenCode(customPath); err != nil {
+		t.Fatalf("UninstallOpenCode: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(commandsDir, "director-complete.md")); err != nil {
+		t.Errorf("custom-path uninstall removed the commands the default plugin still provides: %v", err)
+	}
+	if _, err := os.Stat(defaultPath); err != nil {
+		t.Errorf("custom-path uninstall removed the default plugin: %v", err)
+	}
+	if runtime.GOOS != "windows" { // the bin symlink is unix-only
+		if _, err := os.Lstat(filepath.Join(filepath.Dir(hooksDir), "bin", "director")); err != nil {
+			t.Errorf("custom-path uninstall removed the bin symlink the default plugin still probes: %v", err)
+		}
+	}
+
+	// The default-path uninstall still reclaims once it is alone.
+	if err := UninstallOpenCode(defaultPath); err != nil {
+		t.Fatalf("UninstallOpenCode (default path): %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(commandsDir, "director-complete.md")); !os.IsNotExist(err) {
+		t.Errorf("default-path uninstall must reclaim the commands when nothing else provides them (err=%v)", err)
+	}
+	if runtime.GOOS != "windows" {
+		if _, err := os.Lstat(filepath.Join(filepath.Dir(hooksDir), "bin", "director")); !os.IsNotExist(err) {
+			t.Errorf("default-path uninstall must reclaim the bin symlink (err=%v)", err)
+		}
+	}
+}

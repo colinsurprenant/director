@@ -63,13 +63,21 @@ func handlePostToolUse(in Input, out io.Writer, hub string) error {
 			// agent's command namespace, same rule as the session-start protocol.
 			// (Inert off Claude Code today — the nudge needs a CC transcript — but
 			// the rewrite must not be the thing that breaks when that changes.)
-			if text, usage := runHandoffNudge(in, hub, ws); text != "" {
-				flavor := agentFlavor(in)
-				if err := writePostToolUseContext(out, commandNamesFor(text, flavor), flavor); err != nil {
-					return fmt.Errorf("write handoff nudge: %w", err)
+			//
+			// Copilot is skipped EXPLICITLY, the same enforcement handleStop applies
+			// to the emit-guard: its PostToolUse payload carries no transcript_path
+			// at all, and the path on its Stop payload names an events.jsonl in
+			// Copilot's own format (verified live on copilot 1.0.80). A tail-read
+			// there could only mis-measure a foreign file, once per tool call.
+			flavor := agentFlavor(in)
+			if flavor != "copilot" {
+				if text, usage := runHandoffNudge(in, hub, ws); text != "" {
+					if err := writePostToolUseContext(out, commandNamesFor(text, flavor), flavor); err != nil {
+						return fmt.Errorf("write handoff nudge: %w", err)
+					}
+					logSuccess(hub, EventPostToolUse, in.SessionID, fmt.Sprintf("handoff nudge fired at ~%d context tokens", usage))
+					return nil
 				}
-				logSuccess(hub, EventPostToolUse, in.SessionID, fmt.Sprintf("handoff nudge fired at ~%d context tokens", usage))
-				return nil
 			}
 		}
 	}

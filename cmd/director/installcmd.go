@@ -60,7 +60,31 @@ func runInstall(args []string) int {
 
 // installOne wires a single target; the multi-target loop in runInstall keeps
 // going past a failure so one broken agent config does not block the others.
+// The branches run in the canonical target order (codex → opencode → copilot,
+// with Claude Code the trailing default), so a reader comparing two agents'
+// confirmation text finds them adjacent and in the same order the CLI resolves
+// them. Each branch names every OTHER install that shares an artifact with it:
+// the shared surfaces are exactly what a user needs to know before uninstalling
+// one agent.
 func installOne(target, path string) int {
+	if target == "codex" {
+		if err := install.InstallCodex(path); err != nil {
+			fmt.Fprintf(os.Stderr, "install: %v\n", err)
+			return 1
+		}
+		fmt.Printf("installed Director hooks into %s (set DIRECTOR_CODEX_HOOKS_PATH to override)\n", path)
+		if hooksDir, err := install.DefaultHooksDir(); err == nil {
+			fmt.Printf("  shims written to %s (shared with a Claude Code or Copilot CLI install; set DIRECTOR_HOOKS_DIR to override)\n", hooksDir)
+		}
+		if skillsDir, err := install.DefaultCodexSkillsDir(); err == nil {
+			fmt.Printf("  skills written to %s ($director-adopt, $director-complete, $director-handoff; shared with a Copilot CLI install; set DIRECTOR_CODEX_SKILLS_DIR to override)\n", skillsDir)
+		}
+		printBinLine()
+		fmt.Println("  Codex will ask you to trust the three Director hooks at your next session start.")
+		fmt.Println("  If you dismiss or interrupt that prompt (an Esc is enough), run /hooks in the session to review and trust them.")
+		return 0
+	}
+
 	if target == "opencode" {
 		if err := install.InstallOpenCode(path); err != nil {
 			fmt.Fprintf(os.Stderr, "install: %v\n", err)
@@ -87,28 +111,10 @@ func installOne(target, path string) int {
 			fmt.Printf("  skills written to %s ($director-adopt, $director-complete, $director-handoff; shared with a Codex install; set DIRECTOR_CODEX_SKILLS_DIR to override)\n", skillsDir)
 		}
 		printBinLine()
-		// The contrast with the Codex line above is the point: Copilot loads every
-		// file in its hooks dir as-is, so there is no trust prompt to answer and
-		// nothing to dismiss by accident.
+		// The contrast with the Codex branch above is the point: Copilot loads
+		// every file in its hooks dir as-is, so there is no trust prompt to answer
+		// and nothing to dismiss by accident.
 		fmt.Println("  Copilot picks the file up on its own — the hooks fire at your next Copilot session, with no trust prompt to answer.")
-		return 0
-	}
-
-	if target == "codex" {
-		if err := install.InstallCodex(path); err != nil {
-			fmt.Fprintf(os.Stderr, "install: %v\n", err)
-			return 1
-		}
-		fmt.Printf("installed Director hooks into %s (set DIRECTOR_CODEX_HOOKS_PATH to override)\n", path)
-		if hooksDir, err := install.DefaultHooksDir(); err == nil {
-			fmt.Printf("  shims written to %s (shared with a Claude Code install; set DIRECTOR_HOOKS_DIR to override)\n", hooksDir)
-		}
-		if skillsDir, err := install.DefaultCodexSkillsDir(); err == nil {
-			fmt.Printf("  skills written to %s ($director-adopt, $director-complete, $director-handoff; set DIRECTOR_CODEX_SKILLS_DIR to override)\n", skillsDir)
-		}
-		printBinLine()
-		fmt.Println("  Codex will ask you to trust the three Director hooks at your next session start.")
-		fmt.Println("  If you dismiss or interrupt that prompt (an Esc is enough), run /hooks in the session to review and trust them.")
 		return 0
 	}
 

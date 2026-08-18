@@ -119,13 +119,17 @@ Identical to Claude Code except where noted:
   OpenCode do not, so an exiting Copilot session archives its own fleet row
   instead of aging out by TTL. On this axis Copilot is the closest of the three
   non-CC harnesses to Claude Code.
-- **Emit-guard inert.** Copilot's Stop payload does carry a `transcript_path`,
-  but it points at `~/.copilot/session-state/<uuid>/events.jsonl`, which is not
-  the CC transcript format: the guard finds no assistant turn and allows the
-  stop. Fail-open by design, exactly as on Codex. The context-fill handoff
-  nudge is inert for the same reason (it derives usage from CC transcript
-  records). Everything else in the Stop handler, the per-turn fleet-row
-  bookkeeping, still runs.
+- **Emit-guard inert, by enforcement.** Copilot's Stop payload does carry a
+  `transcript_path`, but it points at
+  `~/.copilot/session-state/<uuid>/events.jsonl`, which is not the CC transcript
+  format. Rather than let the guard read a file it cannot understand and reach a
+  foregone allow, the handler skips it outright on the Copilot flavor: the file
+  grows all session and the guard runs at every turn end, so the read is pure
+  cost, and skipping also retires the risk that the parser's deliberately loose
+  record projection one day matches a Copilot record shape. The context-fill
+  handoff nudge is skipped on the same gate (its PostToolUse payload carries no
+  transcript path at all). Everything else in the Stop handler, the per-turn
+  fleet-row bookkeeping included, still runs.
 
 ### 4. Four-way uninstall sparing
 
@@ -135,18 +139,45 @@ break a surviving one, and uninstalling the last one must leave nothing behind:
 | Resource | Shared by | Reclaimed when |
 |---|---|---|
 | hook shims (`~/.claude/director/hooks`) | Claude Code, Codex, Copilot CLI | no surviving install references them |
-| agent skills (`~/.agents/skills/director-*`) | Codex, Copilot CLI | neither target remains |
+| agent skills (`~/.agents/skills/director-*`) | Codex, Copilot CLI | no surviving install of either target lists them |
 | bin symlink (`<hooks dir>/../bin/director`) | every shim-based target | no surviving install references it |
 
 OpenCode's managed plugin and `/director-*` command files are its own, so it
 sits outside the first two rows; it holds a claim on the bin symlink only,
 because its plugin probes that fallback path without using the shims.
 
+"Surviving install" includes the uninstalling target's OWN default-path install,
+which is why every gate carries a self-probe alongside the other targets'. A
+`--settings <path>` uninstall touches only the file it was pointed at, so the
+install at the default path is still live and still needs the shims it invokes
+and the skills it lists. On the default-path uninstall the entries are stripped
+(or the file removed) first, so that same probe reads absent and the reclaim
+proceeds. Each target's own commands or command files follow the same rule for
+the same reason: they are reclaimed only when that target has no default-path
+install left.
+
+Ownership and liveness are separate questions here, and the Copilot recognizer
+answers them separately. Ownership, the strict rule, gates the two operations
+that write or delete the whole file: every command in it must be ours. Liveness,
+the weaker rule, gates the sparing above: any Director command in the file means
+its shims and skills are still in use. A file a user has added their own command
+to is no longer ours to rewrite, but our entries in it still fire, and reclaiming
+what they invoke would break a working install.
+
 `director doctor` gains a Copilot row, reported only when the managed hooks file
-is present, so a machine that never wired Copilot sees no new noise. The row
-verifies the shims its own entry set references: all four, where the Codex row
-checks three (no SessionEnd), which is why each target is verified against its
-own shim set rather than the full embedded one.
+still holds a Director command, so a machine that never wired Copilot sees no new
+noise. Because Copilot loads the file unconditionally, the file's own
+completeness is the whole question, and the row checks four things. Missing
+events fail (a file an older binary wrote still reads present while the absent
+hook never fires). A missing `DIRECTOR_HOOK_AGENT=copilot` prefix fails, and this
+is the one worth the strictness: the hook still runs, but the adapter then
+answers in Claude Code's envelope, which Copilot ignores, so injection dies with
+no error on any surface. Missing shims fail, checked against Copilot's own entry
+set: all four, where the Codex row checks three (no SessionEnd), which is why
+each target is verified against its own set rather than the full embedded one.
+Foreign commands in the file only warn, since nothing of ours stops firing, but
+naming them is what explains why `install --copilot` and `uninstall --copilot`
+refuse that file.
 
 ## Testing
 

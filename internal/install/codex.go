@@ -130,8 +130,11 @@ func UninstallCodex(hooksPath string) error {
 	}
 	// The skills are no longer Codex-only: a Copilot install discovers the SAME
 	// ~/.agents/skills dir (see InstallCopilot), so removing them here would
-	// silently take the $director-* skills away from a coexisting Copilot.
-	if !copilotInstallPresent() {
+	// silently take the $director-* skills away from a coexisting Copilot. The
+	// codex self-probe is needed for the same reason the shims below need it: on
+	// a custom-`--settings` uninstall the DEFAULT Codex install is untouched and
+	// still lists $director-complete, so its skills must survive.
+	if !codexInstallPresent() && !copilotInstallPresent() {
 		if skillsDir, err := DefaultCodexSkillsDir(); err == nil {
 			removeCodexSkills(skillsDir)
 		}

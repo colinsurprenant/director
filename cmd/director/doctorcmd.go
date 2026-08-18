@@ -335,19 +335,50 @@ func codexHooksCheck(in doctorInputs) (check, bool) {
 	return check{"codex hooks", levelOK, fmt.Sprintf("wired in %s", in.codexHooks)}, true
 }
 
-// copilotHooksCheck reports the Copilot side only when its managed hooks file is
-// present, so it never nags a user on another agent. Presence plus the shims the
-// file's commands name is the whole wiring: Copilot loads every file in its hooks
-// dir with no registration and no trust ceremony (verified live on copilot
-// 1.0.80), so unlike Codex there is no third state where the file exists but the
-// agent ignores it. The bool is false when there is nothing to report.
+// copilotHooksCheck reports the Copilot side only when its managed hooks file
+// holds at least one Director command, so it never nags a user on another agent.
+// Copilot loads every file in its hooks dir with no registration and no trust
+// ceremony (verified live on copilot 1.0.80), so unlike Codex there is no state
+// where the file exists but the agent ignores it — which makes the FILE's own
+// completeness the whole question, in four parts:
+//
+//   - missing events: a file written by an older binary (or hand-trimmed) still
+//     reads present while the absent hook silently never fires — the Copilot
+//     analog of MissingManagedEvents on the Claude Code side.
+//   - missing tag: the one that most needs catching, because it is the quietest
+//     to live with. A command that lost its DIRECTOR_HOOK_AGENT=copilot prefix
+//     still runs, but the hook then resolves flavor "claude" and answers in CC's
+//     hookSpecificOutput envelope, which Copilot ignores wholesale: ground-truth
+//     injection dies with no error on any surface. Hence levelFail here, where
+//     the CC untagged case is only a warning.
+//   - missing shims: the commands name shims that are not on disk.
+//   - foreign commands: someone else's command shares our file. Nothing of ours
+//     stops working, so this is a warning — but install/uninstall refuse a file
+//     they do not fully own, and this is the check that explains that refusal.
+//
+// The bool is false when there is nothing to report.
 func copilotHooksCheck(in doctorInputs) (check, bool) {
 	if !install.CopilotHooksFilePresent(in.copilotHooks) {
 		return check{}, false
 	}
+	if missing := install.CopilotMissingEvents(in.copilotHooks); len(missing) > 0 {
+		return check{"copilot hooks", levelFail, fmt.Sprintf(
+			"%s carries Director hooks but has no command for %s — a Director upgrade adds hook events an older install never wrote, and a missing one silently never fires. Re-run `director install --copilot`.",
+			in.copilotHooks, strings.Join(missing, ", "))}, true
+	}
+	if untagged := install.CopilotUntaggedEvents(in.copilotHooks); len(untagged) > 0 {
+		return check{"copilot hooks", levelFail, fmt.Sprintf(
+			"Director hooks in %s have lost their DIRECTOR_HOOK_AGENT=copilot prefix (%s) — they still run, but without it Director answers in Claude Code's output shape, which Copilot ignores: ground-truth injection silently stops reaching the session. Re-run `director install --copilot`.",
+			in.copilotHooks, strings.Join(untagged, ", "))}, true
+	}
 	if missing := missingShims(in.hooksDir, install.CopilotShims()); len(missing) > 0 {
 		return check{"copilot hooks", levelFail, fmt.Sprintf(
 			"%s references Director hooks, but shims are missing from %s (%s) — re-run `director install --copilot`.", in.copilotHooks, in.hooksDir, strings.Join(missing, ", "))}, true
+	}
+	if foreign := install.CopilotForeignEvents(in.copilotHooks); len(foreign) > 0 {
+		return check{"copilot hooks", levelWarn, fmt.Sprintf(
+			"wired in %s, but it also carries commands Director does not own (under %s) — coordination fires normally; `director install --copilot` and `uninstall --copilot` refuse a file they do not fully own, so move those to another *.json in the same directory (Copilot loads them all) to restore both verbs.",
+			in.copilotHooks, strings.Join(foreign, ", "))}, true
 	}
 	return check{"copilot hooks", levelOK, fmt.Sprintf("wired in %s", in.copilotHooks)}, true
 }

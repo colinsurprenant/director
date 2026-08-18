@@ -155,10 +155,17 @@ func UninstallOpenCode(pluginPath string) error {
 		return fmt.Errorf("remove plugin %s: %w", pluginPath, err)
 	}
 	_ = os.Remove(filepath.Dir(pluginPath)) // succeeds only if empty; foreign plugins keep it intact
-	if commandsDir, err := DefaultOpenCodeCommandsDir(); err == nil {
-		removeOpenCodeCommands(commandsDir)
+	// The commands are OpenCode's alone, but the SELF-probe is still needed: on a
+	// custom-path uninstall the DEFAULT plugin is untouched and still live, and
+	// its /director-complete must keep resolving. On the default-path uninstall
+	// the plugin was just removed above, so the probe reads absent and the
+	// reclaim proceeds — the same shape as the Codex/Copilot self-probes.
+	if !opencodeInstallPresent() {
+		if commandsDir, err := DefaultOpenCodeCommandsDir(); err == nil {
+			removeOpenCodeCommands(commandsDir)
+		}
 	}
-	if !claudeInstallPresent() && !codexInstallPresent() && !copilotInstallPresent() {
+	if !claudeInstallPresent() && !codexInstallPresent() && !copilotInstallPresent() && !opencodeInstallPresent() {
 		if hooksDir, err := DefaultHooksDir(); err == nil {
 			removeBinSymlink(hooksDir)
 		}
