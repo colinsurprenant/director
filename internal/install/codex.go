@@ -102,16 +102,18 @@ func InstallCodex(hooksPath string) error {
 }
 
 // UninstallCodex removes Director's entries from hooksPath (tagged, or untagged
-// at one of our shim paths) and the Director-owned skill directories. A missing
+// at one of our shim paths) and the Director-owned skill directories — the
+// latter only while no Copilot install still shares them. A missing
 // hooks file means no Codex install
 // to undo — touch nothing, mirroring the CC Uninstall. The shared shims (and
-// the bin symlink that travels with them) are spared while EITHER default
+// the bin symlink that travels with them) are spared while ANY default
 // install still references them: the default CC settings.json carrying
 // Director-managed entries (the mirror of the CC Uninstall's
-// codexInstallPresent gate), or the default Codex hooks.json still carrying
-// them — a custom `--settings <path>` uninstall must not strand the default
-// install's shims. On the default-path uninstall the entries were just
-// stripped above, so the codex probe reads "absent" and the reclaim proceeds.
+// codexInstallPresent gate), the default Copilot hooks file, or the default
+// Codex hooks.json still carrying them — a custom `--settings <path>` uninstall
+// must not strand the default install's shims. On the default-path uninstall
+// the entries were just stripped above, so the codex probe reads "absent" and
+// the reclaim proceeds.
 // Without the reclaim, a Codex-only machine would keep the shim files forever:
 // the CC uninstall form no-ops on its missing settings.json, so nothing else
 // ever removes them.
@@ -126,10 +128,18 @@ func UninstallCodex(hooksPath string) error {
 	if err := removeManagedEntries(hooksPath, hooksDir); err != nil {
 		return err
 	}
-	if skillsDir, err := DefaultCodexSkillsDir(); err == nil {
-		removeCodexSkills(skillsDir)
+	// The skills are no longer Codex-only: a Copilot install discovers the SAME
+	// ~/.agents/skills dir (see InstallCopilot), so removing them here would
+	// silently take the $director-* skills away from a coexisting Copilot. The
+	// codex self-probe is needed for the same reason the shims below need it: on
+	// a custom-`--settings` uninstall the DEFAULT Codex install is untouched and
+	// still lists $director-complete, so its skills must survive.
+	if !codexInstallPresent() && !copilotInstallPresent() {
+		if skillsDir, err := DefaultCodexSkillsDir(); err == nil {
+			removeCodexSkills(skillsDir)
+		}
 	}
-	if !claudeInstallPresent() && !codexInstallPresent() && hooksErr == nil {
+	if !claudeInstallPresent() && !codexInstallPresent() && !copilotInstallPresent() && hooksErr == nil {
 		removeShims(hooksDir)
 		// The bin symlink outlives the shims when an OpenCode install remains:
 		// its plugin probes the same fallback path without using the shims.

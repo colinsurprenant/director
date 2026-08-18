@@ -55,6 +55,7 @@ func installedFixture(t *testing.T) doctorInputs {
 		hooksDir:      hooksDir,
 		binPath:       binPath,
 		codexHooks:    filepath.Join(root, "no-codex.json"),
+		copilotHooks:  filepath.Join(root, "no-copilot.json"),
 		hub:           root, // a writable directory
 		hubAllowWrite: install.HubAllowWriteValue(),
 	}
@@ -102,6 +103,9 @@ func TestDoctorHealthy(t *testing.T) {
 	}
 	if hasCheck(rep, "opencode hooks") {
 		t.Errorf("opencode check must be absent without an OpenCode install")
+	}
+	if hasCheck(rep, "copilot hooks") {
+		t.Errorf("copilot check must be absent without a Copilot install")
 	}
 }
 
@@ -476,6 +480,89 @@ func TestDoctorCodexReportedWhenInstalled(t *testing.T) {
 	}
 }
 
+func TestDoctorCopilotReportedWhenInstalled(t *testing.T) {
+	in := installedFixture(t)
+	t.Setenv("DIRECTOR_CODEX_SKILLS_DIR", filepath.Join(t.TempDir(), "skills"))
+	copilotHooks := filepath.Join(t.TempDir(), "copilot", "director.json")
+	if err := install.InstallCopilot(copilotHooks); err != nil {
+		t.Fatal(err)
+	}
+	in.copilotHooks = copilotHooks
+	rep := diagnose(in)
+	if !hasCheck(rep, "copilot hooks") {
+		t.Fatal("copilot check must appear when a Copilot install is present")
+	}
+	if levelOf(t, rep, "copilot hooks") != levelOK {
+		t.Fatalf("copilot hooks must be OK for a fresh Copilot install, got %+v", rep.checks)
+	}
+}
+
+// TestDoctorCopilotOnlyIsHealthy: a Copilot-only machine (no Claude Code
+// settings.json at all) reads healthy — the CC check stands down when CC is
+// genuinely absent and another target is wired, exactly as for Codex/OpenCode.
+func TestDoctorCopilotOnlyIsHealthy(t *testing.T) {
+	skipUnixOnlyDoctor(t)
+	root := t.TempDir()
+	hooksDir := filepath.Join(root, "hooks")
+	t.Setenv("DIRECTOR_HOOKS_DIR", hooksDir)
+	t.Setenv("DIRECTOR_CODEX_SKILLS_DIR", filepath.Join(root, "skills"))
+	t.Setenv("DIRECTOR_SETTINGS_PATH", filepath.Join(root, "no-settings.json"))
+	copilotHooks := filepath.Join(root, "copilot", "director.json")
+	t.Setenv("DIRECTOR_COPILOT_HOOKS_PATH", copilotHooks)
+	if err := install.InstallCopilot(copilotHooks); err != nil {
+		t.Fatalf("InstallCopilot fixture: %v", err)
+	}
+	binPath, err := install.DefaultBinPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := doctorInputs{
+		lookDirector:   func() (string, bool) { return "", false },
+		settingsPath:   filepath.Join(root, "no-settings.json"),
+		hooksDir:       hooksDir,
+		binPath:        binPath,
+		codexHooks:     filepath.Join(root, "no-codex.json"),
+		opencodePlugin: filepath.Join(root, "no-plugin.js"),
+		copilotHooks:   copilotHooks,
+		hub:            root,
+	}
+
+	rep := diagnose(in)
+	if !rep.healthy {
+		t.Fatalf("copilot-only install must be healthy, got %+v", rep.checks)
+	}
+	if hasCheck(rep, "claude code hooks") {
+		t.Errorf("claude check must stand down when CC is absent and Copilot is wired")
+	}
+	if lv := levelOf(t, rep, "copilot hooks"); lv != levelOK {
+		t.Errorf("copilot check: got %v, want OK", lv)
+	}
+}
+
+// TestDoctorCopilotMissingShimFails: the hooks file naming a shim that isn't
+// there is the silent-no-op state doctor exists to surface — Copilot fires the
+// hook, the shim is gone, and nothing reports it. Unlike Codex, Copilot's entry
+// set covers all four shims, SessionEnd included.
+func TestDoctorCopilotMissingShimFails(t *testing.T) {
+	in := installedFixture(t)
+	t.Setenv("DIRECTOR_CODEX_SKILLS_DIR", filepath.Join(t.TempDir(), "skills"))
+	copilotHooks := filepath.Join(t.TempDir(), "copilot", "director.json")
+	if err := install.InstallCopilot(copilotHooks); err != nil {
+		t.Fatal(err)
+	}
+	in.copilotHooks = copilotHooks
+	if err := os.Remove(filepath.Join(in.hooksDir, "sessionend.sh")); err != nil {
+		t.Fatal(err)
+	}
+	rep := diagnose(in)
+	if lv := levelOf(t, rep, "copilot hooks"); lv != levelFail {
+		t.Errorf("copilot check with a missing shim: got %v, want fail (%+v)", lv, rep.checks)
+	}
+	if rep.healthy {
+		t.Error("a Copilot install missing a shim it references must not be healthy")
+	}
+}
+
 func TestDoctorHubNotADirFails(t *testing.T) {
 	in := installedFixture(t)
 	f := filepath.Join(t.TempDir(), "hub-is-a-file")
@@ -507,6 +594,7 @@ func TestRunDoctorSandboxed(t *testing.T) {
 	t.Setenv("DIRECTOR_SETTINGS_PATH", settings)
 	t.Setenv("DIRECTOR_CODEX_HOOKS_PATH", filepath.Join(root, "no-codex.json"))
 	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", filepath.Join(root, "no-plugin.js"))
+	t.Setenv("DIRECTOR_COPILOT_HOOKS_PATH", filepath.Join(root, "no-copilot.json"))
 	t.Setenv("DIRECTOR_HUB", root)
 	t.Setenv("DIRECTOR_BIN", "") // unset override → rely on the symlink tier
 	if err := install.Install(settings); err != nil {
@@ -538,6 +626,7 @@ func TestDoctorSettingsPinnedBinBroken(t *testing.T) {
 	t.Setenv("DIRECTOR_SETTINGS_PATH", settings)
 	t.Setenv("DIRECTOR_CODEX_HOOKS_PATH", filepath.Join(root, "no-codex.json"))
 	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", filepath.Join(root, "no-plugin.js"))
+	t.Setenv("DIRECTOR_COPILOT_HOOKS_PATH", filepath.Join(root, "no-copilot.json"))
 	t.Setenv("DIRECTOR_HUB", root)
 	t.Setenv("DIRECTOR_BIN", "") // NOT pinned in the shell
 	if err := install.Install(settings); err != nil {
@@ -715,6 +804,7 @@ func TestRunDoctorUntaggedEntriesExitsZero(t *testing.T) {
 	t.Setenv("DIRECTOR_SETTINGS_PATH", settings)
 	t.Setenv("DIRECTOR_CODEX_HOOKS_PATH", filepath.Join(root, "no-codex.json"))
 	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", filepath.Join(root, "no-plugin.js"))
+	t.Setenv("DIRECTOR_COPILOT_HOOKS_PATH", filepath.Join(root, "no-copilot.json"))
 	t.Setenv("DIRECTOR_HUB", root)
 	t.Setenv("DIRECTOR_BIN", "")
 	if err := install.Install(settings); err != nil {
@@ -781,6 +871,7 @@ func TestDoctorSandboxCheckHonorsHubOverride(t *testing.T) {
 	t.Setenv("DIRECTOR_SETTINGS_PATH", settings)
 	t.Setenv("DIRECTOR_CODEX_HOOKS_PATH", filepath.Join(root, "no-codex.json"))
 	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", filepath.Join(root, "no-plugin.js"))
+	t.Setenv("DIRECTOR_COPILOT_HOOKS_PATH", filepath.Join(root, "no-copilot.json"))
 	t.Setenv("DIRECTOR_HUB", hub)
 	t.Setenv("DIRECTOR_BIN", "")
 	if err := install.Install(settings); err != nil {
@@ -916,5 +1007,194 @@ func pinSettingsEnv(t *testing.T, path, key, val string) {
 	}
 	if err := os.WriteFile(path, out, 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// copilotFixture installs Copilot into temp dirs on top of a healthy CC fixture
+// and returns the inputs plus the managed hooks path, so the copilot-specific
+// states below start from a genuinely installed file.
+func copilotFixture(t *testing.T) (doctorInputs, string) {
+	t.Helper()
+	in := installedFixture(t)
+	t.Setenv("DIRECTOR_CODEX_SKILLS_DIR", filepath.Join(t.TempDir(), "skills"))
+	copilotHooks := filepath.Join(t.TempDir(), "copilot", "director.json")
+	if err := install.InstallCopilot(copilotHooks); err != nil {
+		t.Fatal(err)
+	}
+	in.copilotHooks = copilotHooks
+	return in, copilotHooks
+}
+
+// rewriteCopilotHooks applies fn to the decoded hooks file and writes it back —
+// the hand-damage the doctor states below model.
+func rewriteCopilotHooks(t *testing.T, path string, fn func(hooks map[string]any)) {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatal(err)
+	}
+	hooks, ok := raw["hooks"].(map[string]any)
+	if !ok {
+		t.Fatalf("hooks is not an object in %s", path)
+	}
+	fn(hooks)
+	out, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, out, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestDoctorCopilotUntaggedFails is the silent-injection state: the hooks still
+// fire, but without DIRECTOR_HOOK_AGENT=copilot the adapter answers in Claude
+// Code's envelope, which Copilot ignores — ground truth stops arriving with no
+// error anywhere. Doctor must fail, not warn.
+func TestDoctorCopilotUntaggedFails(t *testing.T) {
+	in, hooksPath := copilotFixture(t)
+	if lv := levelOf(t, diagnose(in), "copilot hooks"); lv != levelOK {
+		t.Fatalf("fixture: fresh copilot install should be OK, got %v", lv)
+	}
+
+	rewriteCopilotHooks(t, hooksPath, func(hooks map[string]any) {
+		entry := hooks["SessionStart"].([]any)[0].(map[string]any)
+		bash, _ := entry["bash"].(string)
+		entry["bash"] = strings.TrimPrefix(bash, "DIRECTOR_HOOK_AGENT=copilot ")
+	})
+
+	rep := diagnose(in)
+	if lv := levelOf(t, rep, "copilot hooks"); lv != levelFail {
+		t.Errorf("untagged copilot command: got %v, want fail (%+v)", lv, rep.checks)
+	}
+	if rep.healthy {
+		t.Error("a copilot install whose injection silently dies must not read healthy")
+	}
+	if !strings.Contains(detailOf(t, rep, "copilot hooks"), "SessionStart") {
+		t.Errorf("the failure should name the affected event: %s", detailOf(t, rep, "copilot hooks"))
+	}
+}
+
+// TestDoctorCopilotMissingEventFails: a file wired by an older binary reads
+// present, but the event it never wrote silently never fires.
+func TestDoctorCopilotMissingEventFails(t *testing.T) {
+	in, hooksPath := copilotFixture(t)
+	rewriteCopilotHooks(t, hooksPath, func(hooks map[string]any) {
+		delete(hooks, "SessionEnd")
+	})
+
+	rep := diagnose(in)
+	if lv := levelOf(t, rep, "copilot hooks"); lv != levelFail {
+		t.Errorf("missing copilot event: got %v, want fail (%+v)", lv, rep.checks)
+	}
+	if d := detailOf(t, rep, "copilot hooks"); !strings.Contains(d, "SessionEnd") || !strings.Contains(d, "install --copilot") {
+		t.Errorf("the failure should name the missing event and the remedy: %s", d)
+	}
+}
+
+// TestDoctorCopilotForeignCommandWarns: someone else's command in our file
+// breaks nothing that fires, but it IS why install/uninstall refuse — a warning
+// that explains the refusal, not a failure.
+func TestDoctorCopilotForeignCommandWarns(t *testing.T) {
+	in, hooksPath := copilotFixture(t)
+	rewriteCopilotHooks(t, hooksPath, func(hooks map[string]any) {
+		hooks["PreToolUse"] = []any{map[string]any{"type": "command", "bash": "my-own-guard.sh", "timeoutSec": 5}}
+	})
+
+	rep := diagnose(in)
+	if lv := levelOf(t, rep, "copilot hooks"); lv != levelWarn {
+		t.Errorf("foreign command in our file: got %v, want warn (%+v)", lv, rep.checks)
+	}
+	if !rep.healthy {
+		t.Error("a foreign command does not stop coordination, so the install stays healthy")
+	}
+	if d := detailOf(t, rep, "copilot hooks"); !strings.Contains(d, "PreToolUse") {
+		t.Errorf("the warning should name where the foreign command sits: %s", d)
+	}
+}
+
+// detailOf returns a check's detail text, so a test can assert the message says
+// what a user needs (the affected event, the remedy) and not merely its level.
+func detailOf(t *testing.T, rep doctorReport, title string) string {
+	t.Helper()
+	for _, c := range rep.checks {
+		if c.title == title {
+			return c.detail
+		}
+	}
+	t.Fatalf("no check titled %q in %+v", title, rep.checks)
+	return ""
+}
+
+// TestDoctorCopilotVersionMismatchWarns: a file declaring a schema Director does
+// not write still fires, so the row must not fail — but it must not read as a
+// plain ✓ either, or the user meets the install/uninstall refusal with nothing
+// to explain it.
+func TestDoctorCopilotVersionMismatchWarns(t *testing.T) {
+	in, hooksPath := copilotFixture(t)
+	b, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatal(err)
+	}
+	raw["version"] = 2
+	out, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hooksPath, out, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rep := diagnose(in)
+	if lv := levelOf(t, rep, "copilot hooks"); lv != levelWarn {
+		t.Errorf("version-drifted copilot file: got %v, want warn (%+v)", lv, rep.checks)
+	}
+	if !rep.healthy {
+		t.Error("the hooks still fire, so a version drift must not sink the verdict")
+	}
+	if d := detailOf(t, rep, "copilot hooks"); !strings.Contains(d, "version") {
+		t.Errorf("the warning should name the declared version: %s", d)
+	}
+}
+
+// TestDoctorCopilotForeignRootFieldWarns: the root-level twin of the version
+// warn, folded into the same document-shape row. The hooks fire, so the verdict
+// stays healthy, but the row must explain what both verbs will refuse.
+func TestDoctorCopilotForeignRootFieldWarns(t *testing.T) {
+	in, hooksPath := copilotFixture(t)
+	b, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatal(err)
+	}
+	raw["someNewRootField"] = map[string]any{"keep": "me"}
+	out, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hooksPath, out, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rep := diagnose(in)
+	if lv := levelOf(t, rep, "copilot hooks"); lv != levelWarn {
+		t.Errorf("root-drifted copilot file: got %v, want warn (%+v)", lv, rep.checks)
+	}
+	if !rep.healthy {
+		t.Error("the hooks still fire, so a root-field drift must not sink the verdict")
+	}
+	if d := detailOf(t, rep, "copilot hooks"); !strings.Contains(d, "someNewRootField") {
+		t.Errorf("the warning should name the foreign root field: %s", d)
 	}
 }

@@ -136,9 +136,10 @@ adoption & install:
   install     idempotent merge of Director hooks into settings.json
               (--codex: Codex's hooks.json + $director-* agent skills;
                --opencode: managed plugin + /director-* custom commands;
-               targets combine, --all wires all three, bare = Claude Code)
-  uninstall   remove only Director-managed hook entries (--codex / --opencode:
-              theirs; targets combine, --all for all three)
+               --copilot: Copilot's hooks file + $director-* agent skills;
+               targets combine, --all wires all four, bare = Claude Code)
+  uninstall   remove only Director-managed hook entries (--codex / --opencode /
+              --copilot: theirs; targets combine, --all for all four)
   doctor      check the install is healthy: hooks wired and the binary reachable
               the way the shims resolve it (exits non-zero if not)
 

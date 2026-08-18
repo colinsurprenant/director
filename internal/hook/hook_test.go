@@ -1733,3 +1733,186 @@ func TestSessionStartConcurrentNoteForThrowaway(t *testing.T) {
 		t.Errorf("throwaway should see the real session as a sibling:\n%.2000s", ctxB)
 	}
 }
+
+// --- agent flavor + output dialects ----------------------------------------
+
+// TestContextOutputDialects pins the ONE wire difference between the delivery
+// targets: Copilot ignores CC's hookSpecificOutput wrapper and reads a flat
+// additionalContext, while every other flavor keeps the CC envelope byte for
+// byte (a regression there silently costs Claude Code its injection).
+func TestContextOutputDialects(t *testing.T) {
+	const ctx = "ground truth"
+	cases := []struct {
+		flavor       string
+		wantStart    string
+		wantPostTool string
+	}{
+		{"copilot", `{"additionalContext":"ground truth"}`, `{"additionalContext":"ground truth"}`},
+		{"claude", `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"ground truth"}}`, `{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"ground truth"}}`},
+		{"codex", `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"ground truth"}}`, `{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"ground truth"}}`},
+		{"opencode", `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"ground truth"}}`, `{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"ground truth"}}`},
+	}
+	for _, c := range cases {
+		var start, post bytes.Buffer
+		if err := writeSessionStartContext(&start, ctx, c.flavor); err != nil {
+			t.Fatalf("%s: writeSessionStartContext: %v", c.flavor, err)
+		}
+		if got := start.String(); got != c.wantStart+"\n" {
+			t.Errorf("%s session-start output = %q, want %q", c.flavor, got, c.wantStart+"\n")
+		}
+		if err := writePostToolUseContext(&post, ctx, c.flavor); err != nil {
+			t.Fatalf("%s: writePostToolUseContext: %v", c.flavor, err)
+		}
+		if got := post.String(); got != c.wantPostTool+"\n" {
+			t.Errorf("%s post-tool-use output = %q, want %q", c.flavor, got, c.wantPostTool+"\n")
+		}
+	}
+	// An empty context still writes nothing in every dialect — the flavor branch
+	// must not turn a silent no-op into an empty injection.
+	for _, c := range cases {
+		var out bytes.Buffer
+		if err := writeSessionStartContext(&out, "", c.flavor); err != nil {
+			t.Fatalf("%s: writeSessionStartContext(empty): %v", c.flavor, err)
+		}
+		if out.Len() != 0 {
+			t.Errorf("%s: empty context wrote %q, want nothing", c.flavor, out.String())
+		}
+	}
+}
+
+// TestAgentFlavorPriority locks the resolution order: an explicit payload claim
+// (the OpenCode plugin) outranks the DIRECTOR_HOOK_AGENT env channel (the
+// Copilot hooks file's command prefix), which outranks transcript-path
+// detection, which falls back to Claude Code.
+func TestAgentFlavorPriority(t *testing.T) {
+	const rollout = "/Users/u/.codex/sessions/2026/07/03/rollout-abc.jsonl"
+	cases := []struct {
+		name string
+		in   Input
+		env  string
+		want string
+	}{
+		{"payload claim wins over env and transcript", Input{Agent: "opencode", TranscriptPath: rollout}, "copilot", "opencode"},
+		{"env wins over transcript detection", Input{TranscriptPath: rollout}, "copilot", "copilot"},
+		{"env alone", Input{}, "copilot", "copilot"},
+		{"transcript detection when env is unset", Input{TranscriptPath: rollout}, "", "codex"},
+		{"blank env falls through to detection", Input{TranscriptPath: rollout}, "   ", "codex"},
+		{"nothing reads as claude code", Input{TranscriptPath: "/Users/u/.claude/projects/x/transcript.jsonl"}, "", "claude"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv(hookAgentEnv, c.env)
+			if got := agentFlavor(c.in); got != c.want {
+				t.Errorf("agentFlavor = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestSessionStartCopilotDialect drives the REAL captured Copilot SessionStart
+// payload (verified live on copilot 1.0.80 — note it carries no
+// transcript_path, which is why the env channel exists) through Dispatch and
+// asserts both halves of the adapter's Copilot behavior: the flat output shape,
+// and the skill-mention command namespace it shares with Codex.
+func TestSessionStartCopilotDialect(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+
+	// Non-empty log opens the adopted-repo gate so the protocol block is present.
+	store := event.NewStore(hub, ws.RepoKey)
+	if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindNote, Area: "x", Body: "working"}); err != nil {
+		t.Fatalf("seed note: %v", err)
+	}
+
+	payload := `{"hook_event_name":"SessionStart","session_id":"0198f0c2-0000-7000-8000-000000000001",` +
+		`"timestamp":"2026-08-17T12:00:00.000Z","cwd":` + jsonString(repo) + `,"source":"new","initial_prompt":"hello"}`
+
+	t.Setenv(hookAgentEnv, "copilot")
+	var out bytes.Buffer
+	if code := Dispatch(EventSessionStart, strings.NewReader(payload), &out, hub); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	got := out.String()
+	if strings.Contains(got, "hookSpecificOutput") {
+		t.Fatalf("copilot injection must not use the CC wrapper (it is ignored there):\n%s", got)
+	}
+	var flat struct {
+		AdditionalContext string `json:"additionalContext"`
+	}
+	if err := json.Unmarshal([]byte(got), &flat); err != nil {
+		t.Fatalf("copilot output is not the flat shape: %v\n%s", err, got)
+	}
+	if !strings.HasPrefix(flat.AdditionalContext, groundTruthPreamble) {
+		t.Errorf("copilot injection missing the Ground-Truth block:\n%s", flat.AdditionalContext)
+	}
+	if !strings.Contains(flat.AdditionalContext, "$director-complete") {
+		t.Errorf("copilot session should get skill-mention commands in the protocol:\n%s", flat.AdditionalContext)
+	}
+	if strings.Contains(flat.AdditionalContext, "/director:complete") {
+		t.Errorf("copilot session must not be told CC command names:\n%s", flat.AdditionalContext)
+	}
+	// A real fleet row is registered exactly as on any other agent.
+	if !fleetRowExists(t, hub, ws.ID) {
+		t.Errorf("expected a fleet row for %s after a Copilot SessionStart", ws.ID)
+	}
+
+	// Without the env channel the SAME payload takes the Claude Code path — the
+	// regression guard for the flavor branch.
+	t.Setenv(hookAgentEnv, "")
+	out.Reset()
+	if code := Dispatch(EventSessionStart, strings.NewReader(payload), &out, hub); code != 0 {
+		t.Fatalf("cc exit code = %d, want 0", code)
+	}
+	if !strings.Contains(out.String(), `"hookSpecificOutput":{"hookEventName":"SessionStart"`) {
+		t.Errorf("without DIRECTOR_HOOK_AGENT the CC control envelope must be unchanged:\n%s", out.String())
+	}
+	if !strings.Contains(injectedContext(t, out.String()), "/director:complete") {
+		t.Errorf("without DIRECTOR_HOOK_AGENT the CC command names must be kept:\n%s", out.String())
+	}
+}
+
+// TestStopCopilotSkipsEmitGuard: the guard is inert on Copilot by ENFORCEMENT,
+// not because the parser happens to conclude nothing. The transcript here is the
+// exact fixture that blocks on Claude Code, so if the gate were removed the test
+// would see a block; under the copilot flavor the stop must be allowed (no
+// output) and the fleet row archived like any other allowed turn end.
+func TestStopCopilotSkipsEmitGuard(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+	transcript := writeTranscript(t, assistantLine("I've decided to use NDJSON for the log. The plan is to ship it next."))
+
+	// Sanity: without the flavor this very payload blocks.
+	var ccOut bytes.Buffer
+	if code := Dispatch(EventStop, strings.NewReader(stopInput(repo, transcript, false)), &ccOut, hub); code != 0 {
+		t.Fatalf("cc exit code = %d, want 0", code)
+	}
+	if !strings.Contains(ccOut.String(), `"decision":"block"`) {
+		t.Fatalf("fixture no longer blocks on Claude Code, so the copilot assertion below would be vacuous: %q", ccOut.String())
+	}
+
+	t.Setenv(hookAgentEnv, "copilot")
+	// Register a live row under the SAME session id stopInput carries, so the
+	// archive half of the gate is observable on the row this Stop targets.
+	if code := Dispatch(EventSessionStart, strings.NewReader(
+		`{"session_id":"s-real","cwd":`+jsonString(repo)+`,"hook_event_name":"SessionStart","source":"new"}`), &bytes.Buffer{}, hub); code != 0 {
+		t.Fatalf("session start exit = %d", code)
+	}
+	if !fleetRowExists(t, hub, ws.ID) {
+		t.Fatal("fixture: expected a live fleet row before the stop")
+	}
+	var out bytes.Buffer
+	if code := Dispatch(EventStop, strings.NewReader(stopInput(repo, transcript, false)), &out, hub); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("copilot stop must allow (no output); the emit-guard should never read its transcript, got %q", out.String())
+	}
+	if !strings.Contains(readHealth(t, hub), "emit-guard skipped") {
+		t.Errorf("the skip should be visible in health/ so the inertness is observable:\n%s", readHealth(t, hub))
+	}
+	if fleetRowExists(t, hub, ws.ID) {
+		t.Errorf("an allowed copilot stop must still archive the fleet row")
+	}
+}

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Director: a coordination ledger for coding agents</title>
-<meta name="description" content="Save the work, not the chat: a local log your coding agent writes as it works, loaded into every new session. For Claude Code, Codex, and OpenCode.">
+<meta name="description" content="Save the work, not the chat: a local log your coding agent writes as it works, loaded into every new session. For Claude Code, Codex, OpenCode, and GitHub Copilot CLI.">
 <meta property="og:title" content="Director: a coordination ledger for coding agents">
 <meta property="og:description" content="Sessions are disposable. The state of the work isn't. Director is a ledger your agent writes as it works, injected into every new session as ground truth.">
 <meta property="og:type" content="website">
@@ -277,7 +277,7 @@
   <p class="ack reveal d1">▸ Director: director-main-aaa5961e · <span class="meta">3 open-item(s), 1 need-you</span><span class="caret" aria-hidden="true"></span></p>
   <h1 class="reveal d2">Sessions are disposable. The state of the work isn&rsquo;t.</h1>
   <p class="sub reveal d2">Save the work, not the chat: a small local log your agent writes as it works (decisions, open loops, handoffs), loaded into every new session as ground truth.</p>
-  <p class="harnesses reveal d2">one shared log across <strong>Claude Code · Codex · OpenCode</strong>: build in one, resume or review in another</p>
+  <p class="harnesses reveal d2">one shared log across <strong>Claude Code · Codex · OpenCode · Copilot CLI</strong>: build in one, resume or review in another</p>
   <div class="qa reveal d3">
     <p><span class="q-label">Memory tools answer</span> <span class="q-dim">“what does the agent <em>know</em>?”</span></p>
     <p><span class="q-label">Director answers</span> <span class="q-hot">“what is the state of the <em>work</em>?”</span></p>
@@ -301,7 +301,7 @@
       <a class="btn" href="https://github.com/colinsurprenant/director/blob/main/docs/getting-started.md">Getting started</a>
     </nav>
   </div>
-  <p class="also reveal d4">downloads a verified binary and wires Claude Code (pass <code>--codex</code> for Codex, <code>--opencode</code> for OpenCode, <code>--all</code> for all three) · macOS, Linux, WSL · <code>go install</code> and <a href="https://github.com/colinsurprenant/director/releases">prebuilt binaries</a> also available</p>
+  <p class="also reveal d4">downloads a verified binary and wires Claude Code (pass <code>--codex</code> for Codex, <code>--opencode</code> for OpenCode, <code>--copilot</code> for Copilot CLI, <code>--all</code> for all four) · macOS, Linux, WSL · <code>go install</code> and <a href="https://github.com/colinsurprenant/director/releases">prebuilt binaries</a> also available</p>
 </header>
 
 <main>
@@ -369,11 +369,11 @@
 
 <section class="wrap">
   <p class="kicker">across harnesses</p>
-  <h2>One ledger, three harnesses. Zero copy-paste.</h2>
+  <h2>One ledger, four harnesses. Zero copy-paste.</h2>
   <div class="grid">
     <div class="cell">
       <h3>the standing review panel</h3>
-      <p>Build in Claude Code with Codex and OpenCode reviewing the same repo. Every harness opens on the same injected ground truth, and a review verdict lands back in the log for the next session to pick up.</p>
+      <p>Build in Claude Code with Codex, OpenCode, and Copilot CLI reviewing the same repo. Every harness opens on the same injected ground truth, and a review verdict lands back in the log for the next session to pick up.</p>
     </div>
     <div class="cell">
       <h3>the limit wall</h3>
@@ -385,7 +385,7 @@
     </div>
     <div class="cell">
       <h3><span class="p">$</span> director install --all</h3>
-      <p>Same boundary commands, same ground-truth injection at the top of every session, on all three. Wire one agent or all of them; they read and write the same log, live.</p>
+      <p>Same boundary commands, same ground-truth injection at the top of every session, on all four. Wire one agent or all of them; they read and write the same log, live.</p>
     </div>
   </div>
 </section>
@@ -419,7 +419,7 @@
 </main>
 
 <footer class="wrap">
-  <p class="foot-line">A single static Go binary. No daemon, no database, no cloud, no telemetry: it never opens a network connection. The log is plain NDJSON, and it is one log across Claude Code, Codex, and OpenCode.</p>
+  <p class="foot-line">A single static Go binary. No daemon, no database, no cloud, no telemetry: it never opens a network connection. The log is plain NDJSON, and it is one log across Claude Code, Codex, OpenCode, and Copilot CLI.</p>
   <nav class="foot-links" aria-label="Footer">
     <a href="https://github.com/colinsurprenant/director">GitHub</a>
     <a href="https://github.com/colinsurprenant/director/blob/main/docs/getting-started.md">Getting started</a>

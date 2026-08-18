@@ -52,6 +52,7 @@ func writeFixture(t *testing.T, contents string) (path, hooksDir string) {
 	t.Setenv(codexSkillsDirEnv, filepath.Join(t.TempDir(), "skills"))
 	t.Setenv(opencodePluginPathEnv, filepath.Join(t.TempDir(), "director.js"))
 	t.Setenv(opencodeCommandsDirEnv, filepath.Join(t.TempDir(), "oc-command"))
+	t.Setenv(copilotHooksPathEnv, filepath.Join(t.TempDir(), "copilot", "director.json"))
 	// Clear DIRECTOR_HUB so the sandbox grant Install writes is the default
 	// `~/.director` literal regardless of the developer's shell (this repo
 	// dogfoods itself by exporting DIRECTOR_HUB, which would otherwise leak into
@@ -1947,5 +1948,51 @@ func TestExpectedShims(t *testing.T) {
 		if !want[name] {
 			t.Errorf("ExpectedShims() returned unexpected %q; want exactly %v", name, want)
 		}
+	}
+}
+
+// TestUninstallSparesSharedWhenDefaultCCInstallPresent is the Claude Code half
+// of the self-probe rule every target now follows: a custom `--settings <path>`
+// uninstall while the DEFAULT settings.json still carries Director entries must
+// leave the shims those live entries invoke AND the /director:* commands that
+// install writes for them. Only the default-path uninstall, which strips the
+// entries first, reclaims. Without the claudeInstallPresent gate this silently
+// disarmed the real install from a throwaway one.
+func TestUninstallSparesSharedWhenDefaultCCInstallPresent(t *testing.T) {
+	defaultPath, hooksDir := writeFixture(t, "")
+	commandsDir := os.Getenv(commandsDirEnv)
+	if err := Install(defaultPath); err != nil {
+		t.Fatalf("Install (default path): %v", err)
+	}
+	customPath := filepath.Join(t.TempDir(), "custom-settings.json")
+	if err := Install(customPath); err != nil {
+		t.Fatalf("Install (custom path): %v", err)
+	}
+
+	if err := Uninstall(customPath); err != nil {
+		t.Fatalf("Uninstall: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(hooksDir, "sessionstart.sh")); err != nil {
+		t.Errorf("custom-path uninstall removed shims the default CC install still references: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(commandsDir, "complete.md")); err != nil {
+		t.Errorf("custom-path uninstall removed the commands the default CC install still provides: %v", err)
+	}
+	if runtime.GOOS != "windows" { // the bin symlink is unix-only (writeBinSymlink no-ops on windows)
+		if _, err := os.Lstat(filepath.Join(filepath.Dir(hooksDir), "bin", "director")); err != nil {
+			t.Errorf("custom-path uninstall removed the bin symlink the default CC install still references: %v", err)
+		}
+	}
+
+	// The default-path uninstall still reclaims everything once it is the last
+	// install standing — the self-probe must not make the reclaim unreachable.
+	if err := Uninstall(defaultPath); err != nil {
+		t.Fatalf("Uninstall (default path): %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(hooksDir, "sessionstart.sh")); !os.IsNotExist(err) {
+		t.Errorf("default-path uninstall must reclaim the shims when nothing else references them (err=%v)", err)
+	}
+	if _, err := os.Stat(filepath.Join(commandsDir, "complete.md")); !os.IsNotExist(err) {
+		t.Errorf("default-path uninstall must reclaim the commands (err=%v)", err)
 	}
 }

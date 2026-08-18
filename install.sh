@@ -11,7 +11,8 @@
 #   --claude       wire Claude Code (the default when no wire flag is given)
 #   --codex        wire OpenAI Codex
 #   --opencode     wire OpenCode
-#   --all          wire all three agents
+#   --copilot      wire GitHub Copilot CLI
+#   --all          wire all four agents
 #   --no-wire      install the binary only, wire nothing
 #   --version T    install release tag T (default: latest)
 #   --dir D        install the binary into D (default: ~/.local/bin)
@@ -41,6 +42,7 @@ REPO="colinsurprenant/director"
 WIRE_CLAUDE=1
 WIRE_CODEX=0
 WIRE_OPENCODE=0
+WIRE_COPILOT=0
 WIRE_EXPLICIT=0
 WIRE_NONE=0
 VERSION="${DIRECTOR_VERSION:-}"
@@ -70,8 +72,9 @@ Options (via `... | sh -s -- <opt>`):
   --claude       wire Claude Code (the default when no wire flag is given)
   --codex        wire OpenAI Codex
   --opencode     wire OpenCode
-  --all          wire all three agents (wire flags are additive: combine
-                 --claude/--codex/--opencode to wire exactly that set)
+  --copilot      wire GitHub Copilot CLI
+  --all          wire all four agents (wire flags are additive: combine
+                 --claude/--codex/--opencode/--copilot to wire exactly that set)
   --no-wire      install the binary only
   --version T    install release tag T (default: latest)
   --dir D        install into D (default: ~/.local/bin)
@@ -89,6 +92,7 @@ add_wire() {
 	claude) WIRE_CLAUDE=1 ;;
 	codex) WIRE_CODEX=1 ;;
 	opencode) WIRE_OPENCODE=1 ;;
+	copilot) WIRE_COPILOT=1 ;;
 	*) die "add_wire: unknown target $1" ;; # unreachable; guards future call sites
 	esac
 }
@@ -99,12 +103,14 @@ while [ $# -gt 0 ]; do
 	--claude) add_wire claude ;;
 	--codex) add_wire codex ;;
 	--opencode) add_wire opencode ;;
+	--copilot) add_wire copilot ;;
 	--all)
 		add_wire claude
 		add_wire codex
 		add_wire opencode
+		add_wire copilot
 		;;
-	--both | --both=*) die "--both was removed now that there are three wire targets — use --all, or combine --claude/--codex/--opencode" ;;
+	--both | --both=*) die "--both was removed now that there are four wire targets — use --all, or combine --claude/--codex/--opencode/--copilot" ;;
 	--no-wire) WIRE_NONE=1 ;;
 	--version)
 		[ $# -ge 2 ] || die "--version needs a value"
@@ -129,7 +135,7 @@ done
 
 # Checked after the loop so the conflict is caught in either flag order.
 if [ "$WIRE_NONE" -eq 1 ]; then
-	[ "$WIRE_EXPLICIT" -eq 0 ] || die "--no-wire contradicts --claude/--codex/--opencode/--all"
+	[ "$WIRE_EXPLICIT" -eq 0 ] || die "--no-wire contradicts --claude/--codex/--opencode/--copilot/--all"
 	WIRE_CLAUDE=0
 fi
 
@@ -274,6 +280,7 @@ run_wire() { # DESCRIPTION ARGS...
 if [ "$WIRE_CLAUDE" -eq 1 ]; then run_wire "Wiring Claude Code…" install; fi
 if [ "$WIRE_CODEX" -eq 1 ]; then run_wire "Wiring Codex…" install --codex; fi
 if [ "$WIRE_OPENCODE" -eq 1 ]; then run_wire "Wiring OpenCode…" install --opencode; fi
+if [ "$WIRE_COPILOT" -eq 1 ]; then run_wire "Wiring Copilot CLI…" install --copilot; fi
 if [ "$WIRE_NONE" -eq 1 ]; then info "Skipping agent wiring (--no-wire)."; fi
 
 # --- PATH guidance + next steps -----------------------------------------

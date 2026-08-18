@@ -51,6 +51,7 @@ func setupCodex(t *testing.T, fixture string) (hooksPath, hooksDir, skillsDir st
 	t.Setenv(commandsDirEnv, filepath.Join(t.TempDir(), "commands"))
 	t.Setenv(opencodePluginPathEnv, filepath.Join(t.TempDir(), "director.js"))
 	t.Setenv(opencodeCommandsDirEnv, filepath.Join(t.TempDir(), "oc-command"))
+	t.Setenv(copilotHooksPathEnv, filepath.Join(t.TempDir(), "copilot", "director.json"))
 	hooksPath = filepath.Join(t.TempDir(), "hooks.json")
 	t.Setenv(codexHooksPathEnv, hooksPath)
 	if fixture != "" {
@@ -273,13 +274,16 @@ func TestUninstallCodexReclaimsShimsWhenCCSettingsHasNoManagedEntries(t *testing
 	}
 }
 
-// TestUninstallCodexSparesShimsWhenDefaultCodexInstallPresent: a custom
+// TestUninstallCodexSparesSharedWhenDefaultCodexInstallPresent: a custom
 // `--settings <path>` uninstall while the DEFAULT hooks.json still carries a
-// Director install (and no CC install exists) must leave the shared shims —
-// removing them would strand the default install's trusted entries. Only the
-// default-path uninstall, which strips those entries first, reclaims.
-func TestUninstallCodexSparesShimsWhenDefaultCodexInstallPresent(t *testing.T) {
-	defaultPath, hooksDir, _ := setupCodex(t, "")
+// Director install (and no CC install exists) must leave EVERY shared artifact —
+// removing any of them would strand the default install's trusted entries. That
+// covers the skills as much as the shims: the default install's
+// $director-complete has to keep resolving. Only the default-path uninstall,
+// which strips those entries first, reclaims. (The Codex twin of
+// TestUninstallCopilotSparesSharedWhenDefaultInstallPresent.)
+func TestUninstallCodexSparesSharedWhenDefaultCodexInstallPresent(t *testing.T) {
+	defaultPath, hooksDir, skillsDir := setupCodex(t, "")
 	if err := InstallCodex(defaultPath); err != nil {
 		t.Fatalf("InstallCodex (default path): %v", err)
 	}
@@ -290,6 +294,9 @@ func TestUninstallCodexSparesShimsWhenDefaultCodexInstallPresent(t *testing.T) {
 
 	if err := UninstallCodex(customPath); err != nil {
 		t.Fatalf("UninstallCodex: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(skillsDir, "director-complete", "SKILL.md")); err != nil {
+		t.Errorf("custom-path uninstall removed skills the default codex install still lists: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(hooksDir, "sessionstart.sh")); err != nil {
 		t.Errorf("custom-path uninstall removed shims the default codex install still references: %v", err)
