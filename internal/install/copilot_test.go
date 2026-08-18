@@ -956,3 +956,178 @@ func TestInstallCopilotAcceptsItsOwnVersion(t *testing.T) {
 		t.Fatalf("uninstall of our own file must succeed: %v", err)
 	}
 }
+
+// rootDriftedCopilotFile installs, then adds top-level keys Director never
+// writes (and optionally changes the version), leaving every Director command in
+// place: the file Copilot still loads and fires, in a document Director cannot
+// fully account for.
+func rootDriftedCopilotFile(t *testing.T, hooksPath string, version any, extra map[string]any) {
+	t.Helper()
+	if err := InstallCopilot(hooksPath); err != nil {
+		t.Fatalf("InstallCopilot: %v", err)
+	}
+	b, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if version != nil {
+		raw["version"] = version
+	}
+	for k, v := range extra {
+		raw[k] = v
+	}
+	data, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hooksPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestCopilotForeignRootFieldGatesOwnershipOnly is the root-level twin of the
+// entry-level foreign-field rule. A top-level key Director never writes is data
+// it does not even decode, so rewriting the file whole would destroy it silently:
+// both verbs must refuse. Liveness is untouched, exactly as for a foreign command
+// or a version drift, because the Director commands in the file still fire.
+func TestCopilotForeignRootFieldGatesOwnershipOnly(t *testing.T) {
+	hooksPath, _, _ := setupCopilot(t, "")
+	rootDriftedCopilotFile(t, hooksPath, nil, map[string]any{
+		"someNewRootField": map[string]any{"keep": "me"},
+	})
+	before, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = InstallCopilot(hooksPath)
+	if err == nil {
+		t.Fatal("install must refuse a file carrying a top-level field Director never writes")
+	}
+	if !strings.Contains(err.Error(), "someNewRootField") {
+		t.Errorf("refusal should name the foreign root field, got: %v", err)
+	}
+	if err := UninstallCopilot(hooksPath); err == nil {
+		t.Error("uninstall must refuse a file carrying a top-level field Director never writes")
+	} else if !strings.Contains(err.Error(), "someNewRootField") {
+		t.Errorf("uninstall refusal should name the foreign root field, got: %v", err)
+	}
+	after, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatalf("the refused file was removed: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Errorf("the refused file was modified:\n%s", after)
+	}
+
+	// Liveness: unchanged, so the shared artifacts stay spared.
+	if !CopilotHooksFilePresent(hooksPath) {
+		t.Error("a root-drifted file still carrying Director commands must read as LIVE")
+	}
+	if !copilotInstallPresent() {
+		t.Error("the sparing probe must read a root-drifted file as a live install")
+	}
+	if got := CopilotForeignRootFields(hooksPath); len(got) != 1 || got[0] != "someNewRootField" {
+		t.Errorf("CopilotForeignRootFields = %v, want [someNewRootField]", got)
+	}
+}
+
+// TestUninstallCodexSparesSharedWhenCopilotRootDrifted: the consequence that
+// keeps root keys out of the liveness probe — a sibling uninstall must not
+// reclaim the shims and skills a root-drifted (but firing) Copilot file needs.
+func TestUninstallCodexSparesSharedWhenCopilotRootDrifted(t *testing.T) {
+	hooksPath, hooksDir, skillsDir := setupCopilot(t, "")
+	rootDriftedCopilotFile(t, hooksPath, nil, map[string]any{"someNewRootField": 1})
+	codexHooks := os.Getenv(codexHooksPathEnv)
+	if err := InstallCodex(codexHooks); err != nil {
+		t.Fatalf("InstallCodex: %v", err)
+	}
+
+	if err := UninstallCodex(codexHooks); err != nil {
+		t.Fatalf("UninstallCodex: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(hooksDir, "sessionstart.sh")); err != nil {
+		t.Errorf("codex uninstall reclaimed shims a live (root-drifted) Copilot file still invokes: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(skillsDir, "director-complete", "SKILL.md")); err != nil {
+		t.Errorf("codex uninstall reclaimed skills a live (root-drifted) Copilot install still lists: %v", err)
+	}
+}
+
+// TestCopilotRefusalPrecedenceIsOutsideIn pins the deterministic order the
+// refusal reasons are chosen in: version first, then root fields, then commands.
+// A document declaring another version most likely carries its extra root key
+// BECAUSE that schema defines it, so naming the key there would send the user to
+// delete a field their format requires.
+func TestCopilotRefusalPrecedenceIsOutsideIn(t *testing.T) {
+	// Version drift AND a foreign root key: the version wins.
+	both, _, _ := setupCopilot(t, "")
+	rootDriftedCopilotFile(t, both, 2, map[string]any{"someNewRootField": 1})
+	err := InstallCopilot(both)
+	if err == nil {
+		t.Fatal("install must refuse the combined drift")
+	}
+	if !strings.Contains(err.Error(), `"version": 2`) {
+		t.Errorf("combined drift should be reported as the version cause, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "someNewRootField") {
+		t.Errorf("combined drift should NOT name the root field (the version explains it), got: %v", err)
+	}
+
+	// Our version, foreign root key AND a foreign command: the root key wins,
+	// since the document shape outranks per-command advice.
+	inner, _, _ := setupCopilot(t, "")
+	rootDriftedCopilotFile(t, inner, nil, map[string]any{"someNewRootField": 1})
+	var raw map[string]any
+	b, readErr := os.ReadFile(inner)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatal(err)
+	}
+	raw["hooks"].(map[string]any)["PreToolUse"] = []any{map[string]any{"type": "command", "bash": "my-own-guard.sh", "timeoutSec": 5}}
+	data, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(inner, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = InstallCopilot(inner)
+	if err == nil {
+		t.Fatal("install must refuse the root+command drift")
+	}
+	if !strings.Contains(err.Error(), "someNewRootField") {
+		t.Errorf("root+command drift should be reported as the root cause, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "PreToolUse") {
+		t.Errorf("root+command drift should not descend to per-command advice, got: %v", err)
+	}
+}
+
+// TestInstallCopilotAcceptsItsOwnRoot is the other direction: the root key-set
+// gate must not make a normal install or uninstall refuse the file this binary
+// itself writes.
+func TestInstallCopilotAcceptsItsOwnRoot(t *testing.T) {
+	hooksPath, _, _ := setupCopilot(t, "")
+	if err := InstallCopilot(hooksPath); err != nil {
+		t.Fatalf("InstallCopilot: %v", err)
+	}
+	if got := CopilotForeignRootFields(hooksPath); len(got) != 0 {
+		t.Errorf("the file this binary writes must carry no foreign root fields, got %v", got)
+	}
+	if err := InstallCopilot(hooksPath); err != nil {
+		t.Fatalf("re-install over our own file must succeed: %v", err)
+	}
+	if err := UninstallCopilot(hooksPath); err != nil {
+		t.Fatalf("uninstall of our own file must succeed: %v", err)
+	}
+	if _, err := os.Stat(hooksPath); !os.IsNotExist(err) {
+		t.Errorf("uninstall left the file behind (err=%v)", err)
+	}
+}

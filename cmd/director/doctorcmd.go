@@ -355,7 +355,8 @@ func codexHooksCheck(in doctorInputs) (check, bool) {
 //   - foreign commands: someone else's command shares our file. Nothing of ours
 //     stops working, so this is a warning — but install/uninstall refuse a file
 //     they do not fully own, and this is the check that explains that refusal.
-//   - unexpected schema version: same warning shape, same reason. The file still
+//   - document drift (an unexpected schema version, or a top-level field
+//     Director never writes): same warning shape, same reason. The file still
 //     fires; the two verbs refuse a document shape they cannot vouch for.
 //
 // The bool is false when there is nothing to report.
@@ -383,18 +384,36 @@ func copilotHooksCheck(in doctorInputs) (check, bool) {
 			in.copilotHooks, strings.Join(foreign, ", "))}, true
 	}
 	// Same shape, same reason as the foreign-command state: the hooks fire, so
-	// nothing is broken, but both verbs refuse a schema they cannot vouch for, and
-	// meeting that refusal with a ✓ from doctor is the contradiction worth a line.
-	if found, mismatch := install.CopilotVersionMismatch(in.copilotHooks); mismatch {
-		declared := "no numeric \"version\" field"
-		if found != "" {
-			declared = "\"version\": " + found
-		}
+	// nothing is broken, but both verbs refuse a document they cannot vouch for,
+	// and meeting that refusal with a ✓ from doctor is the contradiction worth a
+	// line.
+	if drift := copilotDocumentDrift(in.copilotHooks); drift != "" {
 		return check{"copilot hooks", levelWarn, fmt.Sprintf(
-			"wired in %s and firing, but it declares %s rather than the one Director writes — `director install --copilot` and `uninstall --copilot` refuse a schema they cannot vouch for. Upgrade Director if Copilot's hooks format has moved on; the hooks keep working meanwhile.",
-			in.copilotHooks, declared)}, true
+			"wired in %s and firing, but %s — `director install --copilot` and `uninstall --copilot` refuse a document shape they cannot vouch for, since rewriting it whole would drop what Director does not model. Upgrade Director if Copilot's hooks format has moved on; the hooks keep working meanwhile.",
+			in.copilotHooks, drift)}, true
 	}
 	return check{"copilot hooks", levelOK, fmt.Sprintf("wired in %s", in.copilotHooks)}, true
+}
+
+// copilotDocumentDrift describes how a live hooks file departs from the document
+// shape Director writes, or "" when it does not. Both states fold into one row
+// because they have one cause (the format moved, or something else edited the
+// file) and one remedy, and because a user reading two nearly identical warnings
+// learns nothing from the second. The order matches the refusal's own precedence
+// (see copilotRefusalReason): the declared version outranks an unknown key,
+// since a document announcing another version most likely carries that key
+// BECAUSE its schema defines it.
+func copilotDocumentDrift(path string) string {
+	if found, mismatch := install.CopilotVersionMismatch(path); mismatch {
+		if found == "" {
+			return "it carries no numeric \"version\" field"
+		}
+		return "it declares \"version\": " + found + " rather than the one Director writes"
+	}
+	if foreign := install.CopilotForeignRootFields(path); len(foreign) > 0 {
+		return "it carries top-level field(s) Director never writes (" + strings.Join(foreign, ", ") + ")"
+	}
+	return ""
 }
 
 // opencodeHooksCheck reports the OpenCode side only when its managed plugin is

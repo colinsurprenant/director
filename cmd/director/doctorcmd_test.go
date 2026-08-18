@@ -1164,3 +1164,37 @@ func TestDoctorCopilotVersionMismatchWarns(t *testing.T) {
 		t.Errorf("the warning should name the declared version: %s", d)
 	}
 }
+
+// TestDoctorCopilotForeignRootFieldWarns: the root-level twin of the version
+// warn, folded into the same document-shape row. The hooks fire, so the verdict
+// stays healthy, but the row must explain what both verbs will refuse.
+func TestDoctorCopilotForeignRootFieldWarns(t *testing.T) {
+	in, hooksPath := copilotFixture(t)
+	b, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatal(err)
+	}
+	raw["someNewRootField"] = map[string]any{"keep": "me"}
+	out, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hooksPath, out, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rep := diagnose(in)
+	if lv := levelOf(t, rep, "copilot hooks"); lv != levelWarn {
+		t.Errorf("root-drifted copilot file: got %v, want warn (%+v)", lv, rep.checks)
+	}
+	if !rep.healthy {
+		t.Error("the hooks still fire, so a root-field drift must not sink the verdict")
+	}
+	if d := detailOf(t, rep, "copilot hooks"); !strings.Contains(d, "someNewRootField") {
+		t.Errorf("the warning should name the foreign root field: %s", d)
+	}
+}

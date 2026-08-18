@@ -96,21 +96,21 @@ type copilotHookEntry struct {
 	TimeoutSec int    `json:"timeoutSec"`
 }
 
-// copilotHooksProbe is the READING shape, and it deliberately does NOT reuse
-// copilotHookEntry: decoding into a typed struct silently discards every field
-// it does not model, and an ownership test that cannot SEE a field cannot notice
-// the user's `"powershell": "my-hook.ps1"` added inside one of our entries —
-// after which a re-install would overwrite their work and an uninstall would
-// delete it. Raw key/value maps keep every field visible to the key-set check.
-//
-// Version is read as RawMessage for the same never-fail-the-whole-parse reason:
-// a `"version": "1"` (or any other shape) must degrade to "unknown version", not
-// abort the decode — the liveness probe that shares this walk has to keep working
-// on a file it cannot fully vouch for.
-type copilotHooksProbe struct {
-	Version json.RawMessage                         `json:"version"`
-	Hooks   map[string][]map[string]json.RawMessage `json:"hooks"`
-}
+// copilotWrittenRootFields is the root-level twin of copilotWrittenFields: every
+// top-level key a Director-written file contains, and nothing else. The reading
+// path decodes the root as raw key/value pairs for exactly the reason the ENTRIES
+// are decoded that way — a typed struct silently discards what it does not model,
+// so `{"version":1,"hooks":{…},"someNewRootField":…}` would decode cleanly and
+// read as fully ours, after which a re-install would overwrite that root-level
+// data and an uninstall would delete it. What the recognizer cannot see, it
+// cannot refuse to destroy.
+var copilotWrittenRootFields = map[string]bool{"version": true, "hooks": true}
+
+// copilotHooksMap is the decoded hooks tree: event name to entries, each entry
+// kept as raw key/value pairs so the per-entry key-set check can see every field
+// it carries (see copilotOwnedEntry). Version and the root keys are read the same
+// raw way, for the same reason, one level up.
+type copilotHooksMap map[string][]map[string]json.RawMessage
 
 // copilotEventState is what one event key in a hooks file holds, from the
 // recognizer's point of view. The three facts are separate on purpose: OWNERSHIP
@@ -124,13 +124,15 @@ type copilotEventState struct {
 	foreign bool // holds a command Director does not own
 }
 
-// copilotFileFacts is one scan's worth of what a hooks file contains. The schema
-// version rides alongside the per-event states because the two answer different
-// halves of the same question: the events say WHOSE commands these are, the
-// version says whether Director understands the document holding them.
+// copilotFileFacts is one scan's worth of what a hooks file contains, at all
+// three levels the recognizer cares about: the document (its declared version and
+// its root keys), the events, and the commands inside them. They ride together
+// because ownership needs every level to check out while liveness needs only the
+// innermost — the commands.
 type copilotFileFacts struct {
-	version      int  // decoded root "version"
-	versionKnown bool // false when absent, non-numeric, or otherwise unreadable
+	version      int      // decoded root "version"
+	versionKnown bool     // false when absent, non-numeric, or otherwise unreadable
+	foreignRoot  []string // top-level keys Director never writes, sorted
 	events       map[string]copilotEventState
 }
 
@@ -141,6 +143,13 @@ type copilotFileFacts struct {
 // CopilotHooksFilePresent).
 func (f copilotFileFacts) versionMatches() bool {
 	return f.versionKnown && f.version == copilotHooksVersion
+}
+
+// rootRecognized reports whether the document carries only the top-level keys
+// Director writes. Ownership-only, exactly like versionMatches, and for the same
+// reason: an unknown root key is data this package would silently destroy.
+func (f copilotFileFacts) rootRecognized() bool {
+	return len(f.foreignRoot) == 0
 }
 
 // DefaultCopilotHooksPath resolves the managed hooks file,
@@ -383,14 +392,16 @@ func CopilotForeignEvents(path string) []string {
 // their own command to from being overwritten or deleted — Director owns this
 // file completely or not at all. Liveness asks a weaker question on purpose (see
 // CopilotHooksFilePresent).
-// The declared schema version is part of that ownership bar, and ONLY of it: a
-// file announcing a version Director does not write is one whose document shape
-// we cannot vouch for, and rewriting or deleting it whole on the strength of the
-// command strings alone would be exactly the "overwrite what we do not
-// understand" move the rest of this package refuses to make.
+// The DOCUMENT itself is part of that ownership bar, and ONLY of it: a file
+// announcing a version Director does not write, or carrying a top-level key
+// Director never writes, is one whose shape we cannot vouch for. Rewriting or
+// deleting it whole on the strength of the command strings alone would be
+// exactly the "overwrite what we do not understand" move the rest of this
+// package refuses to make — and at the root, the data destroyed would be data we
+// never even decoded.
 func copilotManaged(data []byte) bool {
 	facts, ok := copilotScan(data)
-	if !ok || !facts.versionMatches() {
+	if !ok || !facts.versionMatches() || !facts.rootRecognized() {
 		return false
 	}
 	owned := false
@@ -412,9 +423,16 @@ func copilotManaged(data []byte) bool {
 // their commands can simply live in a neighbouring file); a file with nothing of
 // ours is just somebody else's director.json.
 //
-// Version is reported first because it is the most fundamental: if we cannot
-// vouch for the document shape, naming which commands sit in it would be
-// advising on a schema we just said we do not understand.
+// The causes are reported OUTSIDE-IN — unparseable, then version, then root
+// keys, then commands — because each outer fact can explain the inner ones, and
+// the innermost advice is only sound once the outer layers check out. Version
+// outranks an unknown root key specifically: the version field is the file's own
+// declaration of which schema it follows, so a document saying "version 2" most
+// likely carries that key BECAUSE version 2 defines it. Naming the key there
+// would push a user toward deleting a field their schema requires; naming the
+// version instead points at the real fix, a Director that speaks it. When the
+// version IS the one we write, an unknown root key is a genuine independent
+// surprise and gets named on its own.
 func copilotRefusalReason(data []byte) string {
 	facts, ok := copilotScan(data)
 	if !ok {
@@ -426,6 +444,9 @@ func copilotRefusalReason(data []byte) string {
 			found = fmt.Sprintf("\"version\": %d", facts.version)
 		}
 		return fmt.Sprintf("it declares %s, not the version %d Director writes — this verb rewrites the file whole, so it will not touch a schema it cannot vouch for (upgrade Director if Copilot's format has moved on)", found, copilotHooksVersion)
+	}
+	if !facts.rootRecognized() {
+		return fmt.Sprintf("it carries top-level field(s) Director never writes (%s) — this verb rewrites the file whole, and rewriting it would silently drop data Director does not even model (upgrade Director if Copilot's format has moved on, or keep that content in another *.json in the same directory, which Copilot loads too)", strings.Join(facts.foreignRoot, ", "))
 	}
 	var owned, foreign []string
 	for event, s := range facts.events {
@@ -459,6 +480,18 @@ func CopilotVersionMismatch(path string) (found string, mismatch bool) {
 	return strconv.Itoa(facts.version), true
 }
 
+// CopilotForeignRootFields reports the top-level keys in a hooks file that
+// Director never writes, sorted. Same purpose as CopilotVersionMismatch and the
+// same audience: the file is live and firing, so doctor would otherwise hand the
+// user a ✓ and then both verbs would refuse it.
+func CopilotForeignRootFields(path string) []string {
+	facts, ok := copilotScanFile(path)
+	if !ok {
+		return nil
+	}
+	return facts.foreignRoot
+}
+
 // copilotScanFile is copilotScan against a file; an unreadable file reads as a
 // failed scan, the same direction as a parse failure.
 func copilotScanFile(path string) (copilotFileFacts, bool) {
@@ -476,15 +509,36 @@ func copilotScanFile(path string) (copilotFileFacts, bool) {
 // shape; an unreadable VERSION is not such a case — it degrades to
 // versionKnown=false, which only the ownership predicate acts on.
 func copilotScan(data []byte) (copilotFileFacts, bool) {
-	var probe copilotHooksProbe
-	if err := json.Unmarshal(data, &probe); err != nil {
+	// The ROOT is decoded as raw key/value pairs, not a struct: the key set is
+	// itself evidence (see copilotWrittenRootFields), and a struct would drop the
+	// very keys ownership must notice.
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(data, &root); err != nil {
 		return copilotFileFacts{}, false
 	}
 	facts := copilotFileFacts{}
-	if len(probe.Version) > 0 {
+	for k := range root {
+		if !copilotWrittenRootFields[k] {
+			facts.foreignRoot = append(facts.foreignRoot, k)
+		}
+	}
+	sort.Strings(facts.foreignRoot) // map iteration order is not a user-facing order
+	// A version we cannot read degrades to "unknown", never to a failed scan: the
+	// liveness probe sharing this walk has to keep working on a document it
+	// cannot fully vouch for.
+	if raw, ok := root["version"]; ok {
 		var v int
-		if err := json.Unmarshal(probe.Version, &v); err == nil {
+		if err := json.Unmarshal(raw, &v); err == nil {
 			facts.version, facts.versionKnown = v, true
+		}
+	}
+	// The hooks tree is the one part that must decode: it is where the commands
+	// live, so a shape we cannot walk leaves us unable to say anything about
+	// ownership OR liveness.
+	hooks := copilotHooksMap{}
+	if raw, ok := root["hooks"]; ok {
+		if err := json.Unmarshal(raw, &hooks); err != nil {
+			return copilotFileFacts{}, false
 		}
 	}
 	// An unresolvable hooks dir degrades to the tag-only reading rather than
@@ -493,8 +547,8 @@ func copilotScan(data []byte) (copilotFileFacts, bool) {
 	if hooksDir, err := DefaultHooksDir(); err == nil {
 		commands = copilotShimCommands(hooksDir)
 	}
-	facts.events = make(map[string]copilotEventState, len(probe.Hooks))
-	for event, entries := range probe.Hooks {
+	facts.events = make(map[string]copilotEventState, len(hooks))
+	for event, entries := range hooks {
 		s := copilotEventState{tagged: true} // vacuous until a Director command says otherwise
 		for _, e := range entries {
 			if !copilotOwnedEntry(e, commands) {
