@@ -60,12 +60,14 @@ func runInstall(args []string) int {
 
 // installOne wires a single target; the multi-target loop in runInstall keeps
 // going past a failure so one broken agent config does not block the others.
-// The branches run in the canonical target order (codex → opencode → copilot,
-// with Claude Code the trailing default), so a reader comparing two agents'
-// confirmation text finds them adjacent and in the same order the CLI resolves
-// them. Each branch names every OTHER install that shares an artifact with it:
-// the shared surfaces are exactly what a user needs to know before uninstalling
-// one agent.
+// Exactly one branch runs per call: what a user sees across a multi-target run
+// is ordered by the targets slice installTargetFlags returns, not by anything
+// here. The branches are nonetheless WRITTEN in that same order (codex →
+// opencode → copilot, with Claude Code the trailing default) so a reader
+// comparing two agents' confirmation text finds them adjacent, and in the order
+// the output will actually appear. Each branch names every OTHER install that
+// shares an artifact with it: the shared surfaces are exactly what a user needs
+// to know before uninstalling one agent.
 func installOne(target, path string) int {
 	if target == "codex" {
 		if err := install.InstallCodex(path); err != nil {

@@ -828,3 +828,131 @@ func TestCopilotRefusalNamesTheRealCause(t *testing.T) {
 		t.Errorf("foreign-file refusal should name the tag and the env override, got: %v", err)
 	}
 }
+
+// versionDriftedCopilotFile installs, then rewrites the root "version" to v,
+// leaving every Director command in place: the file Copilot would still load and
+// fire, in a schema Director does not write.
+func versionDriftedCopilotFile(t *testing.T, hooksPath string, v any) {
+	t.Helper()
+	if err := InstallCopilot(hooksPath); err != nil {
+		t.Fatalf("InstallCopilot: %v", err)
+	}
+	var raw map[string]any
+	b, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if v == nil {
+		delete(raw, "version")
+	} else {
+		raw["version"] = v
+	}
+	data, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hooksPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestCopilotVersionGatesOwnershipOnly is the whole point of the version rule.
+// A file declaring a schema Director does not write is one it must not rewrite
+// or delete — but its Director commands still FIRE, so it must keep counting as
+// a live install for the shared-artifact sparing. Ownership and liveness answer
+// differently on the same file, exactly as they do for a foreign command.
+func TestCopilotVersionGatesOwnershipOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		v    any
+		want string // the text the refusal must name
+	}{
+		{"future version", 2, `"version": 2`},
+		{"absent version", nil, "no numeric"},
+		{"non-numeric version", "1", "no numeric"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hooksPath, _, _ := setupCopilot(t, "")
+			versionDriftedCopilotFile(t, hooksPath, tc.v)
+
+			// Ownership: both whole-file verbs refuse, and say why.
+			err := InstallCopilot(hooksPath)
+			if err == nil {
+				t.Fatal("install must refuse a schema version it does not write")
+			}
+			if !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "version 1 Director writes") {
+				t.Errorf("refusal should name the found and expected versions, got: %v", err)
+			}
+			if err := UninstallCopilot(hooksPath); err == nil {
+				t.Error("uninstall must refuse a schema version it does not write")
+			} else if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("uninstall refusal should name the found version, got: %v", err)
+			}
+			if _, err := os.Stat(hooksPath); err != nil {
+				t.Errorf("the refused file was removed: %v", err)
+			}
+
+			// Liveness: unchanged. The commands still run, so the shared
+			// artifacts they need must stay spared.
+			if !CopilotHooksFilePresent(hooksPath) {
+				t.Error("a version-drifted file still carrying Director commands must read as LIVE")
+			}
+			if !copilotInstallPresent() {
+				t.Error("the sparing probe must read a version-drifted file as a live install")
+			}
+			// And doctor is not silent about it.
+			found, mismatch := CopilotVersionMismatch(hooksPath)
+			if !mismatch {
+				t.Error("CopilotVersionMismatch must report the drift")
+			}
+			if tc.v == 2 && found != "2" {
+				t.Errorf("CopilotVersionMismatch found = %q, want \"2\"", found)
+			}
+		})
+	}
+}
+
+// TestUninstallCodexSparesSharedWhenCopilotVersionDrifted is the consequence
+// that mattered enough to keep the version out of the liveness probe: a sibling
+// uninstall must not reclaim the shims and skills a version-drifted (but firing)
+// Copilot file still needs.
+func TestUninstallCodexSparesSharedWhenCopilotVersionDrifted(t *testing.T) {
+	hooksPath, hooksDir, skillsDir := setupCopilot(t, "")
+	versionDriftedCopilotFile(t, hooksPath, 2)
+	codexHooks := os.Getenv(codexHooksPathEnv)
+	if err := InstallCodex(codexHooks); err != nil {
+		t.Fatalf("InstallCodex: %v", err)
+	}
+
+	if err := UninstallCodex(codexHooks); err != nil {
+		t.Fatalf("UninstallCodex: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(hooksDir, "sessionstart.sh")); err != nil {
+		t.Errorf("codex uninstall reclaimed shims a live (version-drifted) Copilot file still invokes: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(skillsDir, "director-complete", "SKILL.md")); err != nil {
+		t.Errorf("codex uninstall reclaimed skills a live (version-drifted) Copilot install still lists: %v", err)
+	}
+}
+
+// TestInstallCopilotAcceptsItsOwnVersion guards the other direction: the version
+// gate must not make a NORMAL re-install refuse. Whatever version the writer
+// stamps, the recognizer accepts that same file.
+func TestInstallCopilotAcceptsItsOwnVersion(t *testing.T) {
+	hooksPath, _, _ := setupCopilot(t, "")
+	if err := InstallCopilot(hooksPath); err != nil {
+		t.Fatalf("InstallCopilot: %v", err)
+	}
+	if err := InstallCopilot(hooksPath); err != nil {
+		t.Fatalf("re-install over our own file must succeed: %v", err)
+	}
+	if _, mismatch := CopilotVersionMismatch(hooksPath); mismatch {
+		t.Error("the file this binary writes must not read as a version mismatch")
+	}
+	if err := UninstallCopilot(hooksPath); err != nil {
+		t.Fatalf("uninstall of our own file must succeed: %v", err)
+	}
+}

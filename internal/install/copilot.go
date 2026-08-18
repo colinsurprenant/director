@@ -28,6 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -101,8 +102,14 @@ type copilotHookEntry struct {
 // the user's `"powershell": "my-hook.ps1"` added inside one of our entries —
 // after which a re-install would overwrite their work and an uninstall would
 // delete it. Raw key/value maps keep every field visible to the key-set check.
+//
+// Version is read as RawMessage for the same never-fail-the-whole-parse reason:
+// a `"version": "1"` (or any other shape) must degrade to "unknown version", not
+// abort the decode — the liveness probe that shares this walk has to keep working
+// on a file it cannot fully vouch for.
 type copilotHooksProbe struct {
-	Hooks map[string][]map[string]json.RawMessage `json:"hooks"`
+	Version json.RawMessage                         `json:"version"`
+	Hooks   map[string][]map[string]json.RawMessage `json:"hooks"`
 }
 
 // copilotEventState is what one event key in a hooks file holds, from the
@@ -115,6 +122,25 @@ type copilotEventState struct {
 	owned   bool // holds a Director command
 	tagged  bool // every Director command here carries the agent tag
 	foreign bool // holds a command Director does not own
+}
+
+// copilotFileFacts is one scan's worth of what a hooks file contains. The schema
+// version rides alongside the per-event states because the two answer different
+// halves of the same question: the events say WHOSE commands these are, the
+// version says whether Director understands the document holding them.
+type copilotFileFacts struct {
+	version      int  // decoded root "version"
+	versionKnown bool // false when absent, non-numeric, or otherwise unreadable
+	events       map[string]copilotEventState
+}
+
+// versionMatches reports whether the file declares exactly the schema Director
+// writes. Only OWNERSHIP consults this: an unexpected version means we do not
+// fully understand the document, and the two verbs that rewrite or delete it
+// whole must stand down. Liveness deliberately ignores it (see
+// CopilotHooksFilePresent).
+func (f copilotFileFacts) versionMatches() bool {
+	return f.versionKnown && f.version == copilotHooksVersion
 }
 
 // DefaultCopilotHooksPath resolves the managed hooks file,
@@ -261,12 +287,19 @@ func copilotInstallPresent() bool {
 // entries in it still FIRE, and reclaiming the shims they invoke would break a
 // live install. Read errors, parse errors, and foreign shapes read as "not
 // present" (see copilotInstallPresent for why that direction).
+//
+// The schema version is deliberately NOT consulted. A file declaring a version
+// Director does not write is one it refuses to rewrite — but its Director
+// commands still run, still invoke the shared shims, and still mention the
+// shared skills, so treating it as absent here would let a sibling uninstall
+// reclaim those out from under a live install. That is precisely the
+// ownership/liveness conflation this pair of predicates exists to keep apart.
 func CopilotHooksFilePresent(path string) bool {
-	states, ok := copilotScanFile(path)
+	facts, ok := copilotScanFile(path)
 	if !ok {
 		return false
 	}
-	for _, s := range states {
+	for _, s := range facts.events {
 		if s.owned {
 			return true
 		}
@@ -281,13 +314,13 @@ func CopilotHooksFilePresent(path string) bool {
 // still reads present while the missing hook silently never fires. Read/parse
 // failures report nothing (fail-open, as their CC counterparts do).
 func CopilotMissingEvents(path string) []string {
-	states, ok := copilotScanFile(path)
+	facts, ok := copilotScanFile(path)
 	if !ok {
 		return nil
 	}
 	var missing []string
 	for _, e := range copilotEntries {
-		if states[e.event].owned || containsName(missing, e.event) {
+		if facts.events[e.event].owned || containsName(missing, e.event) {
 			continue
 		}
 		missing = append(missing, e.event)
@@ -305,13 +338,13 @@ func CopilotMissingEvents(path string) []string {
 // wrapper, and Copilot ignores it. Injection dies with no error anywhere, which
 // is exactly the failure doctor exists to make loud.
 func CopilotUntaggedEvents(path string) []string {
-	states, ok := copilotScanFile(path)
+	facts, ok := copilotScanFile(path)
 	if !ok {
 		return nil
 	}
 	var untagged []string
 	for _, e := range copilotEntries {
-		s := states[e.event]
+		s := facts.events[e.event]
 		if !s.owned || s.tagged || containsName(untagged, e.event) {
 			continue
 		}
@@ -326,12 +359,12 @@ func CopilotUntaggedEvents(path string) []string {
 // it is why `install --copilot` and `uninstall --copilot` refuse the file, so
 // doctor names it rather than leaving the refusal unexplained.
 func CopilotForeignEvents(path string) []string {
-	states, ok := copilotScanFile(path)
+	facts, ok := copilotScanFile(path)
 	if !ok {
 		return nil
 	}
 	var foreign []string
-	for event, s := range states {
+	for event, s := range facts.events {
 		if s.foreign {
 			foreign = append(foreign, event)
 		}
@@ -350,13 +383,18 @@ func CopilotForeignEvents(path string) []string {
 // their own command to from being overwritten or deleted — Director owns this
 // file completely or not at all. Liveness asks a weaker question on purpose (see
 // CopilotHooksFilePresent).
+// The declared schema version is part of that ownership bar, and ONLY of it: a
+// file announcing a version Director does not write is one whose document shape
+// we cannot vouch for, and rewriting or deleting it whole on the strength of the
+// command strings alone would be exactly the "overwrite what we do not
+// understand" move the rest of this package refuses to make.
 func copilotManaged(data []byte) bool {
-	states, ok := copilotScan(data)
-	if !ok {
+	facts, ok := copilotScan(data)
+	if !ok || !facts.versionMatches() {
 		return false
 	}
 	owned := false
-	for _, s := range states {
+	for _, s := range facts.events {
 		if s.foreign {
 			return false
 		}
@@ -366,18 +404,31 @@ func copilotManaged(data []byte) bool {
 }
 
 // copilotRefusalReason explains, in the user's terms, why a file is not one
-// Director may rewrite or delete. The two cases need different remedies and the
-// scan already knows which applies: a file holding Director commands PLUS
-// someone else's has a per-command fix (Copilot loads every *.json in the
-// directory, so their commands can simply live in a neighbouring file), while a
-// file with nothing of ours is just somebody else's director.json.
+// Director may rewrite or delete. Each cause has its own remedy and the scan
+// already knows which applies: an unexpected schema version is not something the
+// user can fix by moving a command (it needs a Director that speaks that
+// version, or a different path); a file holding Director commands PLUS someone
+// else's has a per-command fix (Copilot loads every *.json in the directory, so
+// their commands can simply live in a neighbouring file); a file with nothing of
+// ours is just somebody else's director.json.
+//
+// Version is reported first because it is the most fundamental: if we cannot
+// vouch for the document shape, naming which commands sit in it would be
+// advising on a schema we just said we do not understand.
 func copilotRefusalReason(data []byte) string {
-	states, ok := copilotScan(data)
+	facts, ok := copilotScan(data)
 	if !ok {
 		return "it exists and is not readable as a Copilot hooks file (Director rewrites this file whole, so it will not touch one it cannot parse)"
 	}
+	if !facts.versionMatches() {
+		found := "no numeric \"version\" field"
+		if facts.versionKnown {
+			found = fmt.Sprintf("\"version\": %d", facts.version)
+		}
+		return fmt.Sprintf("it declares %s, not the version %d Director writes — this verb rewrites the file whole, so it will not touch a schema it cannot vouch for (upgrade Director if Copilot's format has moved on)", found, copilotHooksVersion)
+	}
 	var owned, foreign []string
-	for event, s := range states {
+	for event, s := range facts.events {
 		if s.owned {
 			owned = append(owned, event)
 		}
@@ -392,24 +443,49 @@ func copilotRefusalReason(data []byte) string {
 	return fmt.Sprintf("it exists and is not a Director-managed Copilot hooks file (every command in one carries the %s tag)", copilotAgentMarker)
 }
 
+// CopilotVersionMismatch reports the version a hooks file declares when it is
+// NOT the one Director writes, as the raw text of the field (or "" when the
+// field is absent). It exists so doctor can explain a refusal the same way it
+// explains a foreign command: the file is live and firing, the row would
+// otherwise read healthy, and the user would meet the refusal with no idea why.
+func CopilotVersionMismatch(path string) (found string, mismatch bool) {
+	facts, ok := copilotScanFile(path)
+	if !ok || facts.versionMatches() {
+		return "", false
+	}
+	if !facts.versionKnown {
+		return "", true
+	}
+	return strconv.Itoa(facts.version), true
+}
+
 // copilotScanFile is copilotScan against a file; an unreadable file reads as a
 // failed scan, the same direction as a parse failure.
-func copilotScanFile(path string) (map[string]copilotEventState, bool) {
+func copilotScanFile(path string) (copilotFileFacts, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, false
+		return copilotFileFacts{}, false
 	}
 	return copilotScan(data)
 }
 
-// copilotScan classifies every event key in a hooks file. It is the ONE walk
-// behind every Copilot predicate, so ownership, liveness, completeness, and the
-// tag check can never disagree about what a given entry is. ok is false when the
-// bytes are not JSON of the expected shape.
-func copilotScan(data []byte) (map[string]copilotEventState, bool) {
+// copilotScan reads the schema version and classifies every event key in a hooks
+// file. It is the ONE walk behind every Copilot predicate, so ownership,
+// liveness, completeness, and the tag check can never disagree about what a
+// given file holds. ok is false when the bytes are not JSON of the expected
+// shape; an unreadable VERSION is not such a case — it degrades to
+// versionKnown=false, which only the ownership predicate acts on.
+func copilotScan(data []byte) (copilotFileFacts, bool) {
 	var probe copilotHooksProbe
 	if err := json.Unmarshal(data, &probe); err != nil {
-		return nil, false
+		return copilotFileFacts{}, false
+	}
+	facts := copilotFileFacts{}
+	if len(probe.Version) > 0 {
+		var v int
+		if err := json.Unmarshal(probe.Version, &v); err == nil {
+			facts.version, facts.versionKnown = v, true
+		}
 	}
 	// An unresolvable hooks dir degrades to the tag-only reading rather than
 	// matching a bare relative name, exactly as directorCommands does.
@@ -417,7 +493,7 @@ func copilotScan(data []byte) (map[string]copilotEventState, bool) {
 	if hooksDir, err := DefaultHooksDir(); err == nil {
 		commands = copilotShimCommands(hooksDir)
 	}
-	states := make(map[string]copilotEventState, len(probe.Hooks))
+	facts.events = make(map[string]copilotEventState, len(probe.Hooks))
 	for event, entries := range probe.Hooks {
 		s := copilotEventState{tagged: true} // vacuous until a Director command says otherwise
 		for _, e := range entries {
@@ -430,9 +506,9 @@ func copilotScan(data []byte) (map[string]copilotEventState, bool) {
 				s.tagged = false
 			}
 		}
-		states[event] = s
+		facts.events[event] = s
 	}
-	return states, true
+	return facts, true
 }
 
 // copilotOwnedEntry reports whether one decoded entry is Director's. Three

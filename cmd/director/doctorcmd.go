@@ -355,6 +355,8 @@ func codexHooksCheck(in doctorInputs) (check, bool) {
 //   - foreign commands: someone else's command shares our file. Nothing of ours
 //     stops working, so this is a warning — but install/uninstall refuse a file
 //     they do not fully own, and this is the check that explains that refusal.
+//   - unexpected schema version: same warning shape, same reason. The file still
+//     fires; the two verbs refuse a document shape they cannot vouch for.
 //
 // The bool is false when there is nothing to report.
 func copilotHooksCheck(in doctorInputs) (check, bool) {
@@ -379,6 +381,18 @@ func copilotHooksCheck(in doctorInputs) (check, bool) {
 		return check{"copilot hooks", levelWarn, fmt.Sprintf(
 			"wired in %s, but it also carries commands Director does not own (under %s) — coordination fires normally; `director install --copilot` and `uninstall --copilot` refuse a file they do not fully own, so move those to another *.json in the same directory (Copilot loads them all) to restore both verbs.",
 			in.copilotHooks, strings.Join(foreign, ", "))}, true
+	}
+	// Same shape, same reason as the foreign-command state: the hooks fire, so
+	// nothing is broken, but both verbs refuse a schema they cannot vouch for, and
+	// meeting that refusal with a ✓ from doctor is the contradiction worth a line.
+	if found, mismatch := install.CopilotVersionMismatch(in.copilotHooks); mismatch {
+		declared := "no numeric \"version\" field"
+		if found != "" {
+			declared = "\"version\": " + found
+		}
+		return check{"copilot hooks", levelWarn, fmt.Sprintf(
+			"wired in %s and firing, but it declares %s rather than the one Director writes — `director install --copilot` and `uninstall --copilot` refuse a schema they cannot vouch for. Upgrade Director if Copilot's hooks format has moved on; the hooks keep working meanwhile.",
+			in.copilotHooks, declared)}, true
 	}
 	return check{"copilot hooks", levelOK, fmt.Sprintf("wired in %s", in.copilotHooks)}, true
 }

@@ -1129,3 +1129,38 @@ func detailOf(t *testing.T, rep doctorReport, title string) string {
 	t.Fatalf("no check titled %q in %+v", title, rep.checks)
 	return ""
 }
+
+// TestDoctorCopilotVersionMismatchWarns: a file declaring a schema Director does
+// not write still fires, so the row must not fail — but it must not read as a
+// plain ✓ either, or the user meets the install/uninstall refusal with nothing
+// to explain it.
+func TestDoctorCopilotVersionMismatchWarns(t *testing.T) {
+	in, hooksPath := copilotFixture(t)
+	b, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatal(err)
+	}
+	raw["version"] = 2
+	out, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hooksPath, out, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rep := diagnose(in)
+	if lv := levelOf(t, rep, "copilot hooks"); lv != levelWarn {
+		t.Errorf("version-drifted copilot file: got %v, want warn (%+v)", lv, rep.checks)
+	}
+	if !rep.healthy {
+		t.Error("the hooks still fire, so a version drift must not sink the verdict")
+	}
+	if d := detailOf(t, rep, "copilot hooks"); !strings.Contains(d, "version") {
+		t.Errorf("the warning should name the declared version: %s", d)
+	}
+}
