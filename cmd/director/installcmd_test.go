@@ -20,11 +20,11 @@ func TestInstallTargetFlagsResolveFailureDropsOnlyThatTarget(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("DIRECTOR_SETTINGS_PATH", filepath.Join(dir, "settings.json"))
 	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", filepath.Join(dir, "director.js"))
-	t.Setenv("HOME", "") // codex has no override left to resolve through
+	t.Setenv("HOME", "") // codex and copilot have no override left to resolve through
 
 	targets, code := installTargetFlags("install", []string{"--all"})
 	if code != 1 {
-		t.Errorf("--all with unresolvable codex default: code = %d, want 1", code)
+		t.Errorf("--all with unresolvable codex/copilot defaults: code = %d, want 1", code)
 	}
 	var got []string
 	for _, tg := range targets {
@@ -46,9 +46,11 @@ func TestInstallAllRoundTrip(t *testing.T) {
 	settings := filepath.Join(dir, "settings.json")
 	codexHooks := filepath.Join(dir, "hooks.json")
 	plugin := filepath.Join(dir, "plugin", "director.js")
+	copilotHooks := filepath.Join(dir, "copilot", "director.json")
 	t.Setenv("DIRECTOR_SETTINGS_PATH", settings)
 	t.Setenv("DIRECTOR_CODEX_HOOKS_PATH", codexHooks)
 	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", plugin)
+	t.Setenv("DIRECTOR_COPILOT_HOOKS_PATH", copilotHooks)
 	t.Setenv("DIRECTOR_HOOKS_DIR", filepath.Join(dir, "shims"))
 	t.Setenv("DIRECTOR_COMMANDS_DIR", filepath.Join(dir, "commands"))
 	t.Setenv("DIRECTOR_CODEX_SKILLS_DIR", filepath.Join(dir, "skills"))
@@ -57,7 +59,7 @@ func TestInstallAllRoundTrip(t *testing.T) {
 	if code := runInstall([]string{"--all"}); code != 0 {
 		t.Fatalf("install --all: exit = %d, want 0", code)
 	}
-	for _, p := range []string{settings, codexHooks, plugin} {
+	for _, p := range []string{settings, codexHooks, plugin, copilotHooks} {
 		if _, err := os.Stat(p); err != nil {
 			t.Errorf("install --all did not write %s: %v", p, err)
 		}
@@ -66,8 +68,11 @@ func TestInstallAllRoundTrip(t *testing.T) {
 	if code := runUninstall([]string{"--all"}); code != 0 {
 		t.Fatalf("uninstall --all: exit = %d, want 0", code)
 	}
-	if _, err := os.Stat(plugin); !os.IsNotExist(err) {
-		t.Errorf("uninstall --all left the plugin at %s", plugin)
+	// The OpenCode and Copilot forms remove their managed files outright.
+	for _, p := range []string{plugin, copilotHooks} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("uninstall --all left the managed file at %s (err=%v)", p, err)
+		}
 	}
 	// The claude/codex forms strip tagged entries from files that remain —
 	// assert the tag is actually gone, not just that the verb exited 0.
@@ -84,14 +89,15 @@ func TestInstallAllRoundTrip(t *testing.T) {
 
 // TestInstallTargetFlagsAdditive: the target flags mirror the curl|sh
 // installer's wire flags — the first explicit flag replaces the Claude Code
-// default, later ones add, --all names all three, and the resolved order is
-// fixed claude → codex → opencode. Default paths are redirected via the
-// documented env overrides so no real config is touched.
+// default, later ones add, --all names all four, and the resolved order is
+// fixed claude → codex → opencode → copilot. Default paths are redirected via
+// the documented env overrides so no real config is touched.
 func TestInstallTargetFlagsAdditive(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("DIRECTOR_SETTINGS_PATH", filepath.Join(dir, "settings.json"))
 	t.Setenv("DIRECTOR_CODEX_HOOKS_PATH", filepath.Join(dir, "hooks.json"))
 	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", filepath.Join(dir, "director.js"))
+	t.Setenv("DIRECTOR_COPILOT_HOOKS_PATH", filepath.Join(dir, "copilot", "director.json"))
 
 	cases := []struct {
 		args []string
@@ -101,10 +107,12 @@ func TestInstallTargetFlagsAdditive(t *testing.T) {
 		{[]string{"--claude"}, []string{"claude"}},
 		{[]string{"--codex"}, []string{"codex"}},
 		{[]string{"--opencode"}, []string{"opencode"}},
+		{[]string{"--copilot"}, []string{"copilot"}},
 		{[]string{"--codex", "--opencode"}, []string{"codex", "opencode"}},
 		{[]string{"--opencode", "--claude"}, []string{"claude", "opencode"}},
-		{[]string{"--all"}, []string{"claude", "codex", "opencode"}},
-		{[]string{"--all", "--codex"}, []string{"claude", "codex", "opencode"}},
+		{[]string{"--copilot", "--codex"}, []string{"codex", "copilot"}},
+		{[]string{"--all"}, []string{"claude", "codex", "opencode", "copilot"}},
+		{[]string{"--all", "--codex"}, []string{"claude", "codex", "opencode", "copilot"}},
 	}
 	for _, c := range cases {
 		targets, code := installTargetFlags("install", c.args)
@@ -159,9 +167,11 @@ func TestInstallAllPartialFailure(t *testing.T) {
 	if err := os.WriteFile(blocker, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	copilotHooks := filepath.Join(dir, "copilot", "director.json")
 	t.Setenv("DIRECTOR_SETTINGS_PATH", settings)
 	t.Setenv("DIRECTOR_CODEX_HOOKS_PATH", filepath.Join(blocker, "hooks.json"))
 	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", plugin)
+	t.Setenv("DIRECTOR_COPILOT_HOOKS_PATH", copilotHooks)
 	t.Setenv("DIRECTOR_HOOKS_DIR", filepath.Join(dir, "shims"))
 	t.Setenv("DIRECTOR_COMMANDS_DIR", filepath.Join(dir, "commands"))
 	t.Setenv("DIRECTOR_CODEX_SKILLS_DIR", filepath.Join(dir, "skills"))
@@ -170,7 +180,7 @@ func TestInstallAllPartialFailure(t *testing.T) {
 	if code := runInstall([]string{"--all"}); code != 1 {
 		t.Fatalf("install --all with a failing target: exit = %d, want 1", code)
 	}
-	for _, p := range []string{settings, plugin} {
+	for _, p := range []string{settings, plugin, copilotHooks} {
 		if _, err := os.Stat(p); err != nil {
 			t.Errorf("failing codex target must not block %s: %v", p, err)
 		}
@@ -224,6 +234,15 @@ func TestInstallRefusesNativeWindows(t *testing.T) {
 	}
 	if _, err := os.Stat(hooks); !os.IsNotExist(err) {
 		t.Fatal("refused codex install must not write the hooks file")
+	}
+
+	// Copilot rides the same bash shims, so it joins the same refusal.
+	copilotHooks := filepath.Join(t.TempDir(), "director.json")
+	if code := runInstall([]string{"--copilot", "--settings", copilotHooks}); code != 1 {
+		t.Fatalf("copilot install on native windows: exit = %d, want 1", code)
+	}
+	if _, err := os.Stat(copilotHooks); !os.IsNotExist(err) {
+		t.Fatal("refused copilot install must not write the hooks file")
 	}
 
 	// Uninstall of a never-installed target is a clean no-op even on Windows.

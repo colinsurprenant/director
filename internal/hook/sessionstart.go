@@ -90,13 +90,16 @@ func handleSessionStart(in Input, out io.Writer, hub string) error {
 		}
 	}
 
-	ctx, err := buildGroundTruth(hub, ws.RepoKey, ws.ID, in.SessionID, sessionUUID(in), agentFlavor(in))
+	// One resolution for both uses: the flavor picks the command namespace INSIDE
+	// the block and the wire shape the block travels in.
+	flavor := agentFlavor(in)
+	ctx, err := buildGroundTruth(hub, ws.RepoKey, ws.ID, in.SessionID, sessionUUID(in), flavor)
 	if err != nil {
 		logFailure(hub, EventSessionStart, in.SessionID, fmt.Sprintf("build ground truth: %v", err))
 		return nil
 	}
 
-	if err := writeSessionStartContext(out, ctx); err != nil {
+	if err := writeSessionStartContext(out, ctx, flavor); err != nil {
 		return fmt.Errorf("write session-start context: %w", err)
 	}
 
@@ -325,15 +328,31 @@ func isCodexTranscript(path string) bool {
 	return strings.Contains(filepath.ToSlash(path), "/.codex/")
 }
 
-// agentFlavor resolves which agent's command namespace the injected
-// protocol/nudge blocks should use. An adapter that fabricates its own payloads
-// (the OpenCode plugin) names itself in the `agent` field; otherwise Codex is
-// detected from the transcript path and everything else reads as Claude Code —
-// the same best-effort stance as isCodexTranscript (a wrong guess costs only a
-// command name the human can map, never state).
+// hookAgentEnv is the flavor channel for a harness whose payload carries no
+// usable fingerprint. Copilot is that case: its SessionStart payload has NO
+// transcript_path at all (verified live on copilot 1.0.80), so
+// isCodexTranscript-style detection has nothing to read — and the flavor is not
+// cosmetic there, since Copilot needs a different OUTPUT shape (see
+// writeSessionStartContext). The Copilot hooks file therefore states it
+// outright: every command string it registers is prefixed
+// DIRECTOR_HOOK_AGENT=copilot, which the shim's exec passes into this process
+// (see internal/install/copilot.go).
+const hookAgentEnv = "DIRECTOR_HOOK_AGENT"
+
+// agentFlavor resolves which agent this hook is running under — the namespace
+// for the injected protocol/nudge blocks AND the output dialect. Priority: an
+// adapter that fabricates its own payloads (the OpenCode plugin) names itself in
+// the `agent` field; then the DIRECTOR_HOOK_AGENT env channel the install writes
+// into the command string; then Codex, detected from the transcript path; and
+// everything else reads as Claude Code — the same best-effort stance as
+// isCodexTranscript (a wrong guess on the namespace costs only a command name
+// the human can map, never state).
 func agentFlavor(in Input) string {
 	if in.Agent != "" {
 		return in.Agent
+	}
+	if v := strings.TrimSpace(os.Getenv(hookAgentEnv)); v != "" {
+		return v
 	}
 	if isCodexTranscript(in.TranscriptPath) {
 		return "codex"
@@ -342,14 +361,15 @@ func agentFlavor(in Input) string {
 }
 
 // commandNamesFor rewrites CC-namespaced command references
-// (/director:complete) to the starting agent's namespace: Codex skill mentions
-// ($director-complete — the boundary commands install as agent skills there)
-// or OpenCode's flat custom commands (/director-complete). Applied ONLY to the
-// protocol and nudge blocks Director authors — never to the digest, which must
-// stay byte-for-byte the render output.
+// (/director:complete) to the starting agent's namespace: skill mentions
+// ($director-complete — the boundary commands install as agent skills on both
+// Codex and Copilot, which share the same ~/.agents/skills dir and list them
+// under those names) or OpenCode's flat custom commands (/director-complete).
+// Applied ONLY to the protocol and nudge blocks Director authors — never to the
+// digest, which must stay byte-for-byte the render output.
 func commandNamesFor(s, flavor string) string {
 	switch flavor {
-	case "codex":
+	case "codex", "copilot":
 		return strings.ReplaceAll(s, "/director:", "$director-")
 	case "opencode":
 		return strings.ReplaceAll(s, "/director:", "/director-")

@@ -8,8 +8,8 @@
 // file to clobber and no merge machinery at all.
 //
 // The plugin's binary fallback tier probes the same install symlink the shims
-// probe, so InstallOpenCode provisions it too and the uninstall reclaim gates
-// on all three agents (see UninstallOpenCode).
+// probe, so InstallOpenCode provisions it too and the uninstall reclaim gates on
+// every other agent's install (see UninstallOpenCode).
 package install
 
 import (
@@ -134,7 +134,7 @@ func InstallOpenCode(pluginPath string) error {
 // UninstallOpenCode removes the managed plugin file and the Director-owned
 // command files. The plugin is removed ONLY when it carries the managed marker —
 // a foreign director.js is never touched. The bin symlink is reclaimed only
-// when neither a CC nor a Codex install still references it (their shims probe
+// when no CC, Codex, or Copilot install still references it (their shims probe
 // the same path); the shims themselves are never touched here — OpenCode never
 // wrote them.
 func UninstallOpenCode(pluginPath string) error {
@@ -158,7 +158,7 @@ func UninstallOpenCode(pluginPath string) error {
 	if commandsDir, err := DefaultOpenCodeCommandsDir(); err == nil {
 		removeOpenCodeCommands(commandsDir)
 	}
-	if !claudeInstallPresent() && !codexInstallPresent() {
+	if !claudeInstallPresent() && !codexInstallPresent() && !copilotInstallPresent() {
 		if hooksDir, err := DefaultHooksDir(); err == nil {
 			removeBinSymlink(hooksDir)
 		}

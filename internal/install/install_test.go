@@ -52,6 +52,7 @@ func writeFixture(t *testing.T, contents string) (path, hooksDir string) {
 	t.Setenv(codexSkillsDirEnv, filepath.Join(t.TempDir(), "skills"))
 	t.Setenv(opencodePluginPathEnv, filepath.Join(t.TempDir(), "director.js"))
 	t.Setenv(opencodeCommandsDirEnv, filepath.Join(t.TempDir(), "oc-command"))
+	t.Setenv(copilotHooksPathEnv, filepath.Join(t.TempDir(), "copilot", "director.json"))
 	// Clear DIRECTOR_HUB so the sandbox grant Install writes is the default
 	// `~/.director` literal regardless of the developer's shell (this repo
 	// dogfoods itself by exporting DIRECTOR_HUB, which would otherwise leak into

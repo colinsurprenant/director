@@ -162,6 +162,13 @@ func markFleetDone(in Input, event, hub string) {
 // trouble reading or parsing the transcript yields (false, "") — allow the stop.
 // A guard that can't read confidently must not block (§13 t5 spirit: never trap
 // a session on our own uncertainty).
+//
+// That fail-open is also what makes the guard INERT (not wrong) on Copilot. Its
+// Stop payload does carry a transcript_path, but it points at Copilot's own
+// ~/.copilot/session-state/<uuid>/events.jsonl, which is NOT the CC transcript
+// format (verified live on copilot 1.0.80): lastAssistantTurn finds no assistant
+// text there and the stop is allowed. Deliberate for v1 — the rest of the Stop
+// handler (per-turn fleet-row archiving) still does its work.
 func emitGuardVerdict(transcriptPath string) (block bool, reason string) {
 	if strings.TrimSpace(transcriptPath) == "" {
 		return false, ""

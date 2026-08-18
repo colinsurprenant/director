@@ -17,8 +17,8 @@ var installGOOS = runtime.GOOS
 // agent's hooks file (idempotent; never touches other plugins' hooks — §5.4) AND
 // materializes the embedded shims + boundary commands, so install is
 // self-contained with no manual copy step. Default target is Claude Code
-// (settings.json); --claude/--codex/--opencode name targets additively and
-// --all names all three, mirroring the curl|sh installer's wire flags. Each
+// (settings.json); --claude/--codex/--opencode/--copilot name targets additively
+// and --all names all four, mirroring the curl|sh installer's wire flags. Each
 // target installs independently: a failure is reported and the rest proceed,
 // with a non-zero exit if any failed.
 func runInstall(args []string) int {
@@ -27,11 +27,14 @@ func runInstall(args []string) int {
 		return code
 	}
 
-	// The shims install writes are bash scripts, which neither Claude Code nor
-	// Codex can execute on native Windows — installing would plant hooks that
-	// can never fire (or worse, pop an editor at session start). The OpenCode
-	// plugin is JS (no shims), but its fallback tier is the unix-only install
-	// symlink, so that target is refused too until the Windows story exists.
+	// The shims install writes are bash scripts, which none of Claude Code,
+	// Codex, or Copilot can execute on native Windows — installing would plant
+	// hooks that can never fire (or worse, pop an editor at session start).
+	// Copilot's hooks file does have a `powershell` sibling field for its command
+	// entries, but Director does not write one: the shim indirection is bash, so
+	// the target is refused here with the rest. The OpenCode plugin is JS (no
+	// shims), but its fallback tier is the unix-only install symlink, so that
+	// target is refused too until the Windows story exists.
 	// Refuse before touching anything; the guard sits after flag parsing so
 	// --help still works. Uninstall stays available as a cleanup path.
 	if installGOOS == "windows" {
@@ -68,6 +71,26 @@ func installOne(target, path string) int {
 			fmt.Printf("  commands written to %s (%s; set DIRECTOR_OPENCODE_COMMANDS_DIR to override)\n", commandsDir, install.OpenCodeCommandNames())
 		}
 		printBinLine()
+		return 0
+	}
+
+	if target == "copilot" {
+		if err := install.InstallCopilot(path); err != nil {
+			fmt.Fprintf(os.Stderr, "install: %v\n", err)
+			return 1
+		}
+		fmt.Printf("installed Director hooks into %s (set DIRECTOR_COPILOT_HOOKS_PATH to override)\n", path)
+		if hooksDir, err := install.DefaultHooksDir(); err == nil {
+			fmt.Printf("  shims written to %s (shared with a Claude Code or Codex install; set DIRECTOR_HOOKS_DIR to override)\n", hooksDir)
+		}
+		if skillsDir, err := install.DefaultCodexSkillsDir(); err == nil {
+			fmt.Printf("  skills written to %s ($director-adopt, $director-complete, $director-handoff; shared with a Codex install; set DIRECTOR_CODEX_SKILLS_DIR to override)\n", skillsDir)
+		}
+		printBinLine()
+		// The contrast with the Codex line above is the point: Copilot loads every
+		// file in its hooks dir as-is, so there is no trust prompt to answer and
+		// nothing to dismiss by accident.
+		fmt.Println("  Copilot picks the file up on its own — the hooks fire at your next Copilot session, with no trust prompt to answer.")
 		return 0
 	}
 
@@ -143,10 +166,10 @@ func printBinLine() {
 
 // runUninstall removes only Director's tagged hook entries, leaving hand-rolled
 // and other-plugin (GSD) hooks intact (§5.4), plus the Director-owned shims
-// (CC) or skill directories (--codex). The shared shims survive either uninstall
-// form only while the OTHER agent's install still references them; once neither
-// does, they are reclaimed. Targets combine like install's: --all or several
-// flags uninstall each in turn.
+// (CC) or skill directories (--codex/--copilot). The shared shims survive an
+// uninstall form only while ANOTHER agent's install still references them; once
+// none does, they are reclaimed. Targets combine like install's: --all or
+// several flags uninstall each in turn.
 func runUninstall(args []string) int {
 	targets, code := installTargetFlags("uninstall", args)
 	if len(targets) == 0 {
@@ -168,6 +191,8 @@ func uninstallOne(target, path string) int {
 		err = install.UninstallOpenCode(path)
 	case "codex":
 		err = install.UninstallCodex(path)
+	case "copilot":
+		err = install.UninstallCopilot(path)
 	default:
 		err = install.Uninstall(path)
 	}
@@ -175,18 +200,22 @@ func uninstallOne(target, path string) int {
 		fmt.Fprintf(os.Stderr, "uninstall: %v\n", err)
 		return 1
 	}
-	// The CC/Codex forms strip tagged entries FROM the target file; the OpenCode
-	// form removes the managed files themselves — say what actually happened.
-	if target == "opencode" {
+	// The CC/Codex forms strip tagged entries FROM the target file; the
+	// OpenCode/Copilot forms remove the managed files themselves — say what
+	// actually happened.
+	switch target {
+	case "opencode":
 		fmt.Printf("removed Director plugin %s and its /director-* commands\n", path)
-	} else {
+	case "copilot":
+		fmt.Printf("removed Director hooks file %s\n", path)
+	default:
 		fmt.Printf("removed Director hooks from %s\n", path)
 	}
 	return 0
 }
 
 // installTarget is one resolved wire target: its agent name ("claude",
-// "codex", or "opencode") and the file the verb operates on.
+// "codex", "opencode", or "copilot") and the file the verb operates on.
 type installTarget struct {
 	name string
 	path string
@@ -194,37 +223,39 @@ type installTarget struct {
 
 // installTargetFlags parses the shared install/uninstall flags. The target
 // flags mirror the curl|sh installer's wire flags and are additive: naming any
-// of --claude/--codex/--opencode selects exactly the named set, --all selects
-// all three, and no target flag defaults to Claude Code. --settings overrides
-// the target file and is therefore single-target only. Parse/usage errors
-// return (nil, 2). A default path that fails to resolve drops only ITS target
-// and sets code 1 — the rest still come back, so one unresolvable default
+// of --claude/--codex/--opencode/--copilot selects exactly the named set, --all
+// selects all four, and no target flag defaults to Claude Code. --settings
+// overrides the target file and is therefore single-target only. Parse/usage
+// errors return (nil, 2). A default path that fails to resolve drops only ITS
+// target and sets code 1 — the rest still come back, so one unresolvable default
 // (e.g. HOME unset with partial DIRECTOR_* overrides) cannot block viable
 // targets; callers must fold the returned code into their exit. Targets come
-// back in fixed claude → codex → opencode order for deterministic output.
+// back in fixed claude → codex → opencode → copilot order for deterministic
+// output.
 func installTargetFlags(name string, args []string) (targets []installTarget, code int) {
-	var claude, codex, opencode, all bool
+	var claude, codex, opencode, copilot, all bool
 	var path string
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	fs.StringVar(&path, "settings", "", "target file, single target only (default: ~/.claude/settings.json, ~/.codex/hooks.json with --codex, or the plugin file with --opencode)")
+	fs.StringVar(&path, "settings", "", "target file, single target only (default: ~/.claude/settings.json, ~/.codex/hooks.json with --codex, the plugin file with --opencode, or ~/.copilot/hooks/director.json with --copilot)")
 	fs.BoolVar(&claude, "claude", false, "target Claude Code (the default when no target flag is given)")
 	fs.BoolVar(&codex, "codex", false, "target Codex (hooks.json + $director-* agent skills)")
 	fs.BoolVar(&opencode, "opencode", false, "target OpenCode (managed plugin + /director-* custom commands)")
-	fs.BoolVar(&all, "all", false, "target all three agents (target flags combine: --codex --opencode targets exactly those two)")
+	fs.BoolVar(&copilot, "copilot", false, "target GitHub Copilot CLI (managed hooks file + $director-* agent skills)")
+	fs.BoolVar(&all, "all", false, "target all four agents (target flags combine: --codex --opencode targets exactly those two)")
 	if err := fs.Parse(args); err != nil {
 		return nil, 2
 	}
 	if all {
-		claude, codex, opencode = true, true, true
+		claude, codex, opencode, copilot = true, true, true, true
 	}
-	if !claude && !codex && !opencode {
+	if !claude && !codex && !opencode && !copilot {
 		claude = true
 	}
 	var names []string
 	for _, t := range []struct {
 		on   bool
 		name string
-	}{{claude, "claude"}, {codex, "codex"}, {opencode, "opencode"}} {
+	}{{claude, "claude"}, {codex, "codex"}, {opencode, "opencode"}, {copilot, "copilot"}} {
 		if t.on {
 			names = append(names, t.name)
 		}
@@ -242,6 +273,8 @@ func installTargetFlags(name string, args []string) (targets []installTarget, co
 				p, err = install.DefaultCodexHooksPath()
 			case "opencode":
 				p, err = install.DefaultOpenCodePluginPath()
+			case "copilot":
+				p, err = install.DefaultCopilotHooksPath()
 			default:
 				p, err = install.DefaultSettingsPath()
 			}

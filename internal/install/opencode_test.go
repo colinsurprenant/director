@@ -17,8 +17,8 @@ import (
 
 // setupOpenCode isolates every default the OpenCode install/uninstall paths
 // resolve — its own plugin/commands targets plus the shared hooks dir and the
-// CC/Codex probes (which UninstallOpenCode consults for the symlink reclaim) —
-// so no test ever reads or writes the developer's real config.
+// CC/Codex/Copilot probes (which UninstallOpenCode consults for the symlink
+// reclaim) — so no test ever reads or writes the developer's real config.
 func setupOpenCode(t *testing.T) (pluginPath, commandsDir, hooksDir string) {
 	t.Helper()
 	hooksDir = filepath.Join(t.TempDir(), "hooks")
@@ -27,6 +27,7 @@ func setupOpenCode(t *testing.T) (pluginPath, commandsDir, hooksDir string) {
 	t.Setenv(commandsDirEnv, filepath.Join(t.TempDir(), "commands"))
 	t.Setenv(codexHooksPathEnv, filepath.Join(t.TempDir(), "codex-hooks.json"))
 	t.Setenv(codexSkillsDirEnv, filepath.Join(t.TempDir(), "skills"))
+	t.Setenv(copilotHooksPathEnv, filepath.Join(t.TempDir(), "copilot", "director.json"))
 	pluginPath = filepath.Join(t.TempDir(), "plugin", "director.js")
 	t.Setenv(opencodePluginPathEnv, pluginPath)
 	commandsDir = filepath.Join(t.TempDir(), "oc-command")

@@ -1,10 +1,13 @@
 // Package hook is the thin adapter between the Claude Code hook contract and
-// Director's coordination core (§5.4, §15.7). ALL knowledge of CC's hook wire
+// Director's coordination core (§5.4, §15.7). ALL knowledge of the hook wire
 // shape — the stdin JSON fields, the stdout control protocol, the exit-code
-// semantics — is isolated here so a CC contract change is a one-file edit
-// (§15.7). The handlers (sessionstart/posttooluse/stop/sessionend) work against
-// the typed Input/control helpers in this file and never touch raw JSON or
-// os.Stdin.
+// semantics — is isolated here so a contract change is a one-file edit (§15.7).
+// That includes the other harnesses' dialects: Codex and the OpenCode plugin
+// speak the CC shapes verbatim, and Copilot differs in exactly one place (a flat
+// additionalContext instead of CC's hookSpecificOutput wrapper — see
+// copilotContextOutput), which is why the context writers take a flavor. The
+// handlers (sessionstart/posttooluse/stop/sessionend) work against the typed
+// Input/control helpers in this file and never touch raw JSON or os.Stdin.
 //
 // The cardinal rule (§13 t5, §5.4): a hook must NEVER block a session on
 // internal failure. Dispatch wraps every handler so a panic or an error is
@@ -133,12 +136,33 @@ type sessionStartOutput struct {
 	} `json:"hookSpecificOutput"`
 }
 
+// copilotContextOutput is Copilot's context shape — the ONE place its wire
+// contract diverges from Claude Code's. Copilot ignores the hookSpecificOutput
+// wrapper entirely and reads a FLAT additionalContext (verified live on copilot
+// 1.0.80: the flat form arrives as a prepended user message, the wrapped form
+// injects nothing at all). It serves both SessionStart and PostToolUse; the
+// event name has no place in the shape, since the flat object carries no
+// hookEventName field.
+//
+// Across several hooks emitting context, the FIRST non-empty additionalContext
+// wins (verified live) — Director owns one hooks file with one command per
+// event, so it never competes with itself.
+type copilotContextOutput struct {
+	AdditionalContext string `json:"additionalContext"`
+}
+
 // writeSessionStartContext writes the SessionStart control JSON that injects ctx
 // as the session's authoritative current state. An empty ctx writes nothing
 // (some sessions have no Ground Truth to inject), keeping the output minimal.
-func writeSessionStartContext(out io.Writer, ctx string) error {
+// flavor selects the wire dialect: "copilot" gets the flat shape, every other
+// agent the CC control envelope (Codex and the OpenCode plugin both consume the
+// CC one).
+func writeSessionStartContext(out io.Writer, ctx, flavor string) error {
 	if ctx == "" {
 		return nil
+	}
+	if flavor == "copilot" {
+		return writeJSON(out, copilotContextOutput{AdditionalContext: ctx})
 	}
 	var o sessionStartOutput
 	o.HookSpecificOutput.HookEventName = "SessionStart"
@@ -158,10 +182,15 @@ type postToolUseOutput struct {
 
 // writePostToolUseContext emits the flush nudge as PostToolUse additionalContext.
 // An empty ctx writes nothing — the common case, since the nudge is gated to fire
-// rarely (see posttooluse.go).
-func writePostToolUseContext(out io.Writer, ctx string) error {
+// rarely (see posttooluse.go). flavor selects the dialect on the same rule as
+// writeSessionStartContext: Copilot reads the flat shape here too, everyone else
+// the CC envelope.
+func writePostToolUseContext(out io.Writer, ctx, flavor string) error {
 	if ctx == "" {
 		return nil
+	}
+	if flavor == "copilot" {
+		return writeJSON(out, copilotContextOutput{AdditionalContext: ctx})
 	}
 	var o postToolUseOutput
 	o.HookSpecificOutput.HookEventName = "PostToolUse"
@@ -172,7 +201,9 @@ func writePostToolUseContext(out io.Writer, ctx string) error {
 // stopBlockOutput is CC's Stop control shape for blocking the stop: decision
 // "block" feeds reason back to the model. This is the ONE intentional non-allow
 // in the whole hook layer (the emit-guard), emitted only on a confident
-// detection by stop.go.
+// detection by stop.go. It needs no flavor branch: Copilot's agentStop contract
+// takes the same {"decision":"block","reason":...} object (it caps runaway
+// blocks at 8 of its own accord), and the Codex/OpenCode paths already speak it.
 type stopBlockOutput struct {
 	Decision string `json:"decision"`
 	Reason   string `json:"reason"`

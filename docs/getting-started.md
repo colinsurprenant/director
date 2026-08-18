@@ -9,8 +9,9 @@ archaeology, so re-entering a parked project picks up exactly where the last blo
 don't operate it: you read the projections (`status`, `brief`) and step in only
 where a human is actually needed.
 
-This guide walks the first run end to end, written in Claude Code terms with the Codex and OpenCode
-differences called out where they exist (see "Using OpenAI Codex?" and "Using OpenCode?" in section 1). Go is only needed for the
+This guide walks the first run end to end, written in Claude Code terms with the Codex, OpenCode, and
+Copilot CLI differences called out where they exist (see "Using OpenAI Codex?", "Using OpenCode?", and
+"Using GitHub Copilot CLI?" in section 1). Go is only needed for the
 `go install` and build-from-source paths. For the full command/flag reference see
 [`../README.md`](../README.md).
 
@@ -26,8 +27,8 @@ curl -fsSL https://raw.githubusercontent.com/colinsurprenant/director/main/insta
 
 One command downloads the right prebuilt binary for your platform (checksum-verified), installs it to
 `~/.local/bin`, and runs `director install` to wire Claude Code (wire Codex instead with
-`… | sh -s -- --codex`, OpenCode with `--opencode`, all three with `--all`; wire flags combine,
-and `… | sh -s -- --no-wire` installs the binary only).
+`… | sh -s -- --codex`, OpenCode with `--opencode`, GitHub Copilot CLI with `--copilot`, all four with
+`--all`; wire flags combine, and `… | sh -s -- --no-wire` installs the binary only).
 **Already ran it?** The binary is in place: run `director doctor` to confirm the wiring, then skip
 to section 2.
 
@@ -92,8 +93,8 @@ director install
 ```
 
 Bare `install` wires Claude Code. The target flags mirror the one-liner's wire flags and combine:
-`--codex`, `--opencode`, `--claude` name targets (`--codex --opencode` wires exactly those two), and
-`--all` wires all three in one run.
+`--codex`, `--opencode`, `--copilot`, `--claude` name targets (`--codex --opencode` wires exactly those
+two), and `--all` wires all four in one run.
 
 ```text
 installed Director hooks into /Users/you/.claude/settings.json (set DIRECTOR_SETTINGS_PATH to override)
@@ -118,8 +119,8 @@ installed Director hooks into /Users/you/.claude/settings.json (set DIRECTOR_SET
   `allowWrite` entries are preserved, and `director uninstall` takes back only Director's.
 
 Verify it took. `director doctor` is the thorough check: it walks the same binary-resolution ladder
-the hooks walk and reports each link (binary, Claude Code hooks, Codex and OpenCode hooks if present, the hub's
-sandbox write grant, hub), so a broken install becomes loud instead of a silent no-op. It exits non-zero when the install is broken,
+the hooks walk and reports each link (binary, Claude Code hooks, Codex, OpenCode, and Copilot CLI hooks if
+present, the hub's sandbox write grant, hub), so a broken install becomes loud instead of a silent no-op. It exits non-zero when the install is broken,
 and warns (without failing) on a partial one, such as a terminal-only install the desktop app would miss.
 
 ```bash
@@ -172,7 +173,7 @@ director status
 director install --codex
 ```
 
-Codex's hook contract mirrors Claude Code's, so the same shims serve both agents. The `--codex` form
+Codex's hook contract mirrors Claude Code's, so the same shims serve every command-hook agent (Claude Code, Codex, Copilot CLI). The `--codex` form
 merges the three hooks into `~/.codex/hooks.json` (never your `config.toml`) and installs the boundary
 commands as **agent skills** under `~/.agents/skills`: invoke them as `$director-adopt`,
 `$director-complete`, `$director-handoff` (or find them in the `/skills` browser). Skills are the
@@ -182,12 +183,13 @@ Codex-specific notes:
 - **Trust the hooks once.** Codex asks you to review and trust the three hook definitions at your next
   session start; until you do, they are silently skipped. If you dismiss or interrupt that prompt (an
   Esc is enough), run `/hooks` inside the session to review and trust them.
-- Ground truth injection, liveness, and close-out work identically on Claude Code and Codex, and
-  equivalently on OpenCode (same injected state, different mechanism: its plugin injects on the first
-  user message because OpenCode has no session-start hook; see "Using OpenCode?" below). The Stop
-  emit-guard and the context-fill handoff nudge are Claude Code-only for now (they read CC's transcript
-  format and stay safely inert on Codex and OpenCode), and so is the `SessionEnd` row reaper: neither
-  agent exposes a session-end event. On Codex the liveness row registers at session start and only a
+- Ground truth injection, liveness, and close-out work identically on Claude Code, Codex, and Copilot
+  CLI, and equivalently on OpenCode (same injected state, different mechanism: its plugin injects on
+  the first user message because OpenCode has no session-start hook; see "Using OpenCode?" below). The
+  Stop emit-guard and the context-fill handoff nudge are Claude Code-only for now (they read CC's
+  transcript format and stay safely inert on Codex, OpenCode, and Copilot CLI), and so is the
+  `SessionEnd` row reaper on Codex and OpenCode: neither exposes a session-end event (Copilot CLI does,
+  and reaps its row like Claude Code). On Codex the liveness row registers at session start and only a
   turn end archives it, so a row still live when the session exits, gracefully or not, ages out by TTL
   instead (OpenCode's case differs slightly; see below).
 - Codex exposes no session id to shell commands, so a hand-run `director done` (including
@@ -195,14 +197,15 @@ Codex-specific notes:
   archives the session's row at turn end, and everything durable was already written. Targeted
   `done --workstream <id>` is unaffected.
 
-The rest of this guide uses the Claude Code command names (`/director:adopt` etc.); on Codex, read each
-as its `$director-*` skill twin, and on OpenCode as its flat `/director-*` custom command: same command,
-same behavior.
+The rest of this guide uses the Claude Code command names (`/director:adopt` etc.); on Codex and Copilot
+CLI, read each as its `$director-*` skill twin, and on OpenCode as its flat `/director-*` custom command:
+same command, same behavior.
 
-`director uninstall --codex` removes only Director's own entries (tagged, or untagged at its shim paths) and the three skill directories. The hook
-shims are shared between the two agents: either uninstall form leaves them in place while the other
-agent's install still references them, and reclaims them once neither does, so uninstalling one agent
-never silently breaks the other, and uninstalling the last one leaves no shim files behind.
+`director uninstall --codex` removes only Director's own entries (tagged, or untagged at its shim paths),
+plus the three skill directories once no Copilot CLI install still needs them. The hook shims are shared
+with the Claude Code and Copilot CLI installs: any uninstall form leaves them in place while another
+agent's install still references them, and reclaims them once none does, so uninstalling one agent
+never silently breaks another, and uninstalling the last one leaves no shim files behind.
 
 ### Using OpenCode?
 
@@ -234,7 +237,40 @@ at `~/.config/opencode/command/`, invoked as `/director-adopt`, `/director-compl
 
 `director uninstall --opencode` removes only the managed plugin (it refuses to touch a
 `director.js` it does not own) and the `/director-*` command files; the shared bin symlink survives
-while a Claude Code or Codex install still references it.
+while a Claude Code, Codex, or Copilot CLI install still references it.
+
+### Using GitHub Copilot CLI?
+
+```bash
+director install --copilot
+```
+
+Copilot CLI speaks Claude Code's hook dialect once the events are registered under their PascalCase
+names, so the same shims serve this path too. The `--copilot` form writes one Director-owned hooks file
+at `~/.copilot/hooks/director.json` (`DIRECTOR_COPILOT_HOOKS_PATH` overrides the path) registering the
+four events, and delivers the boundary commands as the **agent skills** under `~/.agents/skills` that
+the Codex install also writes: `$director-adopt`, `$director-complete`, `$director-handoff`.
+Copilot-specific notes:
+
+- **Nothing to trust, nothing of yours merged.** Copilot loads every JSON file in its hooks directory,
+  so Director owns one file there and no config file of yours is read or rewritten, and there is no
+  trust ceremony (Codex has one): the hooks are live at the next session start. Verified on Copilot CLI
+  1.0.80, in interactive and `-p` (non-interactive) runs alike.
+- **The skills surface is shared with Codex.** Copilot discovers `~/.agents/skills` natively, so
+  installing either target provides the three boundary commands, and uninstalling one spares them while
+  the other remains.
+- The Stop emit-guard and the context-fill handoff nudge read CC's transcript format and stay safely
+  inert on Copilot CLI, whose transcript is a different format. Everything else runs as on Claude Code:
+  session-start injection, the `PostToolUse` heartbeat, end-of-turn bookkeeping, and the `SessionEnd`
+  row reaper, which Copilot CLI does expose (Codex and OpenCode do not), so a session that exits
+  archives its row instead of aging out by TTL.
+- The hooks resolve the `director` binary exactly as the Claude Code path does: `DIRECTOR_BIN`, then
+  `PATH`, then the symlink `install` drops at `<hooks dir>/../bin/director`.
+
+`director uninstall --copilot` removes only the Director-owned hooks file (it refuses to touch a
+`director.json` it does not own), plus the three skill directories once no Codex install still needs
+them; the shared shims survive while a Claude Code or Codex install still references them, and the bin
+symlink while any install (OpenCode included) still probes it.
 
 ---
 
@@ -293,7 +329,7 @@ this is where you steer the fleet.
 
 ## 3. Open an agent session
 
-Just start Claude Code (or Codex, or OpenCode) in the adopted repo as usual. Director's `SessionStart` hook fires automatically and:
+Just start Claude Code (or Codex, or OpenCode, or Copilot CLI) in the adopted repo as usual. Director's `SessionStart` hook fires automatically and:
 
 - registers/refreshes the workstream's liveness row, and
 - injects the **CHARTER + a deterministic digest** of the LOG as the session's *authoritative current
@@ -404,7 +440,7 @@ what `brief` shows and what the next session starts from.
 ## 6. Troubleshooting
 
 Start with **`director doctor`**: it checks the whole install chain (binary resolution, Claude Code,
-Codex, and OpenCode hooks, shims present, the hub's sandbox write grant, hub writable) and names the broken link, exiting non-zero when coordination
+Codex, OpenCode, and Copilot CLI hooks, shims present, the hub's sandbox write grant, hub writable) and names the broken link, exiting non-zero when coordination
 would not fire. The table covers the specifics.
 
 | Symptom | Cause & fix |

@@ -516,12 +516,13 @@ func Uninstall(settingsPath string) error {
 	}
 	// Remove the Director-owned shims too — the inverse of Install's writeShims
 	// (best-effort: only the exact Director filenames, never foreign files) —
-	// UNLESS a Codex install still references them: the shims are shared, and a
-	// CC uninstall must not silently break a coexisting Codex install (the
-	// mirror of UninstallCodex leaving them for CC). The bin symlink is wider
-	// than the shims: the OpenCode plugin's fallback tier probes it too (no
-	// shims involved), so its reclaim additionally gates on that install.
-	if !codexInstallPresent() && hooksErr == nil {
+	// UNLESS a Codex or Copilot install still references them: the shims are
+	// shared by all three command-hook agents, and a CC uninstall must not
+	// silently break a coexisting one (the mirror of UninstallCodex /
+	// UninstallCopilot leaving them for CC). The bin symlink is wider than the
+	// shims: the OpenCode plugin's fallback tier probes it too (no shims
+	// involved), so its reclaim additionally gates on that install.
+	if !codexInstallPresent() && !copilotInstallPresent() && hooksErr == nil {
 		removeShims(hooksDir)
 		if !opencodeInstallPresent() {
 			removeBinSymlink(hooksDir)
@@ -824,19 +825,24 @@ func managedEntryPresent(hooks map[string]any, e managedEntry, hooksDir string) 
 	return false
 }
 
-// ClaudeShims and CodexShims return the shim basenames each target's entry set
-// actually references. The sets differ — Codex exposes no SessionEnd event, so
-// codexEntries never names sessionend.sh — and a verifier must check each target
-// against its OWN set: the full embedded set (ExpectedShims) would fault a
-// Codex-only machine for lacking a shim Codex can never fire. Install still writes
-// every embedded shim on both paths; the hooks dir is shared, so a superset on disk
-// is correct.
+// ClaudeShims, CodexShims and CopilotShims return the shim basenames each
+// target's entry set actually references. The sets differ — Codex exposes no
+// SessionEnd event, so codexEntries never names sessionend.sh, while Copilot
+// does fire one and covers all four like Claude Code — and a verifier must check
+// each target against its OWN set: the full embedded set (ExpectedShims) would
+// fault a Codex-only machine for lacking a shim Codex can never fire. Install
+// still writes every embedded shim on every path; the hooks dir is shared, so a
+// superset on disk is correct.
 func ClaudeShims() []string {
 	return shimsFor(directorEntries)
 }
 
 func CodexShims() []string {
 	return shimsFor(codexEntries)
+}
+
+func CopilotShims() []string {
+	return shimsFor(copilotEntries)
 }
 
 // shimsFor returns the unique shim basenames entries reference, in first-use order.

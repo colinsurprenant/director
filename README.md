@@ -5,7 +5,7 @@
 
 **Save the work, not the chat.**
 
-One shared log across **Claude Code · Codex · OpenCode**: build in one, resume or review in another.
+One shared log across **Claude Code · Codex · OpenCode · Copilot CLI**: build in one, resume or review in another.
 
 [![A Claude Code session records decisions, open items, and handoffs to an append-only log; a Codex session a day later starts with them injected and appends to the same log.](site/hero.svg)](https://colinsurprenant.github.io/director/)
 
@@ -44,7 +44,7 @@ $ codex
 
 **Sessions are disposable. The state of the work isn't.** `/clear` the moment a session degrades. Park a repo, come back whenever. The state of the work lives in the log, not in the chat.
 
-**Concurrent sessions, one ledger.** A builder in Claude Code, a reviewer in Codex or OpenCode, a third session in a parallel worktree: all writing the same log at once, losing nothing (see [One ledger, three harnesses](#one-ledger-three-harnesses)).
+**Concurrent sessions, one ledger.** A builder in Claude Code, a reviewer in Codex, OpenCode, or Copilot CLI, a third session in a parallel worktree: all writing the same log at once, losing nothing (see [One ledger, four harnesses](#one-ledger-four-harnesses)).
 
 Three things it is not:
 
@@ -66,7 +66,7 @@ Install is one line (macOS / Linux / WSL); it wires Claude Code:
 curl -fsSL https://raw.githubusercontent.com/colinsurprenant/director/main/install.sh | sh
 ```
 
-Wire Codex instead with `… | sh -s -- --codex`, OpenCode with `--opencode`, all three with `--all` (flags combine; see [Install](#install)).
+Wire Codex instead with `… | sh -s -- --codex`, OpenCode with `--opencode`, GitHub Copilot CLI with `--copilot`, all four with `--all` (flags combine; see [Install](#install)).
 
 > **Scope:** single-machine for now, single-human by design; multi-machine sync is on the roadmap (see [Status & scope](#status--scope)).
 >
@@ -74,7 +74,7 @@ Wire Codex instead with `… | sh -s -- --codex`, OpenCode with `--opencode`, al
 
 ## How it works
 
-**The session boundary is where the state leaks**: a reset, a compaction, a session ending, a week away, a parallel worktree. Director sits at that boundary and makes the reset free, and you don't operate it: it wires into Claude Code, Codex, and OpenCode through hooks, the session emits as it works, and that state is injected into the next one as ground truth. It moves you out of the **message bus** seat: the ledger carries the state between sessions, and you go back to **directing the work**. Built around a shared, durable, **append-only event log** per repo:
+**The session boundary is where the state leaks**: a reset, a compaction, a session ending, a week away, a parallel worktree. Director sits at that boundary and makes the reset free, and you don't operate it: it wires into Claude Code, Codex, OpenCode, and Copilot CLI through hooks, the session emits as it works, and that state is injected into the next one as ground truth. It moves you out of the **message bus** seat: the ledger carries the state between sessions, and you go back to **directing the work**. Built around a shared, durable, **append-only event log** per repo:
 
 - Sessions **`emit`** typed events as they work (`decision` · `open-item` · `handoff` · `note`) and **`resolve`** open loops when they truly close.
 - The log collapses deterministically into **`render`** (the machine digest), **`brief`** (the human re-orientation view), and **`status`** (the one-line-per-workstream cockpit).
@@ -93,9 +93,9 @@ docs-site-main-9d2e5b71 · dormant · 13d ago · ok
 
 Memory tools answer *"what does the agent know?"* Director answers *"what is the state of the work?"*: what was decided and why, which loops were deliberately deferred, and what still needs *you*. Facts accumulate; loops open and close, and nothing in a memory store ever *closes*. That lifecycle is the difference, and so is the delivery: pushed at session start, not recalled by similarity. Run both: they don't overlap.
 
-The LOG (plus the deliberately-edited living docs) is the only system of record; sessions and every rendered view are disposable caches reconstructible from it. Director wires natively into **Claude Code, OpenAI Codex, and OpenCode**: same log, same boundary commands, any of them alone or side by side. A single static binary, stdlib-first, one vetted build-time dependency (`github.com/oklog/ulid/v2`). No daemon, no database, no cloud, no telemetry: the binary never opens a network connection, and the log is plain NDJSON.
+The LOG (plus the deliberately-edited living docs) is the only system of record; sessions and every rendered view are disposable caches reconstructible from it. Director wires natively into **Claude Code, OpenAI Codex, OpenCode, and GitHub Copilot CLI**: same log, same boundary commands, any of them alone or side by side. A single static binary, stdlib-first, one vetted build-time dependency (`github.com/oklog/ulid/v2`). No daemon, no database, no cloud, no telemetry: the binary never opens a network connection, and the log is plain NDJSON.
 
-## One ledger, three harnesses
+## One ledger, four harnesses
 
 Any number of sessions, in any mix of harnesses, share the same Director log through an append-only writer that loses nothing under concurrency on a local filesystem. Parallel worktrees see each other's decisions instead of clobbering them; a reviewer in another tool lands its verdict in the same log the builder reads. In practice:
 
@@ -103,7 +103,7 @@ Any number of sessions, in any mix of harnesses, share the same Director log thr
 - **Hit a usage limit mid-task? Switch harnesses, not context.** Open another wired agent on the same repo and it starts from the same digest: what was decided, what is open, where you stopped. The wall costs you the tool, not the thread.
 - **The ledger is neutral ground.** The state of the work lives in a plain NDJSON log on your machine, not in any one vendor's session format. Adding, dropping, or mixing agents never strands it.
 
-Wiring is symmetric: `director install --all` (or any combination of `--codex` / `--opencode` with the bare Claude Code default) gives every harness the same boundary commands and the same ground-truth injection at the top of every session. Details per agent are under [Install](#install).
+Wiring is symmetric: `director install --all` (or any combination of `--codex` / `--opencode` / `--copilot` with the bare Claude Code default) gives every harness the same boundary commands and the same ground-truth injection at the top of every session. Details per agent are under [Install](#install).
 
 ## Why Director
 
@@ -124,7 +124,7 @@ One command downloads the right prebuilt binary for your platform (checksum-veri
 curl -fsSL https://raw.githubusercontent.com/colinsurprenant/director/main/install.sh | sh
 ```
 
-Wire Codex instead with `… | sh -s -- --codex`, OpenCode with `--opencode`, all three agents with `--all` (wire flags combine: `--codex --opencode` wires exactly those two); install the binary only with `… | sh -s -- --no-wire`.
+Wire Codex instead with `… | sh -s -- --codex`, OpenCode with `--opencode`, GitHub Copilot CLI with `--copilot`, all four agents with `--all` (wire flags combine: `--codex --opencode` wires exactly those two); install the binary only with `… | sh -s -- --no-wire`.
 
 > **On Windows?** Run the one-liner inside [WSL](https://learn.microsoft.com/windows/wsl/) with the Linux binary: everything works there, hooks included. Native Windows is CLI-only for now: the binary is built and CI-tested, and every manual verb (`emit`, `render`, `status`, `brief`, `show`, `resolve`, …) works from PowerShell, but the hook shims are bash, so the ambient layer (session-start injection, heartbeats, boundary nudges) is not yet wired natively.
 
@@ -137,7 +137,7 @@ go build -o bin/director ./cmd/director
 sudo install bin/director /usr/local/bin/director   # or copy it anywhere on PATH
 ```
 
-Then wire it into your agent. The one-liner already wired Claude Code; the sections below spell out what that does, and how to add Codex and OpenCode. The target flags combine (`--codex --opencode` wires exactly those two) and `director install --all` wires all three in one go.
+Then wire it into your agent. The one-liner already wired Claude Code; the sections below spell out what that does, and how to add Codex, OpenCode, and Copilot CLI. The target flags combine (`--codex --opencode` wires exactly those two) and `director install --all` wires all four in one go.
 
 ### Wire into Claude Code
 
@@ -154,7 +154,7 @@ director install
 
 The installed hook commands point at the **shims**, not the binary directly, so rebuilding or relocating `director` never requires rewriting `settings.json` (re-run `install` to refresh the shims to the current binary). If `~/.claude/settings.json` already has a malformed (non-object) `hooks` value, `install` refuses rather than overwrite it.
 
-Confirm the wiring will actually fire with `director doctor`. The shims fail safe (a missing binary exits 0 and coordination silently no-ops), so a broken install is otherwise invisible; `doctor` walks the same binary-resolution ladder the shims walk and reports each link (binary, Claude Code hooks, Codex and OpenCode hooks if present, the hub's sandbox write grant, hub). It exits non-zero when the install is broken, and warns (without failing) on a partial one, such as a terminal-only install the desktop app would miss:
+Confirm the wiring will actually fire with `director doctor`. The shims fail safe (a missing binary exits 0 and coordination silently no-ops), so a broken install is otherwise invisible; `doctor` walks the same binary-resolution ladder the shims walk and reports each link (binary, Claude Code hooks, Codex, OpenCode, and Copilot CLI hooks if present, the hub's sandbox write grant, hub). It exits non-zero when the install is broken, and warns (without failing) on a partial one, such as a terminal-only install the desktop app would miss:
 
 ```bash
 director doctor
@@ -166,9 +166,9 @@ director doctor
 director install --codex
 ```
 
-Codex's hook contract mirrors Claude Code's, so the **same shims serve both agents**, and neither install needs the other: `--codex` works standalone on a machine that has never run Claude Code. It merges the three hooks into `~/.codex/hooks.json` (never your `config.toml`) and installs the boundary commands as agent skills under `~/.agents/skills`, invoked as `$director-adopt`, `$director-complete`, `$director-handoff`. Codex asks you to **trust** the three hooks at your next session start (if you dismiss that prompt, run `/hooks` in the session). Details, including what degrades on Codex, in [`docs/getting-started.md`](docs/getting-started.md).
+Codex's hook contract mirrors Claude Code's, so the **same shims serve every command-hook agent** (Claude Code, Codex, Copilot CLI), and no install needs another: `--codex` works standalone on a machine that has never run Claude Code. It merges the three hooks into `~/.codex/hooks.json` (never your `config.toml`) and installs the boundary commands as agent skills under `~/.agents/skills`, invoked as `$director-adopt`, `$director-complete`, `$director-handoff`. Codex asks you to **trust** the three hooks at your next session start (if you dismiss that prompt, run `/hooks` in the session). Details, including what degrades on Codex, in [`docs/getting-started.md`](docs/getting-started.md).
 
-Everything below uses the Claude Code command names (`/director:adopt` etc.); on Codex, read each as its `$director-*` skill twin, and on OpenCode as its flat `/director-*` custom command (`/director-adopt`): same command, same behavior.
+Everything below uses the Claude Code command names (`/director:adopt` etc.); on Codex and Copilot CLI, read each as its `$director-*` skill twin, and on OpenCode as its flat `/director-*` custom command (`/director-adopt`): same command, same behavior.
 
 ### Wire into OpenCode
 
@@ -178,9 +178,17 @@ director install --opencode
 
 OpenCode hooks are in-process plugin calls, not command hooks, so instead of shims the `--opencode` form drops **one self-contained managed plugin** at `~/.config/opencode/plugin/director.js` (a pure file drop: OpenCode loads it with no registration, and no config file of yours is ever merged or modified) plus the boundary commands as custom commands at `~/.config/opencode/command/`, invoked as `/director-adopt`, `/director-complete`, `/director-handoff`. Works standalone; nothing else is required. Ground truth injection (first message of each session, re-injected after compaction), liveness, and close-out work as on Claude Code; the Stop emit-guard and the context-fill handoff nudge read CC's transcript format and stay safely inert on OpenCode. Details in [`docs/getting-started.md`](docs/getting-started.md).
 
+### Wire into GitHub Copilot CLI
+
+```bash
+director install --copilot
+```
+
+Copilot CLI speaks Claude Code's hook dialect once the events are registered under their PascalCase names, so the **same shims serve it too**, and it needs no other install: `--copilot` works standalone. It drops **one Director-owned hooks file** at `~/.copilot/hooks/director.json` registering the four events (Copilot loads every JSON file in that directory, so no config file of yours is ever merged or modified, and there is **no trust step**: the hooks are live at the next session start). The boundary commands are the same agent skills the Codex install writes under `~/.agents/skills`, invoked as `$director-adopt`, `$director-complete`, `$director-handoff`, and Copilot discovers that directory natively: installing either target provides them, and uninstalling one spares them while the other remains. Ground truth injection, liveness, and close-out work as on Claude Code, session-end row reaping included; the Stop emit-guard and the context-fill handoff nudge read CC's transcript format and stay safely inert. Details in [`docs/getting-started.md`](docs/getting-started.md).
+
 ### Environment variables
 
-Install paths and runtime knobs, common to both agents unless a default says otherwise:
+Install paths and runtime knobs, common to every agent unless a default says otherwise:
 
 | Variable | Default | Selects |
 |---|---|---|
@@ -191,6 +199,7 @@ Install paths and runtime knobs, common to both agents unless a default says oth
 | `DIRECTOR_CODEX_SKILLS_DIR` | `~/.agents/skills` | where `install --codex` writes the `$director-*` agent skills |
 | `DIRECTOR_OPENCODE_PLUGIN_PATH` | `~/.config/opencode/plugin/director.js` | the managed plugin file `install --opencode` drops |
 | `DIRECTOR_OPENCODE_COMMANDS_DIR` | `~/.config/opencode/command` | where `install --opencode` writes the `/director-*` custom commands |
+| `DIRECTOR_COPILOT_HOOKS_PATH` | `~/.copilot/hooks/director.json` | the Director-owned hooks file `install --copilot` writes (Copilot CLI loads every JSON file in that directory) |
 | `DIRECTOR_HUB` | `~/.director` | the central hub that holds all cross-repo coordination state |
 | `DIRECTOR_BIN` | (PATH) | which `director` binary the shims invoke (defaults to `director` on `PATH`, then the symlink `install` drops next to the shims at `<hooks dir>/../bin/director`, `~/.claude/director/bin/director` by default) |
 | `DIRECTOR_HANDOFF_NUDGE_TOKENS` | (unset) | the context-fill handoff nudge (Claude Code-only for now): an absolute token threshold at which sessions are nudged toward `/director:handoff`; unset or `0` disables it. Fires once per crossing and re-arms only after context falls below half the threshold (a compaction or a context clear) |
@@ -199,19 +208,19 @@ Install paths and runtime knobs, common to both agents unless a default says oth
 
 ## Adopt an existing repo
 
-A director's projects already exist, so adoption of existing repos is on the critical path. It has two layers: **`director adopt` registers; `/director:adopt` understands** (on Codex: `$director-adopt`; on OpenCode: `/director-adopt` — same command, different delivery). From inside (or pointing at) a repo:
+A director's projects already exist, so adoption of existing repos is on the critical path. It has two layers: **`director adopt` registers; `/director:adopt` understands** (on Codex and Copilot CLI: `$director-adopt`; on OpenCode: `/director-adopt` — same command, different delivery). From inside (or pointing at) a repo:
 
 ```bash
 director adopt [<dir>]        # defaults to the current directory
 ```
 
-Working in an agent session, you can skip straight to `/director:adopt` (Claude Code), `$director-adopt` (Codex), or `/director-adopt` (OpenCode): the command runs this registration itself as its first step. The bare CLI verb is what you use outside a session (scripts, a quick shell registration).
+Working in an agent session, you can skip straight to `/director:adopt` (Claude Code), `$director-adopt` (Codex and Copilot CLI), or `/director-adopt` (OpenCode): the command runs this registration itself as its first step. The bare CLI verb is what you use outside a session (scripts, a quick shell registration).
 
 Adoption **requires a git repository**: workstream identity and liveness are derived from git. On a non-git directory `adopt` fails fast and tells you to `git init` first (an empty init is enough).
 
 `adopt` (the register layer) derives the repo's **stable workstream identity** (handling worktrees, remotes, and forks; see [Identity](#identity)), creates `projects/<repo-key>/` in the hub, scaffolds a ~3-line **CHARTER stub** there, and registers the workstream in the fleet. Re-adopting never clobbers an edited CHARTER. That is all the CLI does: deterministic, done in seconds.
 
-The understand layer is **`/director:adopt`** (Claude Code; `$director-adopt` on Codex; `/director-adopt` on OpenCode), installed by the matching `director install` form and run inside an agent session. It starts with the same `director adopt`, then fans out read-only agents over the repo (docs and planning files, code TODOs read *in context*, git state, the repo's self-descriptions) and brings back two things for your confirmation:
+The understand layer is **`/director:adopt`** (Claude Code; `$director-adopt` on Codex and Copilot CLI; `/director-adopt` on OpenCode), installed by the matching `director install` form and run inside an agent session. It starts with the same `director adopt`, then fans out read-only agents over the repo (docs and planning files, code TODOs read *in context*, git state, the repo's self-descriptions) and brings back two things for your confirmation:
 
 - a **CHARTER proposal** (goal, non-goals, risk line): every claim cited, inferences marked `(inferred)`, plus the short list of questions only you can answer. Approved, it replaces the stub; adoption starts from an informed draft instead of a blank template.
 - the repo's open loops, **triaged** into four buckets: genuinely **in-flight** work (imported as `open-item` events after your confirm; git state must corroborate the prose, which keeps this bucket naturally small), **backlog** (stays in the repo's own tracker and planning docs; Director is not the tracker), **doc-stamps** (facts wearing a TODO costume; they feed the CHARTER), and **fossils**. Every bucket's count is reported; nothing is imported silently.
@@ -246,9 +255,10 @@ adoption & install:
   install     idempotent merge of Director hooks into settings.json
               (--codex: Codex's hooks.json + $director-* agent skills;
                --opencode: managed plugin + /director-* custom commands;
-               targets combine, --all wires all three, bare = Claude Code)
-  uninstall   remove only Director-managed hook entries (--codex / --opencode:
-              theirs; targets combine, --all for all three)
+               --copilot: Copilot's hooks file + $director-* agent skills;
+               targets combine, --all wires all four, bare = Claude Code)
+  uninstall   remove only Director-managed hook entries (--codex / --opencode /
+              --copilot: theirs; targets combine, --all for all four)
   doctor      check the install is wired and the hooks will actually fire
 
 misc:
@@ -331,7 +341,7 @@ A workstream's id is `<repo>-<branch>-<shortid>`, derived deterministically from
 
 ## Status & scope
 
-**In v1:** the hook-first coordination core (CLI write path, identity, event store, fleet/liveness, `render`/`brief`/`status`, hooks + the `_managedBy` installer, the injected coordination protocol), **informed adoption** (`adopt` registers; `/director:adopt` drafts the CHARTER proposal and runs the triaged open-loop import; see [Adopt an existing repo](#adopt-an-existing-repo)), and a **Codex adapter**: `director install --codex` wires the same hooks into Codex's `hooks.json` (Codex asks you to trust them at the next session start; if you dismiss that prompt, run `/hooks` in the session) and installs the boundary commands as agent skills: `$director-adopt`, `$director-complete`, `$director-handoff`. Ground truth injection, liveness, and close-out work identically on both of those agents; the emit-guard and the context-fill handoff nudge are Claude Code-only for now (they read CC's transcript format and stay safely inert on Codex). Single-machine. **Since v1** (v1.9.0): an **OpenCode adapter**, `director install --opencode` — a managed plugin plus the boundary commands as `/director-*` custom commands; injection, liveness, and close-out work as on Claude Code, and the CC-only nudges stay safely inert there too.
+**In v1:** the hook-first coordination core (CLI write path, identity, event store, fleet/liveness, `render`/`brief`/`status`, hooks + the `_managedBy` installer, the injected coordination protocol), **informed adoption** (`adopt` registers; `/director:adopt` drafts the CHARTER proposal and runs the triaged open-loop import; see [Adopt an existing repo](#adopt-an-existing-repo)), and a **Codex adapter**: `director install --codex` wires the same hooks into Codex's `hooks.json` (Codex asks you to trust them at the next session start; if you dismiss that prompt, run `/hooks` in the session) and installs the boundary commands as agent skills: `$director-adopt`, `$director-complete`, `$director-handoff`. Ground truth injection, liveness, and close-out work identically on both of those agents; the emit-guard and the context-fill handoff nudge are Claude Code-only for now (they read CC's transcript format and stay safely inert on Codex). Single-machine. **Since v1** (v1.9.0): an **OpenCode adapter**, `director install --opencode` — a managed plugin plus the boundary commands as `/director-*` custom commands; injection, liveness, and close-out work as on Claude Code, and the CC-only nudges stay safely inert there too. Newest, a **GitHub Copilot CLI adapter**, `director install --copilot`: one Director-owned hooks file at `~/.copilot/hooks/director.json` (no trust step, no config file of yours touched) driving the same shims, with the boundary commands shared with the Codex agent skills; injection, liveness, and close-out work as on Claude Code, session-end row reaping included, and the CC-only nudges stay inert there as well.
 
 **Deferred:** deeper brownfield analysis beyond the informed-adopt pass (doc living/record/rot reconciliation, an arc42 overview draft, back-dated decision records). `brief --synthesize` (model-narrated prose) is deferred: v1 ships the deterministic brief. A background monitor/reaper, notifications, and a freshness sweep come later.
 
@@ -372,17 +382,18 @@ In each adopted worktree: `.director/workstream-id` (and `.director/repo-key`), 
 go build -o bin/director ./cmd/director
 sudo install bin/director /usr/local/bin/director
 director install              # Claude Code (the default)
-director install --codex      # OpenAI Codex; targets combine (--codex --opencode)
-director install --all        # or wire Claude Code + Codex + OpenCode in one go
+director install --codex      # OpenAI Codex (--opencode wires OpenCode)
+director install --copilot    # GitHub Copilot CLI; targets combine (--codex --copilot)
+director install --all        # or wire all four agents in one go
 director doctor               # confirm the wiring will actually fire
 
 # 2. Register an existing repo in the fleet
 cd ~/dev/src/some-project
 director adopt
 
-# 3. Open an agent session in that repo and run /director:adopt (Codex:
-#    $director-adopt; OpenCode: /director-adopt) — it drafts the CHARTER from
-#    the repo's docs and triages
+# 3. Open an agent session in that repo and run /director:adopt (Codex and
+#    Copilot CLI: $director-adopt; OpenCode: /director-adopt) — it drafts the
+#    CHARTER from the repo's docs and triages
 #    its real open loops for import, everything confirmed by you (or skip it
 #    and fill in the CHARTER stub by hand). From here on, every session start
 #    injects CHARTER + digest as Ground Truth.

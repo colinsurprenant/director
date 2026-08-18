@@ -73,6 +73,7 @@ type doctorInputs struct {
 	binPath                 string                // the install symlink tier (<hooks root>/bin/director)
 	codexHooks              string                // ~/.codex/hooks.json
 	opencodePlugin          string                // ~/.config/opencode/plugin/director.js
+	copilotHooks            string                // ~/.copilot/hooks/director.json
 	hub                     string                // the coordination hub root
 	hubAllowWrite           string                // the hub form install grants in sandbox.filesystem.allowWrite
 }
@@ -137,6 +138,10 @@ func doctorInputsFromEnv() (doctorInputs, error) {
 	if err != nil {
 		return doctorInputs{}, err
 	}
+	copilotHooks, err := install.DefaultCopilotHooksPath()
+	if err != nil {
+		return doctorInputs{}, err
+	}
 	hub, err := hubRoot()
 	if err != nil {
 		return doctorInputs{}, err
@@ -165,6 +170,7 @@ func doctorInputsFromEnv() (doctorInputs, error) {
 		binPath:                 binPath,
 		codexHooks:              codexHooks,
 		opencodePlugin:          opencodePlugin,
+		copilotHooks:            copilotHooks,
 		hub:                     hub,
 		hubAllowWrite:           install.HubAllowWriteValue(),
 	}, nil
@@ -184,9 +190,10 @@ func diagnose(in doctorInputs) doctorReport {
 	// standalone) would deterministically exit unhealthy.
 	codexCheck, codexPresent := codexHooksCheck(in)
 	opencodeCheck, opencodePresent := opencodeHooksCheck(in)
+	copilotCheck, copilotPresent := copilotHooksCheck(in)
 	claudePresent := install.ManagedEntriesPresent(in.settingsPath, in.hooksDir)
 	claudeAbsent := !claudePresent && install.SettingsParseError(in.settingsPath) == nil
-	if !claudeAbsent || (!codexPresent && !opencodePresent) {
+	if !claudeAbsent || (!codexPresent && !opencodePresent && !copilotPresent) {
 		r.checks = append(r.checks, claudeHooksCheck(in))
 	}
 	if codexPresent {
@@ -194,6 +201,9 @@ func diagnose(in doctorInputs) doctorReport {
 	}
 	if opencodePresent {
 		r.checks = append(r.checks, opencodeCheck)
+	}
+	if copilotPresent {
+		r.checks = append(r.checks, copilotCheck)
 	}
 	// The sandbox grant is a Claude Code setting, so it is only assessable where a
 	// CC install actually exists: on an absent or malformed settings.json the
@@ -323,6 +333,23 @@ func codexHooksCheck(in doctorInputs) (check, bool) {
 			"%s references Director hooks, but shims are missing from %s (%s) — re-run `director install --codex`.", in.codexHooks, in.hooksDir, strings.Join(missing, ", "))}, true
 	}
 	return check{"codex hooks", levelOK, fmt.Sprintf("wired in %s", in.codexHooks)}, true
+}
+
+// copilotHooksCheck reports the Copilot side only when its managed hooks file is
+// present, so it never nags a user on another agent. Presence plus the shims the
+// file's commands name is the whole wiring: Copilot loads every file in its hooks
+// dir with no registration and no trust ceremony (verified live on copilot
+// 1.0.80), so unlike Codex there is no third state where the file exists but the
+// agent ignores it. The bool is false when there is nothing to report.
+func copilotHooksCheck(in doctorInputs) (check, bool) {
+	if !install.CopilotHooksFilePresent(in.copilotHooks) {
+		return check{}, false
+	}
+	if missing := missingShims(in.hooksDir, install.CopilotShims()); len(missing) > 0 {
+		return check{"copilot hooks", levelFail, fmt.Sprintf(
+			"%s references Director hooks, but shims are missing from %s (%s) — re-run `director install --copilot`.", in.copilotHooks, in.hooksDir, strings.Join(missing, ", "))}, true
+	}
+	return check{"copilot hooks", levelOK, fmt.Sprintf("wired in %s", in.copilotHooks)}, true
 }
 
 // opencodeHooksCheck reports the OpenCode side only when its managed plugin is

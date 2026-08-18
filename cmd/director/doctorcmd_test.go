@@ -55,6 +55,7 @@ func installedFixture(t *testing.T) doctorInputs {
 		hooksDir:      hooksDir,
 		binPath:       binPath,
 		codexHooks:    filepath.Join(root, "no-codex.json"),
+		copilotHooks:  filepath.Join(root, "no-copilot.json"),
 		hub:           root, // a writable directory
 		hubAllowWrite: install.HubAllowWriteValue(),
 	}
@@ -102,6 +103,9 @@ func TestDoctorHealthy(t *testing.T) {
 	}
 	if hasCheck(rep, "opencode hooks") {
 		t.Errorf("opencode check must be absent without an OpenCode install")
+	}
+	if hasCheck(rep, "copilot hooks") {
+		t.Errorf("copilot check must be absent without a Copilot install")
 	}
 }
 
@@ -476,6 +480,89 @@ func TestDoctorCodexReportedWhenInstalled(t *testing.T) {
 	}
 }
 
+func TestDoctorCopilotReportedWhenInstalled(t *testing.T) {
+	in := installedFixture(t)
+	t.Setenv("DIRECTOR_CODEX_SKILLS_DIR", filepath.Join(t.TempDir(), "skills"))
+	copilotHooks := filepath.Join(t.TempDir(), "copilot", "director.json")
+	if err := install.InstallCopilot(copilotHooks); err != nil {
+		t.Fatal(err)
+	}
+	in.copilotHooks = copilotHooks
+	rep := diagnose(in)
+	if !hasCheck(rep, "copilot hooks") {
+		t.Fatal("copilot check must appear when a Copilot install is present")
+	}
+	if levelOf(t, rep, "copilot hooks") != levelOK {
+		t.Fatalf("copilot hooks must be OK for a fresh Copilot install, got %+v", rep.checks)
+	}
+}
+
+// TestDoctorCopilotOnlyIsHealthy: a Copilot-only machine (no Claude Code
+// settings.json at all) reads healthy — the CC check stands down when CC is
+// genuinely absent and another target is wired, exactly as for Codex/OpenCode.
+func TestDoctorCopilotOnlyIsHealthy(t *testing.T) {
+	skipUnixOnlyDoctor(t)
+	root := t.TempDir()
+	hooksDir := filepath.Join(root, "hooks")
+	t.Setenv("DIRECTOR_HOOKS_DIR", hooksDir)
+	t.Setenv("DIRECTOR_CODEX_SKILLS_DIR", filepath.Join(root, "skills"))
+	t.Setenv("DIRECTOR_SETTINGS_PATH", filepath.Join(root, "no-settings.json"))
+	copilotHooks := filepath.Join(root, "copilot", "director.json")
+	t.Setenv("DIRECTOR_COPILOT_HOOKS_PATH", copilotHooks)
+	if err := install.InstallCopilot(copilotHooks); err != nil {
+		t.Fatalf("InstallCopilot fixture: %v", err)
+	}
+	binPath, err := install.DefaultBinPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := doctorInputs{
+		lookDirector:   func() (string, bool) { return "", false },
+		settingsPath:   filepath.Join(root, "no-settings.json"),
+		hooksDir:       hooksDir,
+		binPath:        binPath,
+		codexHooks:     filepath.Join(root, "no-codex.json"),
+		opencodePlugin: filepath.Join(root, "no-plugin.js"),
+		copilotHooks:   copilotHooks,
+		hub:            root,
+	}
+
+	rep := diagnose(in)
+	if !rep.healthy {
+		t.Fatalf("copilot-only install must be healthy, got %+v", rep.checks)
+	}
+	if hasCheck(rep, "claude code hooks") {
+		t.Errorf("claude check must stand down when CC is absent and Copilot is wired")
+	}
+	if lv := levelOf(t, rep, "copilot hooks"); lv != levelOK {
+		t.Errorf("copilot check: got %v, want OK", lv)
+	}
+}
+
+// TestDoctorCopilotMissingShimFails: the hooks file naming a shim that isn't
+// there is the silent-no-op state doctor exists to surface — Copilot fires the
+// hook, the shim is gone, and nothing reports it. Unlike Codex, Copilot's entry
+// set covers all four shims, SessionEnd included.
+func TestDoctorCopilotMissingShimFails(t *testing.T) {
+	in := installedFixture(t)
+	t.Setenv("DIRECTOR_CODEX_SKILLS_DIR", filepath.Join(t.TempDir(), "skills"))
+	copilotHooks := filepath.Join(t.TempDir(), "copilot", "director.json")
+	if err := install.InstallCopilot(copilotHooks); err != nil {
+		t.Fatal(err)
+	}
+	in.copilotHooks = copilotHooks
+	if err := os.Remove(filepath.Join(in.hooksDir, "sessionend.sh")); err != nil {
+		t.Fatal(err)
+	}
+	rep := diagnose(in)
+	if lv := levelOf(t, rep, "copilot hooks"); lv != levelFail {
+		t.Errorf("copilot check with a missing shim: got %v, want fail (%+v)", lv, rep.checks)
+	}
+	if rep.healthy {
+		t.Error("a Copilot install missing a shim it references must not be healthy")
+	}
+}
+
 func TestDoctorHubNotADirFails(t *testing.T) {
 	in := installedFixture(t)
 	f := filepath.Join(t.TempDir(), "hub-is-a-file")
@@ -507,6 +594,7 @@ func TestRunDoctorSandboxed(t *testing.T) {
 	t.Setenv("DIRECTOR_SETTINGS_PATH", settings)
 	t.Setenv("DIRECTOR_CODEX_HOOKS_PATH", filepath.Join(root, "no-codex.json"))
 	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", filepath.Join(root, "no-plugin.js"))
+	t.Setenv("DIRECTOR_COPILOT_HOOKS_PATH", filepath.Join(root, "no-copilot.json"))
 	t.Setenv("DIRECTOR_HUB", root)
 	t.Setenv("DIRECTOR_BIN", "") // unset override → rely on the symlink tier
 	if err := install.Install(settings); err != nil {
@@ -538,6 +626,7 @@ func TestDoctorSettingsPinnedBinBroken(t *testing.T) {
 	t.Setenv("DIRECTOR_SETTINGS_PATH", settings)
 	t.Setenv("DIRECTOR_CODEX_HOOKS_PATH", filepath.Join(root, "no-codex.json"))
 	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", filepath.Join(root, "no-plugin.js"))
+	t.Setenv("DIRECTOR_COPILOT_HOOKS_PATH", filepath.Join(root, "no-copilot.json"))
 	t.Setenv("DIRECTOR_HUB", root)
 	t.Setenv("DIRECTOR_BIN", "") // NOT pinned in the shell
 	if err := install.Install(settings); err != nil {
@@ -715,6 +804,7 @@ func TestRunDoctorUntaggedEntriesExitsZero(t *testing.T) {
 	t.Setenv("DIRECTOR_SETTINGS_PATH", settings)
 	t.Setenv("DIRECTOR_CODEX_HOOKS_PATH", filepath.Join(root, "no-codex.json"))
 	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", filepath.Join(root, "no-plugin.js"))
+	t.Setenv("DIRECTOR_COPILOT_HOOKS_PATH", filepath.Join(root, "no-copilot.json"))
 	t.Setenv("DIRECTOR_HUB", root)
 	t.Setenv("DIRECTOR_BIN", "")
 	if err := install.Install(settings); err != nil {
@@ -781,6 +871,7 @@ func TestDoctorSandboxCheckHonorsHubOverride(t *testing.T) {
 	t.Setenv("DIRECTOR_SETTINGS_PATH", settings)
 	t.Setenv("DIRECTOR_CODEX_HOOKS_PATH", filepath.Join(root, "no-codex.json"))
 	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", filepath.Join(root, "no-plugin.js"))
+	t.Setenv("DIRECTOR_COPILOT_HOOKS_PATH", filepath.Join(root, "no-copilot.json"))
 	t.Setenv("DIRECTOR_HUB", hub)
 	t.Setenv("DIRECTOR_BIN", "")
 	if err := install.Install(settings); err != nil {

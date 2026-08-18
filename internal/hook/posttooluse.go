@@ -64,7 +64,8 @@ func handlePostToolUse(in Input, out io.Writer, hub string) error {
 			// (Inert off Claude Code today — the nudge needs a CC transcript — but
 			// the rewrite must not be the thing that breaks when that changes.)
 			if text, usage := runHandoffNudge(in, hub, ws); text != "" {
-				if err := writePostToolUseContext(out, commandNamesFor(text, agentFlavor(in))); err != nil {
+				flavor := agentFlavor(in)
+				if err := writePostToolUseContext(out, commandNamesFor(text, flavor), flavor); err != nil {
 					return fmt.Errorf("write handoff nudge: %w", err)
 				}
 				logSuccess(hub, EventPostToolUse, in.SessionID, fmt.Sprintf("handoff nudge fired at ~%d context tokens", usage))
@@ -93,7 +94,7 @@ func handlePostToolUse(in Input, out io.Writer, hub string) error {
 		return nil // between nudge points — stay silent
 	}
 
-	if err := writePostToolUseContext(out, flushNudgeText); err != nil {
+	if err := writePostToolUseContext(out, flushNudgeText, agentFlavor(in)); err != nil {
 		return fmt.Errorf("write flush nudge: %w", err)
 	}
 	logSuccess(hub, EventPostToolUse, in.SessionID, fmt.Sprintf("flush nudge fired at tool #%d", count))
