@@ -712,6 +712,13 @@ func TestEmitGuardBlocksDecisionWithoutEmit(t *testing.T) {
 	if !strings.Contains(got, "wrap up") {
 		t.Errorf("block reason should advertise the wrap-up escape, got %q", got)
 	}
+	// The guard fires at stop time, when an ad-hoc handoff is likeliest, so its
+	// emit template must teach the same refs contract every other surface does —
+	// a bare --type handoff here would coach the shape that buries a parallel
+	// session's position.
+	if !strings.Contains(got, "--refs") {
+		t.Errorf("block reason should carry the handoff's --refs contract, got %q", got)
+	}
 }
 
 // TestEmitGuardAllowsWhenEmitted verifies the guard stands down when the turn

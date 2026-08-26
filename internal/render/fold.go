@@ -36,13 +36,15 @@ type Projection struct {
 	// retired, each one `director show`-able to find the concluding note.
 	ConcludedHandoffs []string
 
-	// SupersededHandoffs is the EXACT retirement set of the supersession rule,
-	// ULID-ascending: the handoff ids named by a later same-workstream
-	// handoff's Refs — the positions it consumed, and no others (the rule
-	// retires by set membership, so this list IS what left the resume stack).
-	// Same manifest rationale as ConcludedHandoffs: the second fold rule that
-	// removes digest content stays observable, each id one `director show`
-	// from the handoff that superseded it.
+	// SupersededHandoffs lists the handoff ids EXPLICITLY consumed by a later
+	// same-workstream handoff's Refs, ULID-ascending — the positions those
+	// handoffs named, and no others (the rule retires by set membership).
+	// It is one of the three removal paths, not the whole of what left the
+	// resume stack: a position can also (or instead) be retired by the implicit
+	// mark or by a conclusion. Same manifest rationale as ConcludedHandoffs —
+	// explicit supersession stays observable, each id one `director show` from
+	// the handoff that superseded it; the implicit mark's removals need no list
+	// because they are legible from the surviving stack itself.
 	SupersededHandoffs []string
 }
 

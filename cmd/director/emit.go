@@ -8,6 +8,7 @@ import (
 
 	"github.com/colinsurprenant/director/internal/event"
 	"github.com/colinsurprenant/director/internal/id"
+	"github.com/colinsurprenant/director/internal/render"
 )
 
 // runEmit is the model-facing write path: it derives the workstream, builds the
@@ -81,16 +82,30 @@ const (
 // on stderr when the fold will read it as IMPLICIT — the legacy shape that retires
 // every older position of the workstream, including a parallel session's the
 // emitter never saw. Two shapes land there: no refs at all, and refs that name
-// nothing this workstream ever handed off. A workstream's genuinely FIRST handoff
-// has no position to name, so it is not warned: that is the correct ref-less
-// emit, and warning it is how a nudge turns into wallpaper.
+// nothing this workstream ever handed off (a mis-copied ULID).
 //
-// It reads the log on the write path deliberately — the classification is exactly
-// the fold's (same-workstream handoff, id below this one), so a flags-only guess
-// warns the wrong shapes. The read is precedented (event.Resolve validates its
-// target the same way) and the write stays a pure append: this is warn-only, the
-// event is already written and is never rejected or rewritten. A read failure
-// degrades to the flags-only rule rather than going silent.
+// Both are warned only when there is something to LOSE: the workstream's resume
+// stack as the fold saw it BEFORE this append. A genuinely first handoff, a
+// workstream whose positions a completion note already concluded, and one whose
+// positions were all superseded alike have nothing live below them, so an
+// implicit handoff there buries nothing and the warning would be wallpaper. The
+// exemption is the fold's answer, not a count of prior handoffs, and it covers
+// both shapes: mis-copied refs over a dead stack lose no more than a ref-less
+// handoff does.
+//
+// The comparison is against the log MINUS this event: folding with it in would
+// answer a different question, since its own implicit mark has by then collapsed
+// the stack to itself.
+//
+// It reads the log on the write path deliberately — the EXPLICIT test is exactly
+// the fold's (a same-workstream handoff below this one, retired or not, which is
+// the fold's classification verbatim), so a flags-only guess warns the wrong
+// shapes. The read is precedented (event.Resolve validates its target the same
+// way) and the write stays a pure append: this is warn-only, the event is already
+// written and is never rejected or rewritten. A read failure degrades to the
+// flags-only rule: with no log there is no classification to make and no stack to
+// weigh, so it speaks only to the shape the flags alone reveal (no refs at all)
+// and accepts over-warning a first handoff rather than going silent on a real loss.
 func warnHandoffRefs(store *event.Store, ev event.Event, refList []string) {
 	events, err := store.ReadAll()
 	if err != nil {
@@ -99,28 +114,36 @@ func warnHandoffRefs(store *event.Store, ev event.Event, refList []string) {
 		}
 		return
 	}
-	prior, named := 0, 0
+
+	named := false
+	before := make([]event.Event, 0, len(events))
 	for _, e := range events {
+		if e.ID != ev.ID {
+			before = append(before, e)
+		}
 		if e.Type != event.KindHandoff || e.Workstream != ev.Workstream || e.ID >= ev.ID {
 			continue
 		}
-		prior++
 		for _, r := range refList {
 			if r == e.ID {
-				named++
+				named = true
 			}
 		}
 	}
-	switch {
-	case named > 0:
+	if named {
 		// Explicit: it supersedes exactly the positions it named, nothing else.
-	case len(refList) == 0:
-		if prior > 0 {
-			fmt.Fprintln(os.Stderr, warnHandoffNoRefs)
-		}
-	default:
-		fmt.Fprintln(os.Stderr, warnHandoffWrongRefs)
+		return
 	}
+	// Implicit: it retires every strictly-older position of this workstream, so
+	// what it costs is precisely the stack that was live before it landed.
+	if len(render.Fold(before).ResumeHandoffs[ev.Workstream]) == 0 {
+		return
+	}
+	if len(refList) == 0 {
+		fmt.Fprintln(os.Stderr, warnHandoffNoRefs)
+		return
+	}
+	fmt.Fprintln(os.Stderr, warnHandoffWrongRefs)
 }
 
 // canonicalRefs splits a comma-separated --refs value, canonicalizes each ULID,

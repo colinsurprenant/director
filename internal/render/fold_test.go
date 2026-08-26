@@ -716,6 +716,138 @@ func TestFoldConclusionRetiresWholeStack(t *testing.T) {
 	assertOrderIndependent(t, events, proj)
 }
 
+// TestFoldLegacyEquivalenceProperty is the grandfather argument under randomized
+// pressure. The hand-written legacy cases pin the shapes we thought of; this one
+// generates thousands of LEGACY-shaped logs — every handoff implicit, notes
+// concluding at random, several workstreams interleaved — and asserts the claim
+// the whole upgrade rests on: over a log no session wrote refs into, the new fold
+// yields EXACTLY the old rule's single winner per workstream, and records nothing
+// as superseded. The oracle re-implements the old rule independently rather than
+// calling the fold, so a shared bug cannot make both sides agree.
+func TestFoldLegacyEquivalenceProperty(t *testing.T) {
+	// Fixed seeds keep a failure reproducible (the report names seed + trial) and
+	// the whole sweep well under a second.
+	for _, seed := range []int64{1, 42, 2026} {
+		r := rand.New(rand.NewSource(seed))
+		for trial := 0; trial < 1000; trial++ {
+			events := legacyLog(r)
+			// Folded from a shuffle: order-independence rides along on every trial.
+			proj := Fold(shuffled(events, seed+int64(trial)))
+			want := legacyWinners(events)
+
+			if len(proj.ResumeHandoffs) != len(want) {
+				t.Fatalf("seed %d trial %d: %d workstreams in the resume stack, want %d\n%s",
+					seed, trial, len(proj.ResumeHandoffs), len(want), dumpEvents(events))
+			}
+			for ws, winner := range want {
+				if got := stackIDs(proj, ws); len(got) != 1 || got[0] != winner {
+					t.Fatalf("seed %d trial %d: %s resume stack = %v, want the legacy winner [%s]\n%s",
+						seed, trial, ws, got, winner, dumpEvents(events))
+				}
+			}
+			if len(proj.SupersededHandoffs) != 0 {
+				t.Fatalf("seed %d trial %d: a legacy log names no position, so SupersededHandoffs must stay empty, got %v\n%s",
+					seed, trial, proj.SupersededHandoffs, dumpEvents(events))
+			}
+		}
+	}
+}
+
+// legacyLog builds one randomized pre-supersession log: a handful of events over
+// one to three workstreams, where every handoff is IMPLICIT — no refs, or refs
+// naming only notes/decisions/open-items, the ordinary cross-linking real logs
+// contain — and notes conclude earlier handoffs at random. Ids are synthetic,
+// fixed-width and strictly ascending, so lexical order is emission order: the
+// only property the fold takes from a ULID, and cheaper than minting thousands.
+func legacyLog(r *rand.Rand) []event.Event {
+	workstreams := 1 + r.Intn(3)
+	n := 1 + r.Intn(12)
+	events := make([]event.Event, 0, n)
+	var handoffIDs, otherIDs []string
+
+	for i := 0; i < n; i++ {
+		ev := event.Event{
+			ID:            fmt.Sprintf("01K%023d", i),
+			SchemaVersion: event.SchemaVersion,
+			Workstream:    fmt.Sprintf("ws%d", r.Intn(workstreams)),
+			Body:          fmt.Sprintf("event %d", i),
+		}
+		switch roll := r.Intn(100); {
+		case roll < 55:
+			ev.Type = event.KindHandoff
+			// A legacy handoff never names a handoff; a third of them cross-link
+			// something else, which must stay inert.
+			if len(otherIDs) > 0 && r.Intn(3) == 0 {
+				ev.Refs = []string{otherIDs[r.Intn(len(otherIDs))]}
+			}
+			handoffIDs = append(handoffIDs, ev.ID)
+		case roll < 85:
+			ev.Type = event.KindNote
+			switch {
+			case len(handoffIDs) > 0 && r.Intn(2) == 0:
+				ev.Refs = []string{handoffIDs[r.Intn(len(handoffIDs))]} // a conclusion
+			case len(otherIDs) > 0 && r.Intn(2) == 0:
+				ev.Refs = []string{otherIDs[r.Intn(len(otherIDs))]} // ordinary cross-link
+			}
+			otherIDs = append(otherIDs, ev.ID)
+		case roll < 93:
+			ev.Type = event.KindDecision
+			otherIDs = append(otherIDs, ev.ID)
+		default:
+			ev.Type = event.KindOpenItem
+			ev.Status = event.StatusOpen
+			otherIDs = append(otherIDs, ev.ID)
+		}
+		events = append(events, ev)
+	}
+	return events
+}
+
+// legacyWinners is the PRE-supersession rule, written out independently: per
+// workstream, the highest-id handoff strictly above that workstream's conclusion
+// high-water mark (the highest handoff id any note's refs name). A workstream
+// whose every handoff sits at or below the mark has no winner and no key —
+// exactly what a missing ResumeHandoffs key means.
+func legacyWinners(events []event.Event) map[string]string {
+	handoffWS := make(map[string]string)
+	for _, ev := range events {
+		if ev.Type == event.KindHandoff {
+			handoffWS[ev.ID] = ev.Workstream
+		}
+	}
+	concludeMark := make(map[string]string)
+	for _, ev := range events {
+		if ev.Type != event.KindNote {
+			continue
+		}
+		for _, ref := range ev.Refs {
+			if ws, isHandoff := handoffWS[ref]; isHandoff && ref > concludeMark[ws] {
+				concludeMark[ws] = ref
+			}
+		}
+	}
+	winner := make(map[string]string)
+	for _, ev := range events {
+		if ev.Type != event.KindHandoff {
+			continue
+		}
+		if ev.ID > concludeMark[ev.Workstream] && ev.ID > winner[ev.Workstream] {
+			winner[ev.Workstream] = ev.ID
+		}
+	}
+	return winner
+}
+
+// dumpEvents renders a generated log compactly enough to paste into a repro when
+// a property trial fails.
+func dumpEvents(events []event.Event) string {
+	var b strings.Builder
+	for _, ev := range events {
+		fmt.Fprintf(&b, "  %s %-9s %s refs=%v\n", ev.ID, ev.Type, ev.Workstream, ev.Refs)
+	}
+	return b.String()
+}
+
 // TestFoldLegacyLogRendersOneLinePerWorkstream is the byte-shape half of the
 // degradation contract: a pre-supersession log — every handoff implicit,
 // including one that cross-links a note — folds to the old
