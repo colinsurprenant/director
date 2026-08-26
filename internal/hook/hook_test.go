@@ -712,6 +712,13 @@ func TestEmitGuardBlocksDecisionWithoutEmit(t *testing.T) {
 	if !strings.Contains(got, "wrap up") {
 		t.Errorf("block reason should advertise the wrap-up escape, got %q", got)
 	}
+	// The guard fires at stop time, when an ad-hoc handoff is likeliest, so its
+	// emit template must teach the same refs contract every other surface does —
+	// a bare --type handoff here would coach the shape that buries a parallel
+	// session's position.
+	if !strings.Contains(got, "--refs") {
+		t.Errorf("block reason should carry the handoff's --refs contract, got %q", got)
+	}
 }
 
 // TestEmitGuardAllowsWhenEmitted verifies the guard stands down when the turn
@@ -1514,7 +1521,7 @@ func TestSessionStartBudgetDegradesDeterministically(t *testing.T) {
 		t.Errorf("over-budget injection should elide only the pre-handoff decisions:\n%.2000s", ctx)
 	}
 	if !strings.Contains(ctx, "the sibling course correction must survive") {
-		t.Errorf("a decision newer than the workstream's latest handoff must survive degradation:\n%.2000s", ctx)
+		t.Errorf("a decision newer than the workstream's oldest surviving position must survive degradation:\n%.2000s", ctx)
 	}
 	if strings.Contains(ctx, "rationale rationale") {
 		t.Errorf("elided injection must not carry pre-handoff decision bodies")
@@ -1594,18 +1601,20 @@ func TestSessionStartBudgetCollapsesAllWhenKeptBandOverflows(t *testing.T) {
 
 	store := event.NewStore(hub, ws.RepoKey)
 	// Bulk the ACTIONABLE section close to the budget so rung 1's ~2KB kept
-	// band (10 × ~200B lines) still overflows while rung 2 fits: ~38 open-items
-	// × ~300-char bodies (+13B date tag each) ≈ 12.7KB of open-set + ~2.5KB
+	// band (10 × ~200B lines) still overflows while rung 2 fits: ~36 open-items
+	// × ~300-char bodies (+13B date tag each) ≈ 12.0KB of open-set + ~2.9KB
 	// fixed blocks.
 	//
-	// Measured margins (2026-07-15, after date tags widened every line): full
-	// ≈ 20.7KB, rung 1 ≈ 17.8KB (~1.4KB over, as required), rung 2 ≈ 15.8KB —
-	// ~590B of headroom under the 16,384B budget. If this test starts failing
-	// with "STILL over budget" after a fixed block (emitProtocol, preamble,
-	// banner) grows, the FIXTURE has drifted out of its window — re-tune the
-	// open-item count downward; don't suspect the ladder.
+	// Measured margins (2026-08-26, after the supersession rewrite trimmed
+	// emitProtocol back to 3,032B — 57B under its pre-supersession size): full
+	// 20,852B, rung 1 17,998B (~1.6KB over, as required), rung 2 15,970B — 414B
+	// of headroom under the 16,384B budget. If this test starts failing with "STILL over budget"
+	// after a fixed block (emitProtocol, preamble, banner) grows, the FIXTURE
+	// has drifted out of its window — re-tune the open-item count downward;
+	// don't suspect the ladder. (2026-07-15 window, for reference: 38
+	// open-items, rung 2 ≈ 15.8KB.)
 	openBody := strings.Repeat("open loop ", 29) // ~290 chars, under the 300-rune cap
-	for i := 0; i < 38; i++ {
+	for i := 0; i < 36; i++ {
 		if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindOpenItem, Area: "sync", Body: openBody}); err != nil {
 			t.Fatalf("seed open-item %d: %v", i, err)
 		}
@@ -1642,6 +1651,154 @@ func TestSessionStartBudgetCollapsesAllWhenKeptBandOverflows(t *testing.T) {
 	}
 	if strings.Contains(health, "STILL over budget") {
 		t.Errorf("fixture should fit once all decisions collapse:\n%s", health)
+	}
+}
+
+// TestSessionStartResumePointStacksParallelPositions: when parallel sessions of
+// THIS workstream handed off without seeing each other, the digest carries both
+// positions and the resume block must say so — the single-position wording
+// ("resume from it") would let the model silently pick one and drop the other.
+// The block names the count, demands their UNION, and spells out the
+// consolidating --refs the next handoff owes.
+func TestSessionStartResumePointStacksParallelPositions(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+
+	store := event.NewStore(hub, ws.RepoKey)
+	shared, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindHandoff, Area: "x", Body: "position both sessions read"})
+	if err != nil {
+		t.Fatalf("seed shared handoff: %v", err)
+	}
+	for _, body := range []string{"session A position", "session B position"} {
+		if _, err := event.Emit(store, ws.ID, event.EmitParams{
+			Type: event.KindHandoff, Area: "x", Refs: []string{shared.ID}, Body: body,
+		}); err != nil {
+			t.Fatalf("seed parallel handoff %q: %v", body, err)
+		}
+	}
+
+	in := `{"session_id":"s-real","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	var out bytes.Buffer
+	if code := Dispatch(EventSessionStart, strings.NewReader(in), &out, hub); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	ctx := injectedContext(t, out.String())
+
+	if !strings.Contains(ctx, "has 2 un-consolidated positions in the digest above") {
+		t.Errorf("multi-position resume block must name the count:\n%s", ctx)
+	}
+	if !strings.Contains(ctx, "treat their union as your last position") {
+		t.Errorf("multi-position resume block must demand the union of the positions:\n%s", ctx)
+	}
+	if !strings.Contains(ctx, "--refs naming each of their ULIDs") {
+		t.Errorf("multi-position resume block must demand the consolidating refs:\n%s", ctx)
+	}
+	// The stacked wording must still disambiguate the OTHER workstreams' lines:
+	// "read ALL of them" is a trap next to a digest whose handoffs section also
+	// lists siblings, and the single-position wording is where that clause
+	// otherwise lives.
+	if !strings.Contains(ctx, "sibling workstreams' positions, for awareness only") {
+		t.Errorf("a stacked resume block must still mark the other workstreams' handoffs as awareness-only:\n%s", ctx)
+	}
+	if strings.Contains(ctx, "is YOUR last position") {
+		t.Errorf("the single-position wording must not survive a stack — it names one of several:\n%s", ctx)
+	}
+	// Both positions must be IN the digest for the block to point at them, and
+	// the position they both consumed must be gone.
+	if !strings.Contains(ctx, "session A position") || !strings.Contains(ctx, "session B position") {
+		t.Errorf("both un-consolidated positions must render in the digest:\n%s", ctx)
+	}
+	if strings.Contains(ctx, "position both sessions read") {
+		t.Errorf("the explicitly superseded position must leave the digest:\n%s", ctx)
+	}
+
+	// Consolidating with one handoff that refs BOTH collapses the stack back to
+	// a single position — and the original wording returns verbatim.
+	logged, err := store.ReadAll()
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	var refs []string
+	for _, h := range render.Fold(logged).ResumeHandoffs[ws.ID] {
+		refs = append(refs, h.ID)
+	}
+	if _, err := event.Emit(store, ws.ID, event.EmitParams{
+		Type: event.KindHandoff, Area: "x", Refs: refs, Body: "consolidated position",
+	}); err != nil {
+		t.Fatalf("seed consolidating handoff: %v", err)
+	}
+	out.Reset()
+	if code := Dispatch(EventSessionStart, strings.NewReader(in), &out, hub); code != 0 {
+		t.Fatalf("exit code after consolidation = %d, want 0", code)
+	}
+	ctx = injectedContext(t, out.String())
+	if !strings.Contains(ctx, "is YOUR last position") {
+		t.Errorf("a consolidated single position must get the original resume wording:\n%s", ctx)
+	}
+	if strings.Contains(ctx, "un-consolidated positions") {
+		t.Errorf("consolidation must clear the multi-position block:\n%s", ctx)
+	}
+}
+
+// TestSessionStartBudgetAnchorsOnOldestPosition pins WHICH position anchors the
+// ladder's first rung when parallel sessions left a stack: the OLDEST. The
+// decisions this session has not seen are the ones after the earliest
+// un-consolidated position — anchoring on the newest would elide exactly what
+// the author of the older position missed.
+func TestSessionStartBudgetAnchorsOnOldestPosition(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+
+	store := event.NewStore(hub, ws.RepoKey)
+	shared, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindHandoff, Area: "hooks", Body: "position both sessions read"})
+	if err != nil {
+		t.Fatalf("seed shared handoff: %v", err)
+	}
+	body := strings.Repeat("rationale ", 30) // ~300 chars, capped to a ~160-rune headline
+	for i := 0; i < 120; i++ {               // ~120 index lines ≈ 22KB > 16KB budget
+		if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindDecision, Area: "hooks", Body: body}); err != nil {
+			t.Fatalf("seed decision %d: %v", i, err)
+		}
+	}
+	// Session A's position, then a decision only session A could have seen,
+	// then session B's — both ref the shared position, so both survive.
+	if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindHandoff, Area: "hooks", Refs: []string{shared.ID}, Body: "session A position"}); err != nil {
+		t.Fatalf("seed position A: %v", err)
+	}
+	if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindDecision, Area: "hooks", Body: "decision between the two positions must survive"}); err != nil {
+		t.Fatalf("seed between-positions decision: %v", err)
+	}
+	if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindHandoff, Area: "hooks", Refs: []string{shared.ID}, Body: "session B position"}); err != nil {
+		t.Fatalf("seed position B: %v", err)
+	}
+
+	in := `{"session_id":"s-real","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	var out bytes.Buffer
+	if code := Dispatch(EventSessionStart, strings.NewReader(in), &out, hub); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	ctx := injectedContext(t, out.String())
+
+	// Anchored on the OLDEST position, the between-positions decision is
+	// post-anchor news and survives rung 1. Anchored on the newest, the kept
+	// band would be empty and the hook would drop to rung 2 instead.
+	if !strings.Contains(ctx, "decision between the two positions must survive") {
+		t.Errorf("rung 1 must anchor on the OLDEST un-consolidated position:\n%.2000s", ctx)
+	}
+	if !strings.Contains(ctx, "(120 older decision(s) elided for size — the newest 1 follow") {
+		t.Errorf("over-budget injection should elide only the pre-anchor decisions:\n%.2000s", ctx)
+	}
+	if len(ctx) > injectionBudgetBytes {
+		t.Errorf("degraded payload still over budget: %dB > %dB", len(ctx), injectionBudgetBytes)
+	}
+	health := readHealth(t, hub)
+	if !strings.Contains(health, "older decisions collapsed to count+pointer, newest 1 kept") {
+		t.Errorf("budget overflow should be health-logged naming the first rung with its kept count, got:\n%s", health)
+	}
+	if strings.Contains(health, "ALL decisions collapsed") {
+		t.Errorf("anchoring on the newest position (empty kept band) would land on rung 2:\n%s", health)
 	}
 }
 

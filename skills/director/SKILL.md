@@ -38,8 +38,7 @@ Emit durable state to the LOG **as you work** — do not batch it for the end of
 - A finished **self-contained task** (a PR review, a one-shot investigation) records its
   **outcome as a `note`** — a handoff is only for work that *resumes*, and starting a task needs
   no event at all. A task-lifecycle handoff on a shared workstream shadows the coordination
-  session's real resume point as "latest". (This is the finished-workstream rule, applied to
-  finished tasks.)
+  session's real resume point. (This is the finished-workstream rule, applied to finished tasks.)
 
 Prefer **flush-often, then start fresh at a boundary** over riding a session up into the
 degradation zone (a reliable degradation signal: the human giving you the same correction twice). Because you flush continuously, a fresh start is already covered — there is no
@@ -53,13 +52,26 @@ There are exactly four model-emitted kinds. Pick by what the fact *is*:
 |---|---|---|
 | `decision` | a choice + what it affects (carries `--risk low\|escalate`) | `director emit --type decision --area auth --risk low "Use ULID not UUID for event ids — sortable, matches log fold"` |
 | `open-item` | an open loop / follow-up / deferred item — the canonical home for "documented, not dropped" | `director emit --type open-item --area render "Resolve cross-machine ULID tie-break before multi-machine sync"` |
-| `handoff` | current task · next action · hypotheses · dead ends (positional snapshot at a boundary) | `director emit --type handoff --area store "Done: NDJSON append. Next: wire emit dispatch. Hypothesis: O_APPEND is line-atomic on POSIX. Dead end: fsync-per-line, 30x too slow"` |
+| `handoff` | current task · next action · hypotheses · dead ends (positional snapshot at a boundary) | `director emit --type handoff --area store --refs <the resume point ULID(s) you rehydrated from> "Done: NDJSON append. Next: wire emit dispatch. Hypothesis: O_APPEND is line-atomic on POSIX. Dead end: fsync-per-line, 30x too slow"` |
 | `note` | FYI / context for a parallel or future session; a finished task's outcome (a review verdict, an investigation result) | `director emit --type note --to @next-on-hooks --area hooks "settings.json merge is _managedBy-tagged — don't strip GSD entries"` |
 
-One **reserved ref meaning**: a `note` whose `--refs` names a **handoff** CONCLUDES it — that
-handoff (and the workstream's older ones) leaves the digest's resume points, staying in the log.
-`/director:complete` uses this to retire a dead workstream's last handoff. Never ref a handoff
-from a note casually; refs to decisions and open-items carry no such effect.
+Two **reserved ref meanings**, both load-bearing:
+
+- A `note` whose `--refs` names a **handoff** CONCLUDES it — that handoff (and the workstream's
+  older ones) leaves the digest's resume points, staying in the log. `/director:complete` uses
+  this to retire a dead workstream's last resume point; never ref a handoff from a note otherwise.
+- A `handoff` whose `--refs` names same-workstream **handoff(s)** SUPERSEDES exactly those
+  positions and nothing else (nothing older than them, nothing newer): retirement is set
+  membership, so a position no handoff ever named still stands. Ref the resume point(s) you
+  rehydrated from plus any handoff you emitted earlier this session, and a parallel session's
+  position on the same workstream survives instead of being silently overwritten. A handoff with
+  no such refs retires ALL older positions of the workstream, including one you never saw.
+  `/director:handoff` does this on every checkpoint.
+
+Refs to decisions and open-items carry no such effect. When your injected state shows **several**
+resume points for your workstream, that is two parallel sessions' positions stacked: read them
+all, consolidate them into your next handoff body, and `--refs` each — that collapses the stack
+back to one.
 
 Routing rule: an **open loop you carry forward** → an `open-item` event (its one home).
 **Durable structured knowledge** (intent, architecture, a decision's full rationale) → the living

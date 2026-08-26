@@ -92,8 +92,12 @@ var emitInvocationSignals = []string{
 }
 
 // emitGuardReason is the correction fed back to the model when the guard blocks.
-// It names the missing action and the explicit wrap-up escape (§4.4).
-const emitGuardReason = "Director emit-guard: this turn looks like it produced a decision, open loop, or handoff, but no `director emit` ran. Emit the missing event now via `director emit --type <decision|open-item|handoff|note> ...` so the next session inherits it. If you intentionally have nothing to record, say \"wrap up\" to skip this check."
+// It names the missing action, the handoff's refs contract, and the explicit
+// wrap-up escape (§4.4). The refs sentence is load-bearing: this fires at stop
+// time, exactly when an ad-hoc handoff is likeliest, and a bare `--type handoff`
+// template would teach the implicit shape that retires every older position of
+// the workstream — contradicting the protocol and the ceremony.
+const emitGuardReason = "Director emit-guard: this turn looks like it produced a decision, open loop, or handoff, but no `director emit` ran. Emit the missing event now via `director emit --type <decision|open-item|handoff|note> ...` so the next session inherits it. A handoff needs `--refs <your-resume-point-ulid[,...]>` (from your injected ground truth; omit only if it showed none for your workstream). If you intentionally have nothing to record, say \"wrap up\" to skip this check."
 
 // handleStop runs the emit-guard and, ONLY when the stop is actually allowed,
 // marks the fleet row done (bookkeeping). Archival is bound to the allow paths

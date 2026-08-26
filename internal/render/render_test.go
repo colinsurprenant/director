@@ -84,9 +84,9 @@ func TestDigestThroughStore(t *testing.T) {
 // fully-populated skeleton — every section header present with "(none)".
 func TestDigestEmptyLogStable(t *testing.T) {
 	d := Digest(Fold(nil), "empty")
-	// Fixed section order is survival order: actionable state (open-set, latest handoff)
-	// first, deferrable decision rationale last, so a truncated delivery of the
-	// injected digest costs rationale, never open loops.
+	// Fixed section order is survival order: actionable state (open-set, resume
+	// stack) first, deferrable decision rationale last, so a truncated delivery
+	// of the injected digest costs rationale, never open loops.
 	last := -1
 	for _, header := range []string{"## open-items", "## handoffs", "## decisions"} {
 		at := strings.Index(d, header)
@@ -243,8 +243,8 @@ func TestDigestCollapsed(t *testing.T) {
 }
 
 // TestDigestCompactKeepsNewestSinceAnchor locks the FIRST degradation rung: a
-// decision newer than the anchor (the workstream's latest handoff — decided
-// after the session's last recorded position, so unseen by it) survives as an
+// decision newer than the anchor (the workstream's oldest surviving position —
+// decided after it, so unseen by its author) survives as an
 // index line, while the older tail collapses to the count-plus-pointer line.
 // This is the incident-01KWW146C7 guarantee: the all-or-nothing collapse hid a
 // sibling's course correction; the recency band must not.
@@ -479,5 +479,71 @@ func TestDigestConcludedHandoffs(t *testing.T) {
 	solo := Digest(Fold([]event.Event{events[0], events[2]}), "widget")
 	if !strings.Contains(solo, "## handoffs\n(none)\n") {
 		t.Errorf("fully concluded log must render an explicit empty handoffs section:\n%s", solo)
+	}
+}
+
+// TestDigestParallelPositionsStack pins the multi-survivor digest shape (the
+// fold rule itself is locked in fold_test.go): two un-consolidated positions of
+// ONE workstream render as two lines under the same [ws] tag, ULID-ascending,
+// in the same line grammar as a single position — a reading session must see
+// both, since neither superseded the other. The consumed position is gone from
+// the section but recorded in the manifest.
+func TestDigestParallelPositionsStack(t *testing.T) {
+	shared, hA, hB, hSibling := mint(t), mint(t), mint(t), mint(t)
+	events := []event.Event{
+		handoffEvent(shared, "ws1", "position both sessions read"),
+		handoffEvent(hA, "ws1", "session A position", shared),
+		handoffEvent(hB, "ws1", "session B position", shared),
+		handoffEvent(hSibling, "ws2", "sibling workstream position"),
+	}
+	proj := Fold(events)
+	d := Digest(proj, "widget")
+
+	lineA := "- " + hA + " [ws1] session A position\n"
+	lineB := "- " + hB + " [ws1] session B position\n"
+	atA, atB := strings.Index(d, lineA), strings.Index(d, lineB)
+	if atA < 0 || atB < 0 {
+		t.Fatalf("both un-consolidated positions must render, in the single-position line grammar:\n%s", d)
+	}
+	if atA > atB {
+		t.Errorf("a workstream's positions must render ULID-ascending (oldest first):\n%s", d)
+	}
+	// Workstreams stay sorted around the stack, and the consumed position is
+	// gone: a superseded line resurfacing is the bug this rule exists to stop.
+	if at := strings.Index(d, "[ws2] sibling workstream position"); at < atB {
+		t.Errorf("ws2's line must follow ws1's whole stack (sorted keys):\n%s", d)
+	}
+	if strings.Contains(d, shared) {
+		t.Errorf("the explicitly superseded position must leave the digest:\n%s", d)
+	}
+
+	// The stack marker: same sentence the brief uses (TestBriefUnconsolidatedPositions),
+	// indented under the workstream's lines so the digest's one-line-per-entry
+	// grammar still reads, and emitted ONLY in the >1 state — repeated [ws1]
+	// lines otherwise look like a duplicated render.
+	marker := "  (2 un-consolidated positions — parallel sessions; the next session's handoff consolidates them)\n"
+	if at := strings.Index(d, marker); at < atB {
+		t.Errorf("the marker line must follow the workstream's whole stack:\n%s", d)
+	}
+	if strings.Count(d, "un-consolidated positions") != 1 {
+		t.Errorf("only the stacked workstream earns the marker (ws2 has one position):\n%s", d)
+	}
+
+	m := BuildManifest(proj, "widget", "/some/log.ndjson", events)
+	if !reflect.DeepEqual(m.SupersededHandoffs, []string{shared}) {
+		t.Errorf("manifest superseded_handoffs = %v, want [%s]", m.SupersededHandoffs, shared)
+	}
+	if !reflect.DeepEqual(m.Workstreams, []string{"ws1", "ws2"}) {
+		t.Errorf("manifest workstreams = %v, want [ws1 ws2] (one entry per workstream, not per position)", m.Workstreams)
+	}
+
+	// Never nil, like concluded_handoffs: the §9 artifact is diffable, so the
+	// first supersession must not flip the field null → [...].
+	data, err := json.Marshal(BuildManifest(Fold(nil), "widget", "/some/log.ndjson", nil))
+	if err != nil {
+		t.Fatalf("marshal empty manifest: %v", err)
+	}
+	if !strings.Contains(string(data), `"superseded_handoffs":[]`) {
+		t.Errorf("empty manifest must marshal superseded_handoffs as [], got:\n%s", data)
 	}
 }

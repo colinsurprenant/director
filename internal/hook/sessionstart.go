@@ -49,9 +49,9 @@ const emitProtocol = "## Director protocol — keep this current as you work\n" 
 	"You coordinate with other sessions only through the LOG (digested below), written ONLY via the `director` CLI (never Edit/Write a log file). Emit as you work, not batched at the end — state you don't write during a turn is lost on compaction or a fresh start. Emitting RECORDS a fact; it is NOT a commitment to act and does NOT need the human's approval first — record the decision/loop the moment it exists, then ask or act if needed:\n" +
 	"- a decision the moment you make one — `director emit --type decision --area <area> \"<what + why>\"`\n" +
 	"- an open-item the moment you defer a loop — `director emit --type open-item --area <area> --risk <low|escalate> \"<loop>\"`\n" +
-	"- a handoff at each natural boundary of work that will RESUME (sub-task done, switching focus, wrapping up mid-workstream) — `director emit --type handoff --area <area> \"current task · next · hypotheses · dead ends (tried X, failed: Y)\"`\n" +
+	"- a handoff at each natural boundary of work that will RESUME (sub-task done, switching focus, wrapping up mid-workstream) — `director emit --type handoff --area <area> --refs <your-resume-point-ulid[,...]> \"current task · next · hypotheses · dead ends (tried X, failed: Y)\"` — refs name YOUR workstream's resume point(s) from the ground truth below; if it shows none for your workstream, omit `--refs`\n" +
 	"- when you FINISH an open-item, close it — `director resolve <ulid>` (use a ULID from the open-items listed below; resolve only when it is truly done — there is no reopen)\n" +
-	"Reserved: a note whose `--refs` names a handoff CONCLUDES it (retires that resume point from the digest) — only the `/director:complete` ceremony does this; never ref a handoff from a note otherwise.\n" +
+	"Reserved ref meanings: a note whose `--refs` names a handoff CONCLUDES it (only the `/director:complete` ceremony does this — never otherwise); a handoff whose `--refs` names same-workstream handoff(s) SUPERSEDES exactly those and nothing else, while a ref-less handoff retires ALL older positions of its workstream, a parallel session's included (`/director:handoff` refs on every checkpoint).\n" +
 	"The digest below is an INDEX: entries are capped headlines, not full text. `director show <ulid>` prints any event in full — before touching an area, pull the full bodies of its listed decisions rather than guessing past a headline.\n" +
 	"At a WORKSTREAM boundary, suggest the matching close-out command to the human — the two are not interchangeable:\n" +
 	"- work DONE and merged → suggest `/director:complete`, BEFORE the branch/worktree is deleted — it reviews this workstream's open-items with the human, resolves the finished ones, and archives the workstream\n" +
@@ -139,7 +139,7 @@ func refreshFleet(hub string, ws identity.Workstream, uuid, cwd string) error {
 // has been observed to drift (docs said 50K; a 36KB payload was demoted to a 2KB
 // preview on 2026-07-03), so it must never be load-bearing. Over budget, the
 // digest degrades deterministically (DigestCompact: decisions collapse to a
-// count+pointer line — never the open loops or the latest handoff) and the overflow is
+// count+pointer line — never the open loops or the resume stack) and the overflow is
 // health-logged so growth is loud long before any harness threshold bites. The
 // preamble's DELIVERY CHECK contract remains the backstop of last resort.
 //
@@ -157,10 +157,10 @@ const injectionBudgetBytes = 16 * 1024
 // is handed is exactly what the cockpit shows. Over injectionBudgetBytes it
 // degrades down a deterministic ladder: first DigestCompact (older decisions
 // collapse to a count+pointer line, the newest — anchored to this workstream's
-// latest handoff, i.e. the ones no prior session of this workstream has seen —
-// survive), then DigestCollapsed (every decision collapses). Both rungs are
-// deliberately NOT the render output — the divergence is announced in the
-// digest itself and health-logged. sessionID is only for health-logging a
+// OLDEST surviving position, i.e. the ones no prior session of this workstream
+// has seen — survive), then DigestCollapsed (every decision collapses). Both
+// rungs are deliberately NOT the render output — the divergence is announced
+// in the digest itself and health-logged. sessionID is only for health-logging a
 // nudge/concurrency failure (both fail-open, never blocking the injection);
 // uuid is this session's fleet-row key, used to exclude its own row from the
 // concurrent-session count. flavor switches the protocol/nudge command names to
@@ -274,14 +274,18 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID, uuid, flavor string
 	if len(ctx) > injectionBudgetBytes {
 		// Deterministic degradation ladder, loud in health/ at every rung —
 		// over-budget growth is a grooming signal (§15.5 / L2 promotion), not a
-		// silent state. Rung 1 collapses only the OLDER decisions: the ones newer
-		// than this workstream's latest handoff are precisely what a rehydrating
-		// session has not seen (a sibling's course correction lives there), so
-		// they are the last decision content sacrificed.
+		// silent state. Rung 1 collapses only the OLDER decisions — the ones a
+		// rehydrating session has not seen are the last decision content
+		// sacrificed (a sibling's course correction lives there).
 		full := len(ctx)
 		anchor := ""
-		if h, ok := proj.LatestHandoff[workstreamID]; ok {
-			anchor = h.ID
+		// The OLDEST surviving position anchors the band: with parallel
+		// sessions the stack holds several un-consolidated positions, and the
+		// decisions unseen by THIS session are the ones after the earliest of
+		// them — anchoring on the newest would elide what the author of an
+		// older position never saw.
+		if stack := proj.ResumeHandoffs[workstreamID]; len(stack) > 0 {
+			anchor = stack[0].ID
 		}
 		// Rung 1 only exists when it keeps something: with 0 post-anchor
 		// decisions DigestCompact degenerates to DigestCollapsed byte-for-byte,
@@ -300,8 +304,12 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID, uuid, flavor string
 			detail = fmt.Sprintf("injection budget: full payload %dB > %dB — ALL decisions collapsed to count+pointer (now %dB); groom the log (resolve/supersede/promote)", full, injectionBudgetBytes, len(ctx))
 			if len(ctx) > injectionBudgetBytes {
 				// Still over on open-items + handoffs alone: never eat the actionable
-				// sections — inject as-is and make the overflow visible.
-				detail += " — STILL over budget on actionable sections alone; the open-set needs grooming"
+				// sections — inject as-is and make the overflow visible. Both are
+				// named because either can be the cause: a deep resume stack
+				// (un-consolidated parallel positions) overflows as readily as an
+				// ungroomed open-set, and misattributing it sends the human to the
+				// wrong list.
+				detail += " — STILL over budget on actionable sections alone; the open-set or the resume stack needs grooming (open-items and handoff positions are never cut)"
 			}
 		}
 		logFailure(hub, EventSessionStart, sessionID, detail)
@@ -468,14 +476,25 @@ func concurrencyNote(siblings int, workstreamID string) string {
 		"If the parallel work is more than a quick exchange, suggest a separate worktree to the human.\n", siblings, workstreamID)
 }
 
-// resumePoint names THIS workstream's own latest handoff as the resume anchor.
-// Several workstreams can share one repo log, so the digest's handoffs section
-// lists one per workstream — without this, the model must guess which is its
-// continuation. Kept separate from startupBanner (which rides the payload head)
-// because it references the digest above it and so must follow it.
+// resumePoint names THIS workstream's own surviving handoff(s) as the resume
+// anchor. Several workstreams can share one repo log, so the digest's handoffs
+// section lists each one's positions — without this, the model must guess which
+// are its continuation. Kept separate from startupBanner (which rides the
+// payload head) because it references the digest above it and so must follow it.
+//
+// A stack deeper than one means parallel sessions of this workstream handed off
+// without seeing each other (§16): neither position supersedes the other, so the
+// resuming session is told to take their UNION and to consolidate them with an
+// explicit --refs on its own next handoff — otherwise a ref-less handoff would
+// retire a position it never read. Other workstreams' positions keep the
+// single-survivor wording's "for awareness only" framing.
 func resumePoint(workstreamID string, proj render.Projection) string {
-	if _, ok := proj.LatestHandoff[workstreamID]; !ok {
+	stack := proj.ResumeHandoffs[workstreamID]
+	if len(stack) == 0 {
 		return ""
+	}
+	if len(stack) > 1 {
+		return fmt.Sprintf("## Resume point\nYOUR workstream [%s] has %d un-consolidated positions in the digest above — parallel sessions ended without seeing each other. Read ALL of them, treat their union as your last position, and consolidate: your next handoff must pass --refs naming each of their ULIDs. The other handoffs in the digest are sibling workstreams' positions, for awareness only.\n", workstreamID, len(stack))
 	}
 	return "## Resume point\nThe handoff labeled [" + workstreamID + "] in the digest above is YOUR last position — resume from it; the other handoffs are sibling workstreams' positions, for awareness only.\n"
 }

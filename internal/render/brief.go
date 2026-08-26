@@ -16,7 +16,7 @@ import (
 // never stores a STATE.md — by composing, per project:
 //
 //   - CHARTER outlook   — where we're headed (read from disk; graceful if absent)
-//   - latest handoff    — where we are + what's next (per workstream, date-tagged)
+//   - resume stack      — where we are + what's next (per workstream, date-tagged)
 //   - open-set          — what's stuck / carried forward (date-tagged; risk:escalate = needs-you)
 //   - active decisions  — what changed
 //
@@ -83,12 +83,24 @@ func writeProjectBrief(b *strings.Builder, hub, repoKey string) error {
 	proj := Fold(events)
 
 	b.WriteString("\n## where we are\n")
-	if len(proj.LatestHandoff) == 0 {
+	if len(proj.ResumeHandoffs) == 0 {
 		b.WriteString("(no handoffs yet)\n")
 	} else {
-		for _, ws := range sortedKeys(proj.LatestHandoff) {
-			h := proj.LatestHandoff[ws]
-			fmt.Fprintf(b, "- %s[%s] %s\n", dateTag(h.TS), ws, oneLine(h.Body))
+		for _, ws := range sortedKeys(proj.ResumeHandoffs) {
+			stack := proj.ResumeHandoffs[ws]
+			for _, h := range stack {
+				fmt.Fprintf(b, "- %s[%s] %s\n", dateTag(h.TS), ws, oneLine(h.Body))
+			}
+			// A stack deeper than one means parallel sessions of this
+			// workstream ended without seeing each other; the human reading
+			// the brief should know the positions are un-merged, not a
+			// duplicate render. The marker states what WILL happen rather than
+			// asking the human for an action they cannot take — consolidation
+			// is the next session's handoff. Identical wording to the digest's
+			// marker (see render.go's handoffs section).
+			if len(stack) > 1 {
+				fmt.Fprintf(b, "(%d un-consolidated positions — parallel sessions; the next session's handoff consolidates them)\n", len(stack))
+			}
 		}
 	}
 

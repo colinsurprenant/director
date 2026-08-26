@@ -22,7 +22,7 @@ import (
 // the COMPLETE active set is present, but each body is capped to a headline —
 // nothing is dropped, the full body is one deterministic hop away via
 // `director show <ulid>`. Caps are generous where the content is actionable
-// (open-items, the latest handoff) and tight where it is deferrable rationale
+// (open-items, the resume stack) and tight where it is deferrable rationale
 // (decisions, whose durable home is the living docs, not the log body). This is
 // what keeps the SessionStart injection safely under the harness's inline
 // hook-output budget as a project's log grows (the un-capped digest was
@@ -31,9 +31,11 @@ import (
 // Sections, in fixed order — actionable state first, so anything that
 // truncates the digest (the harness's inline hook-output budget, a human
 // skimming) costs deferrable decision rationale, never the open loops or the
-// latest handoff:
+// resume stack:
 //   - open-set, each line date-tagged, with risk:escalate marked (ULID order)
-//   - latest handoff per workstream, each line date-tagged (sorted by workstream key)
+//   - the resume stack per workstream, each line date-tagged (sorted by
+//     workstream key, then ULID within a workstream — normally one line per
+//     workstream, more when parallel sessions left un-consolidated positions)
 //   - active decisions (ULID order)
 //
 // Empty sections still print their header with a "(none)" line so the absence of
@@ -44,8 +46,9 @@ func Digest(proj Projection, repoKey string) string {
 
 // DigestCompact is the hook's FIRST deterministic degradation step: identical
 // to Digest except only the NEWEST decisions survive individually — those whose
-// id is above sinceID (this workstream's latest handoff: anything decided after
-// the session's last recorded position is by definition unseen by it), capped
+// id is above sinceID (this workstream's resume point — its OLDEST surviving
+// position when parallel sessions left several: anything decided after the
+// session's last recorded position is by definition unseen by it), capped
 // at recentDecisionsKept — while the older tail collapses to a count-plus-pointer
 // line. The newest decisions are precisely the ones a rehydrating session is
 // most likely to be missing (a sibling's course correction landed the splash
@@ -80,7 +83,7 @@ func KeptDecisions(proj Projection, sinceID string) int {
 // count-plus-pointer line. It exists for the case where even DigestCompact's
 // kept-newest band pushes the SessionStart injection over its byte budget —
 // decisions are the one section whose set is deferrable (rationale, not open
-// loops or the latest handoff), and the collapsed line itself tells the model
+// loops or the resume stack), and the collapsed line itself tells the model
 // where the elided content lives, so the elision is never silent.
 func DigestCollapsed(proj Projection, repoKey string) string {
 	return digest(proj, repoKey, 0)
@@ -106,12 +109,26 @@ func digest(proj Projection, repoKey string, keepDecisions int) string {
 	}
 
 	b.WriteString("\n## handoffs\n")
-	if len(proj.LatestHandoff) == 0 {
+	if len(proj.ResumeHandoffs) == 0 {
 		b.WriteString("(none)\n")
 	} else {
-		for _, ws := range sortedKeys(proj.LatestHandoff) {
-			h := proj.LatestHandoff[ws]
-			fmt.Fprintf(&b, "- %s %s[%s] %s\n", h.ID, dateTag(h.TS), ws, headline(h.Body, handoffBodyRunes))
+		// One line per SURVIVING position: workstreams sorted, then the
+		// workstream's stack ULID-ascending. Parallel sessions leave more than
+		// one line under the same [ws] tag — the resume-point block below the
+		// digest is what tells the reading session to take their union.
+		for _, ws := range sortedKeys(proj.ResumeHandoffs) {
+			stack := proj.ResumeHandoffs[ws]
+			for _, h := range stack {
+				fmt.Fprintf(&b, "- %s %s[%s] %s\n", h.ID, dateTag(h.TS), ws, headline(h.Body, handoffBodyRunes))
+			}
+			// Named only in the >1 state, so a legacy log's digest is
+			// byte-identical: repeated [ws] lines otherwise read as a duplicate
+			// render rather than as un-merged parallel positions. Same wording
+			// as the brief's marker (see writeProjectBrief) — one state, one
+			// sentence, whichever surface the reader is on.
+			if len(stack) > 1 {
+				fmt.Fprintf(&b, "  (%d un-consolidated positions — parallel sessions; the next session's handoff consolidates them)\n", len(stack))
+			}
 		}
 	}
 
@@ -151,13 +168,20 @@ type Manifest struct {
 	Handoffs    int      `json:"handoffs"`    // raw handoff count
 	Notes       int      `json:"notes"`       // raw note count
 	LastID      string   `json:"last_id"`     // highest event id read (last-verified)
-	Workstreams []string `json:"workstreams"` // workstreams with a latest handoff, sorted
+	Workstreams []string `json:"workstreams"` // workstreams with a live resume stack, sorted
 
 	// ConcludedHandoffs lists the handoff ids a note's Refs concluded, ULID
-	// order. Conclusion is the one fold rule that removes digest content, so
-	// the removal is recorded here rather than silent: each id is one
-	// `director show` away from the concluding note.
+	// order. Conclusion is one of the two fold rules that remove digest
+	// content, so the removal is recorded here rather than silent: each id is
+	// one `director show` away from the concluding note.
 	ConcludedHandoffs []string `json:"concluded_handoffs"`
+
+	// SupersededHandoffs lists the handoff ids a same-workstream handoff's
+	// Refs superseded, ULID order — exactly the ids named, since the rule
+	// retires by set membership. The other content-removing rule, recorded for
+	// the same reason: each id is one `director show` away from the handoff
+	// that consumed that position.
+	SupersededHandoffs []string `json:"superseded_handoffs"`
 }
 
 // BuildManifest derives the manifest for one fold. rawCount is the number of
@@ -173,11 +197,12 @@ func BuildManifest(proj Projection, repoKey, source string, raw []event.Event) M
 		Handoffs:    len(proj.Handoffs),
 		Notes:       len(proj.Notes),
 		LastID:      LastID(raw),
-		Workstreams: sortedKeys(proj.LatestHandoff),
+		Workstreams: sortedKeys(proj.ResumeHandoffs),
 		// Never nil: the sibling workstreams field always marshals as [], and
-		// the §9 artifact is diffable — the first conclusion must not flip the
-		// field null → [...].
-		ConcludedHandoffs: append([]string{}, proj.ConcludedHandoffs...),
+		// the §9 artifact is diffable — the first conclusion (or supersession)
+		// must not flip the field null → [...].
+		ConcludedHandoffs:  append([]string{}, proj.ConcludedHandoffs...),
+		SupersededHandoffs: append([]string{}, proj.SupersededHandoffs...),
 	}
 }
 
@@ -202,7 +227,7 @@ func WriteManifest(hub string, m Manifest) error {
 
 // sortedKeys returns the map keys in ascending order — the helper that keeps
 // every map-derived section of a digest deterministic.
-func sortedKeys(m map[string]event.Event) []string {
+func sortedKeys(m map[string][]event.Event) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
@@ -268,7 +293,9 @@ func oneLine(s string) string {
 //     rationale lives one hop away in `director show`, and its durable home is
 //     the living docs anyway (CHARTER/ADRs), not the log body
 //   - an open-item must carry enough of the loop to act on without a pull
-//   - the handoff is the resume point; cutting it defeats its purpose
+//   - the handoff is the resume point; cutting it defeats its purpose — and
+//     that holds for EVERY line of a multi-position stack, since the resuming
+//     session must take their union
 const (
 	decisionHeadlineRunes = 160
 	openItemBodyRunes     = 300
