@@ -138,7 +138,7 @@ go build -o bin/director ./cmd/director
 sudo install bin/director /usr/local/bin/director   # or copy it anywhere on PATH
 ```
 
-Then wire it into your agent. The one-liner already wired Claude Code; the sections below spell out what that does, and how to add Codex, OpenCode, and Copilot CLI. The target flags combine (`--codex --opencode` wires exactly those two) and `director install --all` wires all four in one go.
+Then wire it into your agent. The one-liner already wired Claude Code; the sections below spell out what that does, and how to add Codex, OpenCode, and Copilot CLI. The target flags combine (`--codex --opencode` wires exactly those two) and `director install --all` wires all four in one go. When you **upgrade**, re-run `director install` (the one-liner does it for you): it refreshes the hook shims *and* the installed boundary commands, which a release may have changed.
 
 ### Wire into Claude Code
 

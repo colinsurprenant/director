@@ -150,7 +150,10 @@ director status
 > (`~/.claude/director/bin/director` by default; a `DIRECTOR_HOOKS_DIR` override moves it too).
 > If the binary isn't found, the shims exit 0 (fail-safe) and
 > coordination silently no-ops: nothing breaks, but nothing coordinates. After rebuilding the binary,
-> re-run `director install` to refresh the shims.
+> re-run `director install` to refresh the shims. The same applies after **upgrading**: re-run
+> `director install` (the curl one-liner does it for you) — it also refreshes the installed
+> boundary commands, which a new release may have changed (v1.13's `/director:handoff` emits the
+> new `--refs` shape, for example).
 >
 > The last tier is what the install's **bin symlink** provisions, and it matters more than it looks:
 > the Claude Code **desktop app** launched from the Dock/Launchpad inherits the bare launchd `PATH`
