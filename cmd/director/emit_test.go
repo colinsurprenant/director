@@ -61,6 +61,66 @@ func TestRunEmitRoutingEcho(t *testing.T) {
 	}
 }
 
+// TestRunEmitRefLessHandoffWarns locks the write-side counterpart of the fold's
+// supersession rule: a handoff WITHOUT --refs retires every older position of
+// its workstream, including a parallel session's the emitter never saw, so it
+// earns one stderr warning next to the routing echo. A handoff that names what
+// it consumed does not, and neither does any other kind — the warning is keyed
+// on the flags alone (classifying refs would cost a log read on the write path).
+func TestRunEmitRefLessHandoffWarns(t *testing.T) {
+	hub := t.TempDir()
+	t.Setenv("DIRECTOR_HUB", hub)
+	repo := filepath.Join(t.TempDir(), "proj")
+	gitInitRepo(t, repo)
+	t.Chdir(repo)
+
+	const warning = "⚠ handoff without --refs"
+
+	var code int
+	stdout, stderr := captureStreams(t, func() {
+		code = runEmit([]string{"--type", "handoff", "--area", "x", "no refs given"})
+	})
+	if code != 0 {
+		t.Fatalf("emit exit = %d, want 0\nstderr: %s", code, stderr)
+	}
+	if !strings.Contains(stderr, warning) {
+		t.Errorf("ref-less handoff must warn on stderr, got %q", stderr)
+	}
+	if !strings.Contains(stderr, "pass --refs <resume-point-ulid>") {
+		t.Errorf("the warning must name the remedy, got %q", stderr)
+	}
+	// stdout stays the bare ULID: the warning must not leak into what callers
+	// capture through command substitution.
+	if strings.Count(stdout, "\n") != 1 || strings.Contains(stdout, "⚠") {
+		t.Errorf("stdout = %q, want exactly one ULID line", stdout)
+	}
+	prior := strings.TrimSuffix(stdout, "\n")
+
+	// A handoff that names the position it rehydrated from: no warning.
+	_, stderr = captureStreams(t, func() {
+		code = runEmit([]string{"--type", "handoff", "--area", "x", "--refs", prior, "consolidating"})
+	})
+	if code != 0 {
+		t.Fatalf("emit with --refs exit = %d, want 0\nstderr: %s", code, stderr)
+	}
+	if strings.Contains(stderr, warning) {
+		t.Errorf("a handoff with --refs must not warn, got %q", stderr)
+	}
+
+	// Every other kind is ref-less by default and means nothing by it.
+	for _, kind := range []string{"note", "decision", "open-item"} {
+		_, stderr = captureStreams(t, func() {
+			code = runEmit([]string{"--type", kind, "--area", "x", "ordinary " + kind})
+		})
+		if code != 0 {
+			t.Fatalf("emit %s exit = %d, want 0\nstderr: %s", kind, code, stderr)
+		}
+		if strings.Contains(stderr, warning) {
+			t.Errorf("a ref-less %s must not warn, got %q", kind, stderr)
+		}
+	}
+}
+
 // captureStreams runs fn with BOTH os.Stdout and os.Stderr redirected to pipes
 // and returns what each received. The CLI verbs print with fmt.Print/Fprint to
 // the real fds, so tests asserting on output need them swapped, not a passed

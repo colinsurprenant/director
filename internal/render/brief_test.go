@@ -160,6 +160,45 @@ func TestBriefDates(t *testing.T) {
 	}
 }
 
+// TestBriefUnconsolidatedPositions: where-we-are renders EVERY surviving
+// position of a workstream (oldest first), and a stack deeper than one carries
+// the marker line telling the human these are parallel sessions' un-merged
+// positions rather than a duplicated render.
+func TestBriefUnconsolidatedPositions(t *testing.T) {
+	hub := t.TempDir()
+	shared, hA, hB, hSolo := mint(t), mint(t), mint(t), mint(t)
+	seedProject(t, hub, "widget", []event.Event{
+		handoffEvent(shared, "ws1", "position both sessions read"),
+		handoffEvent(hA, "ws1", "session A position", shared),
+		handoffEvent(hB, "ws1", "session B position", shared),
+		handoffEvent(hSolo, "ws2", "sibling lone position"),
+	})
+
+	out, err := BriefProject(hub, "widget")
+	if err != nil {
+		t.Fatalf("BriefProject: %v", err)
+	}
+	atA, atB := strings.Index(out, "[ws1] session A position"), strings.Index(out, "[ws1] session B position")
+	if atA < 0 || atB < 0 {
+		t.Fatalf("both un-consolidated positions must render:\n%s", out)
+	}
+	if atA > atB {
+		t.Errorf("positions must render oldest→newest:\n%s", out)
+	}
+	marker := "(2 un-consolidated positions — parallel sessions; consolidate on next handoff)"
+	if at := strings.Index(out, marker); at < atB {
+		t.Errorf("the marker line must follow the workstream's stack:\n%s", out)
+	}
+	// A workstream with one position gets no marker — the line is a signal, not
+	// decoration.
+	if strings.Count(out, "un-consolidated positions") != 1 {
+		t.Errorf("only the stacked workstream earns the marker:\n%s", out)
+	}
+	if strings.Contains(out, "position both sessions read") {
+		t.Errorf("the superseded position must leave the brief:\n%s", out)
+	}
+}
+
 func writeCharter(t *testing.T, hub, repoKey, body string) {
 	t.Helper()
 	dir := filepath.Join(hub, "projects", repoKey)

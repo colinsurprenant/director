@@ -22,7 +22,7 @@ func runEmit(args []string) int {
 	fs.StringVar(&area, "area", "", "subsystem/path tag")
 	fs.StringVar(&risk, "risk", "", "low|escalate (decisions and open-items)")
 	fs.StringVar(&to, "to", "", "addressed-to handle (optional)")
-	fs.StringVar(&refs, "refs", "", "comma-separated ULIDs this references/supersedes; a note ref naming a handoff CONCLUDES it (see /director:complete)")
+	fs.StringVar(&refs, "refs", "", "comma-separated ULIDs this references/supersedes; a handoff ref naming a same-workstream handoff SUPERSEDES that position (see /director:handoff), a note ref naming a handoff CONCLUDES it (see /director:complete)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -62,6 +62,15 @@ func runEmit(args []string) int {
 	// whose cwd drifted sees the misroute in its own transcript.
 	fmt.Println(ev.ID)
 	fmt.Fprintf(os.Stderr, "→ %s · %s\n", ws.RepoKey, ws.ID)
+	// A ref-less handoff is the legacy shape and still retires every older
+	// position of its workstream — including a parallel session's the emitter
+	// never saw. The warning rides the same stream as the routing echo so the
+	// emitting session reads it in its own transcript, right where it can still
+	// re-emit with --refs. Keyed on the flags alone: classifying the refs (or
+	// detecting a first handoff) would need a log read on the write path.
+	if event.Kind(typ) == event.KindHandoff && len(refList) == 0 {
+		fmt.Fprintln(os.Stderr, "⚠ handoff without --refs: it supersedes ALL older handoffs of this workstream, including parallel positions you may not have seen — pass --refs <resume-point-ulid> to supersede only what you rehydrated from")
+	}
 	return 0
 }
 

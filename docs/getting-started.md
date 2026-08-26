@@ -367,7 +367,7 @@ director brief                       # whole-fleet bigger picture
 director brief --project <repo-key>  # one project
 ```
 
-`brief` composes the outlook (from each CHARTER), the latest handoff per workstream, the carried-forward
+`brief` composes the outlook (from each CHARTER), the resume point(s) per workstream, the carried-forward
 open items, and recent decisions: the moving narrative between the stable CHARTER and the per-session
 handoff. It's fully deterministic: you read the same picture a fresh session reads.
 
@@ -428,7 +428,7 @@ At block boundaries, two slash commands (installed by `director install`) mark w
   move when a session has degraded (you keep repeating the same correction): hand off the distilled state,
   then `/clear` — a fresh session resuming from the checkpoint beats pushing a rotten context forward.
 - **`/director:complete`** when a workstream is done and merged. It closes out the workstream's open loops
-  with your confirmation, concludes its last handoff (so the digest stops offering a dead resume point),
+  with your confirmation, concludes its newest handoff (so the digest stops offering a dead resume point),
   and archives its fleet row. Nothing auto-resolves; close-out is human-confirmed.
   It also takes a workstream id (`/director:complete <id>`) to close out a *dead sibling*: a worktree
   that merged and was deleted before anyone ran the close-out. Its branch reads `gone` in `status`, and
