@@ -36,12 +36,13 @@ type Projection struct {
 	// retired, each one `director show`-able to find the concluding note.
 	ConcludedHandoffs []string
 
-	// SupersededHandoffs lists the handoff ids explicitly named by a
-	// same-workstream handoff's Refs, ULID-ascending — the positions a later
-	// handoff consumed and retired. Same manifest rationale as
-	// ConcludedHandoffs: the second fold rule that removes digest content
-	// stays observable, each id one `director show` from the handoff that
-	// superseded it.
+	// SupersededHandoffs is the EXACT retirement set of the supersession rule,
+	// ULID-ascending: the handoff ids named by a later same-workstream
+	// handoff's Refs — the positions it consumed, and no others (the rule
+	// retires by set membership, so this list IS what left the resume stack).
+	// Same manifest rationale as ConcludedHandoffs: the second fold rule that
+	// removes digest content stays observable, each id one `director show`
+	// from the handoff that superseded it.
 	SupersededHandoffs []string
 }
 
@@ -62,30 +63,39 @@ type Projection struct {
 //     Refs drop the promoted decisions from the active set, and the marker
 //     itself stays active as the doc pointer — promotion IS supersession to the
 //     fold, which is also how pre-promote binaries degrade (identical active set).
-//   - resume stack: the handoffs of a workstream that survive its three
-//     retirement marks are its resume point(s) (§16), ULID-ascending. Each
-//     handoff first CLASSIFIES by its own Refs: EXPLICIT when they name at
-//     least one SAME-workstream handoff (the position(s) its author actually
-//     rehydrated from), IMPLICIT otherwise — refs naming notes, decisions,
-//     open-items, or ANOTHER workstream's handoff carry no supersession
-//     weight and leave the handoff implicit. The three per-workstream marks:
-//     the conclude mark (see the conclusion rule below); the SUPERSEDE mark,
-//     the highest same-workstream handoff id named across the workstream's
-//     explicit handoffs; and the IMPLICIT mark, the highest implicit
-//     handoff's own id — a handoff that names no position it consumed can
-//     only mean "everything older is mine too", which is the pre-supersession
-//     (legacy) rule. A handoff survives iff its id is ABOVE the conclude and
-//     supersede marks and AT OR ABOVE the implicit mark.
+//   - resume stack: the handoffs of a workstream that survive retirement are
+//     its resume point(s) (§16), ULID-ascending. Each handoff first
+//     CLASSIFIES by its own Refs: EXPLICIT when they name at least one
+//     SAME-workstream handoff whose id is STRICTLY BELOW its own (the
+//     position(s) its author actually rehydrated from), IMPLICIT otherwise —
+//     refs naming notes, decisions, open-items, ANOTHER workstream's handoff,
+//     or a same-workstream handoff at or above its own id carry no
+//     supersession weight and are ignored entirely (a handoff consumes
+//     neither itself nor a position that did not yet exist when it was
+//     written). An explicit handoff retires EXACTLY the ids it named: SET
+//     MEMBERSHIP, not a high-water mark, so a parallel position nothing ever
+//     named is never swept by a mark whose author never saw it. An implicit
+//     handoff can only mean "everything older is mine too" — the
+//     pre-supersession (legacy) reading — so the workstream's IMPLICIT mark
+//     (the highest implicit handoff's own id) retires every strictly older
+//     position. A handoff survives iff its id is ABOVE the conclude mark, is
+//     in NO explicit handoff's retirement set, and is AT OR ABOVE the
+//     implicit mark.
 //     The consequences are the contract: a log whose handoffs are all
 //     implicit yields exactly the old single winner (the highest un-concluded
 //     handoff), so legacy logs fold byte-identically; two sessions of one
 //     workstream that hand off in parallel — each refs the position it truly
-//     read — STACK instead of erasing the position neither saw; and one
-//     ref-less handoff still retires everything older, so the degradation is
-//     legible rather than silent. The meaning is reserved: a handoff whose
-//     Refs name same-workstream handoffs SUPERSEDES exactly those positions
-//     (the /director:handoff ceremony emits that on every checkpoint), which
-//     is why SupersededHandoffs records them for the manifest.
+//     read — STACK instead of erasing the position neither saw; a position no
+//     handoff ever named ALWAYS survives to stack, so a consolidating handoff
+//     that forgets one of its own prior refs leaves visible stack noise the
+//     next consolidation heals, rather than silently dropping a position
+//     (loud beats silent); and one ref-less handoff still retires everything
+//     older, so the legacy degradation stays legible. The meaning is
+//     reserved: a handoff whose Refs name same-workstream handoffs
+//     SUPERSEDES exactly those positions — nothing older, nothing newer (the
+//     /director:handoff ceremony emits that on every checkpoint), which is
+//     why SupersededHandoffs records that exact retirement set for the
+//     manifest.
 //   - concluded handoffs: a note whose Refs name a handoff CONCLUDES that
 //     workstream's trail up to and including it — a per-workstream high-water
 //     mark, so concluding the newest handoff can never resurface an even
@@ -161,32 +171,32 @@ func Fold(events []event.Event) Projection {
 		}
 	}
 
-	// Pass 1b: classify handoffs and derive the two supersession marks. It runs
-	// after handoffWS is complete because a ref is only a supersession when the
-	// id it names IS a handoff of the SAME workstream — a ref naming a note, an
-	// open-item, or a sibling workstream's handoff is ordinary cross-linking and
-	// leaves the handoff implicit (that shape exists in production logs).
-	supersededHandoff := make(map[string]bool)
-	maxSuperseded := make(map[string]string) // ws → highest explicitly-superseded handoff id
-	maxImplicit := make(map[string]string)   // ws → highest implicit handoff id
+	// Pass 1b: classify handoffs and build the retirement set. It runs after
+	// handoffWS is complete because a ref is only a supersession when the id it
+	// names IS a handoff of the SAME workstream, BELOW the referrer's own id — a
+	// ref naming a note, an open-item, a sibling workstream's handoff, or a
+	// position that did not yet exist is ordinary cross-linking and leaves the
+	// handoff implicit (that shape exists in production logs).
+	//
+	// The retirement is exact set membership, deliberately NOT a high-water mark:
+	// a mark sweeps every position below it, including a parallel one its author
+	// never saw and never named (R < B1 < A1 < A2 with A2 refs A1 would bury B1),
+	// which is the very silence this rule exists to end.
+	supersededHandoff := make(map[string]bool) // handoff ids explicitly retired
+	maxImplicit := make(map[string]string)     // ws → highest implicit handoff id
 	for _, ev := range sorted {
 		if ev.Type != event.KindHandoff {
 			continue
 		}
-		explicit := ""
+		explicit := false
 		for _, ref := range ev.Refs {
-			if ws, isHandoff := handoffWS[ref]; !isHandoff || ws != ev.Workstream {
+			if ws, isHandoff := handoffWS[ref]; !isHandoff || ws != ev.Workstream || ref >= ev.ID {
 				continue
 			}
 			supersededHandoff[ref] = true
-			if ref > explicit {
-				explicit = ref
-			}
+			explicit = true
 		}
-		if explicit != "" {
-			if explicit > maxSuperseded[ev.Workstream] {
-				maxSuperseded[ev.Workstream] = explicit
-			}
+		if explicit {
 			continue
 		}
 		// Implicit: no consumed position named, so the legacy rule applies —
@@ -218,14 +228,14 @@ func Fold(events []event.Event) Projection {
 			if supersededHandoff[ev.ID] {
 				proj.SupersededHandoffs = append(proj.SupersededHandoffs, ev.ID)
 			}
-			// The three marks, applied together: strictly above the
-			// conclusion and supersession high-water marks (both name
-			// positions explicitly retired), and at or above the implicit
-			// mark (an unqualified handoff claims everything older). Ascending
-			// order makes the appended stack ULID-ascending, and a workstream
-			// with no survivor never gets a key.
+			// The three retirements, applied together: strictly above the
+			// conclusion high-water mark, named by no explicit handoff (exact
+			// set membership), and at or above the implicit mark (an
+			// unqualified handoff claims everything older). Ascending order
+			// makes the appended stack ULID-ascending, and a workstream with
+			// no survivor never gets a key.
 			ws := ev.Workstream
-			if ev.ID > maxConcluded[ws] && ev.ID > maxSuperseded[ws] && ev.ID >= maxImplicit[ws] {
+			if ev.ID > maxConcluded[ws] && !supersededHandoff[ev.ID] && ev.ID >= maxImplicit[ws] {
 				proj.ResumeHandoffs[ws] = append(proj.ResumeHandoffs[ws], ev)
 			}
 		case event.KindNote:

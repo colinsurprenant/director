@@ -61,11 +61,12 @@ Two **reserved ref meanings**, both load-bearing:
   older ones) leaves the digest's resume points, staying in the log. `/director:complete` uses
   this to retire a dead workstream's last resume point; never ref a handoff from a note otherwise.
 - A `handoff` whose `--refs` names same-workstream **handoff(s)** SUPERSEDES exactly those
-  positions (them and anything older, nothing newer). Ref the resume point(s) you rehydrated from
-  plus any handoff you emitted earlier this session, and a parallel session's position on the same
-  workstream survives instead of being silently overwritten. A handoff with no such refs retires
-  ALL older positions of the workstream, including one you never saw. `/director:handoff` does
-  this on every checkpoint.
+  positions and nothing else (nothing older than them, nothing newer): retirement is set
+  membership, so a position no handoff ever named still stands. Ref the resume point(s) you
+  rehydrated from plus any handoff you emitted earlier this session, and a parallel session's
+  position on the same workstream survives instead of being silently overwritten. A handoff with
+  no such refs retires ALL older positions of the workstream, including one you never saw.
+  `/director:handoff` does this on every checkpoint.
 
 Refs to decisions and open-items carry no such effect. When your injected state shows **several**
 resume points for your workstream, that is two parallel sessions' positions stacked: read them

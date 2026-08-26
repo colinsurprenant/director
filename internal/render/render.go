@@ -117,8 +117,17 @@ func digest(proj Projection, repoKey string, keepDecisions int) string {
 		// one line under the same [ws] tag — the resume-point block below the
 		// digest is what tells the reading session to take their union.
 		for _, ws := range sortedKeys(proj.ResumeHandoffs) {
-			for _, h := range proj.ResumeHandoffs[ws] {
+			stack := proj.ResumeHandoffs[ws]
+			for _, h := range stack {
 				fmt.Fprintf(&b, "- %s %s[%s] %s\n", h.ID, dateTag(h.TS), ws, headline(h.Body, handoffBodyRunes))
+			}
+			// Named only in the >1 state, so a legacy log's digest is
+			// byte-identical: repeated [ws] lines otherwise read as a duplicate
+			// render rather than as un-merged parallel positions. Same wording
+			// as the brief's marker (see writeProjectBrief) — one state, one
+			// sentence, whichever surface the reader is on.
+			if len(stack) > 1 {
+				fmt.Fprintf(&b, "  (%d un-consolidated positions — parallel sessions; the next session's handoff consolidates them)\n", len(stack))
 			}
 		}
 	}
@@ -168,9 +177,10 @@ type Manifest struct {
 	ConcludedHandoffs []string `json:"concluded_handoffs"`
 
 	// SupersededHandoffs lists the handoff ids a same-workstream handoff's
-	// Refs superseded, ULID order — the other content-removing rule, recorded
-	// for the same reason: each id is one `director show` away from the
-	// handoff that consumed that position.
+	// Refs superseded, ULID order — exactly the ids named, since the rule
+	// retires by set membership. The other content-removing rule, recorded for
+	// the same reason: each id is one `director show` away from the handoff
+	// that consumed that position.
 	SupersededHandoffs []string `json:"superseded_handoffs"`
 }
 

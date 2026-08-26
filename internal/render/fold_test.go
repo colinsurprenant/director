@@ -1,6 +1,7 @@
 package render
 
 import (
+	"fmt"
 	"math/rand"
 	"reflect"
 	"strings"
@@ -118,11 +119,12 @@ func TestFoldClosedOpenItemExcluded(t *testing.T) {
 	}
 }
 
-// TestFoldLatestHandoffPerWorkstreamWins pins the legacy rule inside the
-// survivor semantics: richSet's handoffs are all IMPLICIT (no refs), so each
-// workstream's resume stack is exactly the old single winner — its
-// highest-ULID handoff — and nothing older stacks beside it.
-func TestFoldLatestHandoffPerWorkstreamWins(t *testing.T) {
+// TestFoldLegacyLatestHandoffWins is the deliberate legacy pin: it asserts the
+// PRE-supersession single-survivor result still holds where it should.
+// richSet's handoffs are all IMPLICIT (no refs), the shape of every log written
+// before this rule, so each workstream's resume stack is exactly the old
+// winner — its highest-ULID handoff — and nothing older stacks beside it.
+func TestFoldLegacyLatestHandoffWins(t *testing.T) {
 	events, ids := richSet(t)
 	proj := Fold(events)
 
@@ -356,9 +358,10 @@ func TestFoldConclusionHighWaterMark(t *testing.T) {
 
 // handoffEvent is the shorthand the supersession scenarios lean on: one
 // handoff of a workstream, with the refs that classify it. Refs naming
-// same-workstream handoffs make it EXPLICIT (it supersedes exactly those
-// positions); anything else — no refs, a note, another workstream's handoff —
-// leaves it IMPLICIT (it supersedes everything older, the legacy rule).
+// same-workstream handoffs BELOW its own id make it EXPLICIT (it retires
+// exactly those positions and no others); anything else — no refs, a note,
+// another workstream's handoff, an id at or above its own — leaves it IMPLICIT
+// (it retires everything strictly older, the legacy rule).
 func handoffEvent(id, ws, body string, refs ...string) event.Event {
 	return event.Event{
 		ID: id, SchemaVersion: event.SchemaVersion,
@@ -537,28 +540,146 @@ func TestFoldSupersededHandoffsOrder(t *testing.T) {
 	assertOrderIndependent(t, events, proj)
 }
 
-// TestFoldSupersedeMarkAboveOwnID documents a shape only a hand-edited or
-// corrupt log can produce: a handoff whose refs name a HIGHER-ULID handoff of
-// its own workstream (impossible from the CLI — a ULID must exist to be
-// ref'd). The rule is applied as written rather than special-cased: the mark
-// is the max ref'd id, which here sits above the referring handoff itself, so
-// BOTH positions fall below the mark and the workstream renders no resume
-// point at all. The outcome is deterministic and the removal stays observable
-// in SupersededHandoffs — no arbitrary winner is invented.
-func TestFoldSupersedeMarkAboveOwnID(t *testing.T) {
+// TestFoldRefsAtOrAboveOwnIDIgnored covers a shape only a hand-edited or
+// corrupt log can produce: a handoff whose refs name its OWN id, or a
+// HIGHER-ULID handoff of its own workstream (impossible from the CLI — a ULID
+// must exist to be ref'd). A handoff consumes neither itself nor a position
+// that did not exist when it was written, so such refs are ignored ENTIRELY:
+// the handoff classifies IMPLICIT, retiring everything strictly older by the
+// legacy rule, and nothing it named is recorded as superseded. The workstream
+// still renders a resume point — a corrupt ref must not delete the workstream's
+// position, which is what treating the ref as a mark used to do.
+func TestFoldRefsAtOrAboveOwnIDIgnored(t *testing.T) {
 	hLow, hHigh := mint(t), mint(t)
 	events := []event.Event{
 		handoffEvent(hLow, "ws1", "position refs a newer one", hHigh),
-		handoffEvent(hHigh, "ws1", "the newer position"),
+		handoffEvent(hHigh, "ws1", "position refs itself", hHigh),
 	}
 
 	proj := Fold(events)
-	assertStack(t, proj, "ws1", nil)
-	if !reflect.DeepEqual(proj.SupersededHandoffs, []string{hHigh}) {
-		t.Errorf("SupersededHandoffs = %v, want [%s]", proj.SupersededHandoffs, hHigh)
+	// Both are implicit, so the implicit mark is hHigh and the legacy
+	// single-winner result stands.
+	assertStack(t, proj, "ws1", []string{hHigh})
+	if len(proj.SupersededHandoffs) != 0 {
+		t.Errorf("a self-ref and a forward-ref supersede nothing: %v", proj.SupersededHandoffs)
 	}
 	if len(proj.Handoffs) != 2 {
 		t.Errorf("history must survive a corrupt-looking supersession: %d handoffs, want 2", len(proj.Handoffs))
+	}
+	assertOrderIndependent(t, events, proj)
+}
+
+// TestFoldInterleavedParallelPositionNotSwept is the case that forced
+// retirement to be SET MEMBERSHIP rather than a high-water mark. Four
+// positions of one workstream, R < B1 < A1 < A2: session B rehydrated from R
+// and checkpointed once (B1); session A rehydrated from R (A1) and
+// checkpointed again on top of its own position (A2). A2's author never saw
+// B1 and never named it. Under a mark — the highest id named across the
+// workstream's explicit handoffs, here A1 — B1 falls below and is swept
+// silently, which is the exact defect this rule exists to end. Under set
+// membership only the named ids retire, and B1 stacks as it should.
+func TestFoldInterleavedParallelPositionNotSwept(t *testing.T) {
+	r, b1, a1, a2 := mint(t), mint(t), mint(t), mint(t)
+	events := []event.Event{
+		handoffEvent(r, "ws1", "position both sessions rehydrated from"),
+		handoffEvent(b1, "ws1", "session B position", r),
+		handoffEvent(a1, "ws1", "session A first position", r),
+		handoffEvent(a2, "ws1", "session A second position", a1),
+	}
+
+	proj := Fold(events)
+	assertStack(t, proj, "ws1", []string{b1, a2})
+	if !reflect.DeepEqual(proj.SupersededHandoffs, []string{r, a1}) {
+		t.Errorf("SupersededHandoffs = %v, want exactly the named ids [%s %s]", proj.SupersededHandoffs, r, a1)
+	}
+	assertOrderIndependent(t, events, proj)
+}
+
+// TestFoldExplicitRefsRetireOnlyNamedPositions is the same defect at its
+// minimum size: R < A < B < C, where A and B both ref R (parallel) and C
+// consolidates only B. C's author saw B, not A, so A stays live — a mark at C
+// would have buried it.
+func TestFoldExplicitRefsRetireOnlyNamedPositions(t *testing.T) {
+	r, hA, hB, hC := mint(t), mint(t), mint(t), mint(t)
+	events := []event.Event{
+		handoffEvent(r, "ws1", "shared starting position"),
+		handoffEvent(hA, "ws1", "session A position", r),
+		handoffEvent(hB, "ws1", "session B position", r),
+		handoffEvent(hC, "ws1", "position consolidating only B", hB),
+	}
+
+	proj := Fold(events)
+	assertStack(t, proj, "ws1", []string{hA, hC})
+	if !reflect.DeepEqual(proj.SupersededHandoffs, []string{r, hB}) {
+		t.Errorf("SupersededHandoffs = %v, want [%s %s]", proj.SupersededHandoffs, r, hB)
+	}
+	assertOrderIndependent(t, events, proj)
+}
+
+// TestFoldSequentialChainCollapses is the common path the stack must not make
+// noisy: one session checkpointing repeatedly, each handoff refing the one
+// before it. Every consumed position retires and the workstream shows exactly
+// one resume point, the same as under the old latest-wins rule.
+func TestFoldSequentialChainCollapses(t *testing.T) {
+	r, x1, x2, x3 := mint(t), mint(t), mint(t), mint(t)
+	events := []event.Event{
+		handoffEvent(r, "ws1", "starting position"),
+		handoffEvent(x1, "ws1", "first checkpoint", r),
+		handoffEvent(x2, "ws1", "second checkpoint", x1),
+		handoffEvent(x3, "ws1", "third checkpoint", x2),
+	}
+
+	proj := Fold(events)
+	assertStack(t, proj, "ws1", []string{x3})
+	if !reflect.DeepEqual(proj.SupersededHandoffs, []string{r, x1, x2}) {
+		t.Errorf("SupersededHandoffs = %v, want the whole consumed chain [%s %s %s]", proj.SupersededHandoffs, r, x1, x2)
+	}
+	assertOrderIndependent(t, events, proj)
+}
+
+// TestFoldUnknownRefStaysImplicit: a ref naming an id that is in no log at all
+// (a mis-copied ULID, a truncated paste) resolves to no handoff, so the
+// handoff classifies IMPLICIT and takes the legacy everything-older rule. The
+// fold cannot distinguish a typo from a deliberate cross-link, so it degrades
+// to the conservative reading — and `director emit` warns on exactly this
+// shape at write time, where the emitter can still fix it.
+func TestFoldUnknownRefStaysImplicit(t *testing.T) {
+	older, h, unknown := mint(t), mint(t), mint(t)
+	events := []event.Event{
+		handoffEvent(older, "ws1", "older ws1 position"),
+		handoffEvent(h, "ws1", "position naming an id no event carries", unknown),
+	}
+
+	proj := Fold(events)
+	assertStack(t, proj, "ws1", []string{h})
+	if len(proj.SupersededHandoffs) != 0 {
+		t.Errorf("an unresolvable ref supersedes nothing: %v", proj.SupersededHandoffs)
+	}
+	assertOrderIndependent(t, events, proj)
+}
+
+// TestFoldExplicitRefToConcludedHandoff pins the two rules' independence: a
+// handoff may legitimately ref a position a completion note already concluded
+// (a session resuming work declared done). The conclude mark retires the ref'd
+// position — it was already retired — but the new handoff sits above the mark
+// and surfaces as a genuinely new resume point, exactly as a ref-less handoff
+// after a conclusion does.
+func TestFoldExplicitRefToConcludedHandoff(t *testing.T) {
+	older, note, h := mint(t), mint(t), mint(t)
+	events := []event.Event{
+		handoffEvent(older, "ws1", "position the completion note concluded"),
+		{ID: note, SchemaVersion: event.SchemaVersion, Type: event.KindNote, Workstream: "ws1",
+			Refs: []string{older}, Body: "ws1 complete — PR merged"},
+		handoffEvent(h, "ws1", "work reopened from the concluded position", older),
+	}
+
+	proj := Fold(events)
+	assertStack(t, proj, "ws1", []string{h})
+	if !reflect.DeepEqual(proj.ConcludedHandoffs, []string{older}) {
+		t.Errorf("ConcludedHandoffs = %v, want [%s]", proj.ConcludedHandoffs, older)
+	}
+	if !reflect.DeepEqual(proj.SupersededHandoffs, []string{older}) {
+		t.Errorf("SupersededHandoffs = %v, want [%s] — the two rules record independently", proj.SupersededHandoffs, older)
 	}
 	assertOrderIndependent(t, events, proj)
 }
@@ -622,12 +743,25 @@ func TestFoldLegacyLogRendersOneLinePerWorkstream(t *testing.T) {
 	if ws1Lines != 1 || ws2Lines != 1 {
 		t.Errorf("legacy log must render one handoff line per workstream, got ws1=%d ws2=%d:\n%s", ws1Lines, ws2Lines, d)
 	}
-	if !strings.Contains(d, "[ws1] ws1 newest") || !strings.Contains(d, "[ws2] ws2 newest") {
-		t.Errorf("the surviving line must be each workstream's newest position:\n%s", d)
+
+	// The golden bytes are written out by hand rather than captured from the
+	// fold: comparing this code's output to this code's output would pass
+	// through any formatting regression, and byte-identity for pre-supersession
+	// logs is the whole back-compat claim. Only the minted ULIDs are
+	// substituted — these events carry no ts, so every date tag is empty, and
+	// no workstream is deep enough for the un-consolidated marker line.
+	want := fmt.Sprintf("# director render — widget\n"+
+		"\n## open-items\n(none)\n"+
+		"\n## handoffs\n"+
+		"- %s [ws1] ws1 newest\n"+
+		"- %s [ws2] ws2 newest\n"+
+		"\n## decisions\n(none)\n", ws1c, ws2b)
+	if d != want {
+		t.Errorf("legacy digest bytes changed:\n--- got ---\n%s\n--- want ---\n%s", d, want)
 	}
 	for _, seed := range []int64{1, 7, 99} {
-		if got := Digest(Fold(shuffled(events, seed)), "widget"); got != d {
-			t.Fatalf("legacy digest changed under input shuffle seed %d", seed)
+		if got := Digest(Fold(shuffled(events, seed)), "widget"); got != want {
+			t.Fatalf("legacy digest changed under input shuffle seed %d:\n%s", seed, got)
 		}
 	}
 }

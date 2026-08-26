@@ -84,9 +84,9 @@ func TestDigestThroughStore(t *testing.T) {
 // fully-populated skeleton — every section header present with "(none)".
 func TestDigestEmptyLogStable(t *testing.T) {
 	d := Digest(Fold(nil), "empty")
-	// Fixed section order is survival order: actionable state (open-set, latest handoff)
-	// first, deferrable decision rationale last, so a truncated delivery of the
-	// injected digest costs rationale, never open loops.
+	// Fixed section order is survival order: actionable state (open-set, resume
+	// stack) first, deferrable decision rationale last, so a truncated delivery
+	// of the injected digest costs rationale, never open loops.
 	last := -1
 	for _, header := range []string{"## open-items", "## handoffs", "## decisions"} {
 		at := strings.Index(d, header)
@@ -243,8 +243,8 @@ func TestDigestCollapsed(t *testing.T) {
 }
 
 // TestDigestCompactKeepsNewestSinceAnchor locks the FIRST degradation rung: a
-// decision newer than the anchor (the workstream's latest handoff — decided
-// after the session's last recorded position, so unseen by it) survives as an
+// decision newer than the anchor (the workstream's oldest surviving position —
+// decided after it, so unseen by its author) survives as an
 // index line, while the older tail collapses to the count-plus-pointer line.
 // This is the incident-01KWW146C7 guarantee: the all-or-nothing collapse hid a
 // sibling's course correction; the recency band must not.
@@ -515,6 +515,18 @@ func TestDigestParallelPositionsStack(t *testing.T) {
 	}
 	if strings.Contains(d, shared) {
 		t.Errorf("the explicitly superseded position must leave the digest:\n%s", d)
+	}
+
+	// The stack marker: same sentence the brief uses (TestBriefUnconsolidatedPositions),
+	// indented under the workstream's lines so the digest's one-line-per-entry
+	// grammar still reads, and emitted ONLY in the >1 state — repeated [ws1]
+	// lines otherwise look like a duplicated render.
+	marker := "  (2 un-consolidated positions — parallel sessions; the next session's handoff consolidates them)\n"
+	if at := strings.Index(d, marker); at < atB {
+		t.Errorf("the marker line must follow the workstream's whole stack:\n%s", d)
+	}
+	if strings.Count(d, "un-consolidated positions") != 1 {
+		t.Errorf("only the stacked workstream earns the marker (ws2 has one position):\n%s", d)
 	}
 
 	m := BuildManifest(proj, "widget", "/some/log.ndjson", events)

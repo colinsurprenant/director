@@ -417,7 +417,12 @@ perform for the model:
 
 There are exactly four event kinds: `decision`, `open-item` (the home for "documented, not dropped";
 `--risk escalate` is the "needs a human" subset that surfaces in `status`), `handoff`, and `note`. There is
-no `blocker` kind and `done` is fleet-liveness only. Your job is to **review**: read `status`/`brief`,
+no `blocker` kind and `done` is fleet-liveness only. Two `--refs` pairings carry reserved meaning: a
+`note` whose refs name a `handoff` **concludes** it (that is how `/director:complete` stops a finished
+workstream from offering a dead resume point), and a `handoff` whose refs name same-workstream
+`handoff`(s) **supersedes** exactly those positions and nothing else, so a position it never named
+survives instead of being silently overwritten. A handoff carrying no such refs falls back to retiring
+every older position of its workstream. Your job is to **review**: read `status`/`brief`,
 answer the escalations, edit CHARTERs to steer, not to relay.
 
 At block boundaries, two slash commands (installed by `director install`) mark workstream lifecycle:
@@ -437,6 +442,18 @@ At block boundaries, two slash commands (installed by `director install`) mark w
 
 A workstream parked between blocks is not a problem to clean up. Dormant is a first-class state: the parked handoff is
 what `brief` shows and what the next session starts from.
+
+### When one workstream shows two resume points
+
+`director render` and `director brief` sometimes list more than one position under a single workstream.
+That is a feature state, not corruption: two sessions of that workstream (a builder and a reviewer on
+the same checkout, say) both handed off without seeing each other, and Director keeps both positions
+rather than letting the later one silently overwrite the earlier. The stack collapses at the next
+boundary: the next session reads all of them, treats their union as its starting position, and its own
+handoff `--refs` each one, which retires exactly those and leaves the workstream on a single resume
+point again. `director emit` also prints a warning on stderr whenever a handoff would retire positions
+implicitly (no `--refs` at all, or refs that name no position of that workstream), while the session
+can still re-emit with the right ULIDs.
 
 ---
 

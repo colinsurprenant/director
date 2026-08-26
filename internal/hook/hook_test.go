@@ -1514,7 +1514,7 @@ func TestSessionStartBudgetDegradesDeterministically(t *testing.T) {
 		t.Errorf("over-budget injection should elide only the pre-handoff decisions:\n%.2000s", ctx)
 	}
 	if !strings.Contains(ctx, "the sibling course correction must survive") {
-		t.Errorf("a decision newer than the workstream's latest handoff must survive degradation:\n%.2000s", ctx)
+		t.Errorf("a decision newer than the workstream's oldest surviving position must survive degradation:\n%.2000s", ctx)
 	}
 	if strings.Contains(ctx, "rationale rationale") {
 		t.Errorf("elided injection must not carry pre-handoff decision bodies")
@@ -1598,10 +1598,10 @@ func TestSessionStartBudgetCollapsesAllWhenKeptBandOverflows(t *testing.T) {
 	// × ~300-char bodies (+13B date tag each) ≈ 12.0KB of open-set + ~2.9KB
 	// fixed blocks.
 	//
-	// Measured margins (2026-08-26, after the handoff-supersession protocol
-	// lines widened emitProtocol by ~430B): full 20,909B, rung 1 ≈ 18.0KB
-	// (~1.6KB over, as required), rung 2 16,027B — 357B of headroom under the
-	// 16,384B budget. If this test starts failing with "STILL over budget"
+	// Measured margins (2026-08-26, after the supersession rewrite trimmed
+	// emitProtocol back to 3,032B — 57B under its pre-supersession size): full
+	// 20,852B, rung 1 17,998B (~1.6KB over, as required), rung 2 15,970B — 414B
+	// of headroom under the 16,384B budget. If this test starts failing with "STILL over budget"
 	// after a fixed block (emitProtocol, preamble, banner) grows, the FIXTURE
 	// has drifted out of its window — re-tune the open-item count downward;
 	// don't suspect the ladder. (2026-07-15 window, for reference: 38
@@ -1686,6 +1686,13 @@ func TestSessionStartResumePointStacksParallelPositions(t *testing.T) {
 	}
 	if !strings.Contains(ctx, "--refs naming each of their ULIDs") {
 		t.Errorf("multi-position resume block must demand the consolidating refs:\n%s", ctx)
+	}
+	// The stacked wording must still disambiguate the OTHER workstreams' lines:
+	// "read ALL of them" is a trap next to a digest whose handoffs section also
+	// lists siblings, and the single-position wording is where that clause
+	// otherwise lives.
+	if !strings.Contains(ctx, "sibling workstreams' positions, for awareness only") {
+		t.Errorf("a stacked resume block must still mark the other workstreams' handoffs as awareness-only:\n%s", ctx)
 	}
 	if strings.Contains(ctx, "is YOUR last position") {
 		t.Errorf("the single-position wording must not survive a stack — it names one of several:\n%s", ctx)

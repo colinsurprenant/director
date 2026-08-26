@@ -276,7 +276,7 @@ director emit --type decision|open-item|handoff|note --area <subsystem> \
   [--risk low|escalate] [--to <handle>] [--refs <ulid,ulid>] <body>
 ```
 
-`emit` prints the **new event's ULID to stdout**: note it; that is the id used to `--refs` or `resolve` the event later. (Two `--refs` pairings are load-bearing: a `note` ref naming a **handoff** concludes it, and a `handoff` ref naming same-workstream **handoff(s)** supersedes exactly those resume points — see the kind table's lifecycle column below.)
+`emit` prints the **new event's ULID to stdout**: note it; that is the id used to `--refs` or `resolve` the event later. (Two `--refs` pairings are load-bearing: a `note` ref naming a **handoff** concludes it, and a `handoff` ref naming same-workstream **handoff(s)** supersedes exactly those resume points and no others — see the kind table's lifecycle column below.)
 
 `emit` also echoes a routing line to **stderr** (`→ <repo-key> · <workstream-id>`) naming the project it wrote to. If that is not the project the session expects, its cwd drifted and the event landed in the wrong log.
 
@@ -324,7 +324,7 @@ There are exactly four model-emitted semantic kinds. Pick by what the fact *is*:
 |---|---|---|
 | `decision` | a choice + what it affects | active → superseded (a later decision's `--refs`) or promoted (via `promote`); carries `--risk low\|escalate` |
 | `open-item` | an open loop / follow-up / deferred item, the canonical home for "documented, not dropped" | open → closed (via `resolve`) |
-| `handoff` | a positional snapshot: current task · next action · hypotheses · dead ends (tried X, failed: Y) | active → superseded (a later handoff's `--refs`) or concluded (a `note`'s `--refs` via `/director:complete`); either way it leaves the digest, stays in the log |
+| `handoff` | a positional snapshot: current task · next action · hypotheses · dead ends (tried X, failed: Y) | active → superseded (a later same-workstream handoff's `--refs`: exactly the positions it names, nothing older, nothing newer; a handoff carrying no such refs retires all older ones) or concluded (a `note`'s `--refs` via `/director:complete`); either way it leaves the digest, stays in the log |
 | `note` | FYI / context for a parallel or future session; a finished task's outcome (a review verdict, an investigation result) | none |
 
 - **There is no `blocker` kind.** "Stuck, needs a human" is an `open-item` with `--risk escalate`, exactly the open-set that surfaces in `status`'s Needs-you band.

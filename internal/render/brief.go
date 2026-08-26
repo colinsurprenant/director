@@ -94,9 +94,12 @@ func writeProjectBrief(b *strings.Builder, hub, repoKey string) error {
 			// A stack deeper than one means parallel sessions of this
 			// workstream ended without seeing each other; the human reading
 			// the brief should know the positions are un-merged, not a
-			// duplicate render.
+			// duplicate render. The marker states what WILL happen rather than
+			// asking the human for an action they cannot take — consolidation
+			// is the next session's handoff. Identical wording to the digest's
+			// marker (see render.go's handoffs section).
 			if len(stack) > 1 {
-				fmt.Fprintf(b, "(%d un-consolidated positions — parallel sessions; consolidate on next handoff)\n", len(stack))
+				fmt.Fprintf(b, "(%d un-consolidated positions — parallel sessions; the next session's handoff consolidates them)\n", len(stack))
 			}
 		}
 	}

@@ -185,7 +185,9 @@ func TestBriefUnconsolidatedPositions(t *testing.T) {
 	if atA > atB {
 		t.Errorf("positions must render oldest→newest:\n%s", out)
 	}
-	marker := "(2 un-consolidated positions — parallel sessions; consolidate on next handoff)"
+	// Identical wording to the digest's marker (see TestDigestParallelPositionsStack):
+	// one state, one sentence, whichever surface the reader is on.
+	marker := "(2 un-consolidated positions — parallel sessions; the next session's handoff consolidates them)"
 	if at := strings.Index(out, marker); at < atB {
 		t.Errorf("the marker line must follow the workstream's stack:\n%s", out)
 	}
