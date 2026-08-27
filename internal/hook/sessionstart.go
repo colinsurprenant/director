@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf16"
 
 	"github.com/colinsurprenant/director/internal/event"
 	"github.com/colinsurprenant/director/internal/fleet"
@@ -133,28 +134,54 @@ func refreshFleet(hub string, ws identity.Workstream, uuid, cwd string) error {
 	return nil
 }
 
-// injectionBudgetBytes is the target size for the whole Ground-Truth injection.
-// It is sized to CONTEXT ECONOMY — what a session start should reasonably cost —
-// not to the harness's inline hook-output limit: that limit is undocumented and
-// has been observed to drift (docs said 50K; a 36KB payload was demoted to a 2KB
-// preview on 2026-07-03), so it must never be load-bearing. Over budget, the
-// digest degrades deterministically (DigestCompact: decisions collapse to a
-// count+pointer line — never the open loops or the resume stack) and the overflow is
-// health-logged so growth is loud long before any harness threshold bites. The
-// preamble's DELIVERY CHECK contract remains the backstop of last resort.
+// injectionBudgetUnits is the target size for the whole Ground-Truth injection,
+// in UTF-16 code units — the unit Claude Code's inline hook-output cap actually
+// counts, measured empirically at 10,000 units INCLUSIVE (10,000 arrives
+// inline, 10,001 is demoted to a persisted-file preview; probe on claude-code
+// #84021, comment 5431713505, 2026-08-26). Earlier revisions budgeted 16KB of
+// bytes on context-economy grounds with the delivery check as the working
+// backstop; that deliberately over-cap stance meant real sessions started on
+// the degraded preview path. Budgeting at the measured cap makes the normal
+// case an inline delivery. The cap is still an undocumented, driftable harness
+// behavior, so it must never be load-bearing: over budget, the digest degrades
+// deterministically (DigestCompact: decisions collapse to a count+pointer line
+// — never the open loops or the resume stack) and the overflow is
+// health-logged so growth is loud before the threshold bites. The preamble's
+// DELIVERY CHECK contract remains the backstop of last resort.
 //
-// Measured on the DECODED payload — what actually enters the model's context.
-// The JSON envelope on the wire runs ~30% larger (escaping of <>, quotes, and
-// newlines); account for that before ever comparing this constant to a
-// wire-size threshold.
-const injectionBudgetBytes = 16 * 1024
+// Measured on the DECODED payload — the string the harness counts against its
+// cap. The JSON envelope on the wire runs larger (escaping of <>, quotes, and
+// newlines); that layer is the harness's to strip and does not count.
+//
+// One budget serves all four delivery flavors: Claude Code's cap is the only
+// one MEASURED, so it sizes the constant; for codex/opencode/copilot (whose
+// inline caps are unknown and presumably different) the same figure stands in
+// as the context-economy bound. A future measurement of another flavor's cap
+// belongs in this comment, not in a reflexive per-flavor split.
+const injectionBudgetUnits = 10_000
+
+// utf16Units counts the UTF-16 code units of the decoded string s — the unit
+// the harness cap measures: one per BMP rune, two per supplementary rune
+// (utf16.RuneLen); an invalid byte decodes to U+FFFD, one unit, matching what
+// any decoder would deliver.
+func utf16Units(s string) int {
+	n := 0
+	for _, r := range s {
+		if utf16.RuneLen(r) == 2 {
+			n += 2
+		} else {
+			n++
+		}
+	}
+	return n
+}
 
 // buildGroundTruth assembles the injected block: the Ground-Truth preamble
 // (with the truncation contract), the write-side protocol (managed repos only),
 // the project CHARTER (graceful when absent), and the deterministic digest
 // folded from the LOG. Under budget — the normal case — the digest is
 // byte-for-byte the `director render` / `--verify` output, so what the session
-// is handed is exactly what the cockpit shows. Over injectionBudgetBytes it
+// is handed is exactly what the cockpit shows. Over injectionBudgetUnits it
 // degrades down a deterministic ladder: first DigestCompact (older decisions
 // collapse to a count+pointer line, the newest — anchored to this workstream's
 // OLDEST surviving position, i.e. the ones no prior session of this workstream
@@ -271,13 +298,13 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID, uuid, flavor string
 	}
 
 	ctx := assemble(render.Digest(proj, repoKey))
-	if len(ctx) > injectionBudgetBytes {
+	if utf16Units(ctx) > injectionBudgetUnits {
 		// Deterministic degradation ladder, loud in health/ at every rung —
 		// over-budget growth is a grooming signal (§15.5 / L2 promotion), not a
 		// silent state. Rung 1 collapses only the OLDER decisions — the ones a
 		// rehydrating session has not seen are the last decision content
 		// sacrificed (a sibling's course correction lives there).
-		full := len(ctx)
+		full := utf16Units(ctx)
 		anchor := ""
 		// The OLDEST surviving position anchors the band: with parallel
 		// sessions the stack holds several un-consolidated positions, and the
@@ -296,13 +323,13 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID, uuid, flavor string
 		kept := render.KeptDecisions(proj, anchor)
 		if kept > 0 {
 			ctx = assemble(render.DigestCompact(proj, repoKey, anchor))
-			detail = fmt.Sprintf("injection budget: full payload %dB > %dB — older decisions collapsed to count+pointer, newest %d kept (now %dB); groom the log (resolve/supersede/promote)", full, injectionBudgetBytes, kept, len(ctx))
+			detail = fmt.Sprintf("injection budget: full payload %d units > %d — older decisions collapsed to count+pointer, newest %d kept (now %d units); groom the log (resolve/supersede/promote)", full, injectionBudgetUnits, kept, utf16Units(ctx))
 		}
-		if kept == 0 || len(ctx) > injectionBudgetBytes {
+		if kept == 0 || utf16Units(ctx) > injectionBudgetUnits {
 			// Rung 2: every decision collapses.
 			ctx = assemble(render.DigestCollapsed(proj, repoKey))
-			detail = fmt.Sprintf("injection budget: full payload %dB > %dB — ALL decisions collapsed to count+pointer (now %dB); groom the log (resolve/supersede/promote)", full, injectionBudgetBytes, len(ctx))
-			if len(ctx) > injectionBudgetBytes {
+			detail = fmt.Sprintf("injection budget: full payload %d units > %d — ALL decisions collapsed to count+pointer (now %d units); groom the log (resolve/supersede/promote)", full, injectionBudgetUnits, utf16Units(ctx))
+			if utf16Units(ctx) > injectionBudgetUnits {
 				// Still over on open-items + handoffs alone: never eat the actionable
 				// sections — inject as-is and make the overflow visible. Both are
 				// named because either can be the cause: a deep resume stack

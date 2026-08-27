@@ -1492,7 +1492,7 @@ func TestSessionStartBudgetDegradesDeterministically(t *testing.T) {
 
 	store := event.NewStore(hub, ws.RepoKey)
 	body := strings.Repeat("rationale ", 30) // ~300 chars, capped to a ~160-rune headline
-	for i := 0; i < 120; i++ {               // ~120 index lines ≈ 22KB > 16KB budget
+	for i := 0; i < 120; i++ {               // ~120 index lines ≈ 24K units > the 10,000-unit budget
 		if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindDecision, Area: "hooks", Body: body}); err != nil {
 			t.Fatalf("seed decision %d: %v", i, err)
 		}
@@ -1529,8 +1529,8 @@ func TestSessionStartBudgetDegradesDeterministically(t *testing.T) {
 	if !strings.Contains(ctx, "the open loop must survive degradation") {
 		t.Errorf("degradation must never eat the open-set:\n%.2000s", ctx)
 	}
-	if len(ctx) > injectionBudgetBytes {
-		t.Errorf("degraded payload still over budget: %dB > %dB", len(ctx), injectionBudgetBytes)
+	if utf16Units(ctx) > injectionBudgetUnits {
+		t.Errorf("degraded payload still over budget: %d units > %d", utf16Units(ctx), injectionBudgetUnits)
 	}
 	health := readHealth(t, hub)
 	if !strings.Contains(health, "older decisions collapsed to count+pointer, newest 1 kept") {
@@ -1578,8 +1578,8 @@ func TestSessionStartBudgetSkipsEmptyKeptBand(t *testing.T) {
 	if !strings.Contains(ctx, "(120 active decisions elided for size") {
 		t.Errorf("empty kept band should inject the full-collapse line:\n%.2000s", ctx)
 	}
-	if len(ctx) > injectionBudgetBytes {
-		t.Errorf("collapsed payload still over budget: %dB > %dB", len(ctx), injectionBudgetBytes)
+	if utf16Units(ctx) > injectionBudgetUnits {
+		t.Errorf("collapsed payload still over budget: %d units > %d", utf16Units(ctx), injectionBudgetUnits)
 	}
 	health := readHealth(t, hub)
 	if !strings.Contains(health, "ALL decisions collapsed to count+pointer") {
@@ -1587,6 +1587,86 @@ func TestSessionStartBudgetSkipsEmptyKeptBand(t *testing.T) {
 	}
 	if strings.Contains(health, "kept") {
 		t.Errorf("health must not claim a kept band when nothing was kept:\n%s", health)
+	}
+}
+
+// TestUTF16Units locks the budget's measuring stick to the unit the harness
+// cap counts: one unit per BMP rune regardless of UTF-8 width (the digest's
+// middle dots, arrows, and accents are 2-3 bytes but ONE unit — the whole
+// point of measuring in units, byte-budgeting over-counts them), two per
+// supplementary rune, and one for an invalid byte (it decodes to U+FFFD).
+func TestUTF16Units(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int
+	}{
+		{"", 0},
+		{"plain ascii", 11},
+		{"é", 1},      // 2 UTF-8 bytes, BMP → 1 unit
+		{"·", 1},      // the digest's separator: 2 bytes, 1 unit
+		{"→", 1},      // 3 bytes, 1 unit
+		{"⚠", 1},      // 3 bytes, 1 unit
+		{"🤖", 2},      // supplementary plane: 4 bytes, 2 units
+		{"a·b→c🤖", 7}, // 5 BMP runes + one 2-unit rune
+		{"\xff", 1},   // invalid byte → U+FFFD, 1 unit
+		{"a\xffb", 3}, // invalid byte embedded
+	}
+	for _, c := range cases {
+		if got := utf16Units(c.in); got != c.want {
+			t.Errorf("utf16Units(%q) = %d, want %d", c.in, got, c.want)
+		}
+	}
+}
+
+// TestSessionStartBudgetCountsUnitsNotBytes locks the budget to the unit the
+// cap counts, at the integration boundary: a multibyte-dense payload whose
+// BYTE length is over 10,000 but whose UTF-16 unit count is under the budget
+// must inject the FULL digest with no degradation rung — byte-budgeting (the
+// pre-change
+// behavior, and the regression this guards) would wrongly degrade it. Every
+// other budget fixture is ASCII (units == bytes), so only this test fails if
+// the comparison ever reverts to len().
+func TestSessionStartBudgetCountsUnitsNotBytes(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+
+	store := event.NewStore(hub, ws.RepoKey)
+	// "·→é⚠ " is 5 runes / 5 units / 11 bytes. 59 repeats = 295 runes (under
+	// the 300-rune cap) ≈ 649 bytes vs 295 units per body. 12 open-items land
+	// the payload at ~12K bytes but ~8K units: over the budget in bytes, under
+	// it in units.
+	openBody := strings.Repeat("·→é⚠ ", 59)
+	for i := 0; i < 12; i++ {
+		if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindOpenItem, Area: "sync", Body: openBody}); err != nil {
+			t.Fatalf("seed open-item %d: %v", i, err)
+		}
+	}
+	if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindDecision, Area: "hooks", Body: "decision body that must survive undegraded"}); err != nil {
+		t.Fatalf("seed decision: %v", err)
+	}
+
+	in := `{"session_id":"s-real","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	var out bytes.Buffer
+	if code := Dispatch(EventSessionStart, strings.NewReader(in), &out, hub); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	ctx := injectedContext(t, out.String())
+
+	if len(ctx) <= injectionBudgetUnits {
+		t.Fatalf("fixture too small to discriminate: %d bytes must exceed the %d-unit budget", len(ctx), injectionBudgetUnits)
+	}
+	if u := utf16Units(ctx); u > injectionBudgetUnits {
+		t.Fatalf("fixture too large to discriminate: %d units must fit the budget", u)
+	}
+	if !strings.Contains(ctx, "decision body that must survive undegraded") {
+		t.Error("unit-fitting payload was degraded: decision body missing")
+	}
+	if strings.Contains(ctx, "elided for size") {
+		t.Error("unit-fitting payload was degraded: decisions collapsed")
+	}
+	if health := readHealth(t, hub); strings.Contains(health, "injection budget") {
+		t.Errorf("no budget rung should fire for a unit-fitting payload, got:\n%s", health)
 	}
 }
 
@@ -1600,21 +1680,20 @@ func TestSessionStartBudgetCollapsesAllWhenKeptBandOverflows(t *testing.T) {
 	ws := mustResolve(t, repo)
 
 	store := event.NewStore(hub, ws.RepoKey)
-	// Bulk the ACTIONABLE section close to the budget so rung 1's ~2KB kept
-	// band (10 × ~200B lines) still overflows while rung 2 fits: ~36 open-items
-	// × ~300-char bodies (+13B date tag each) ≈ 12.0KB of open-set + ~2.9KB
-	// fixed blocks.
+	// Bulk the ACTIONABLE section close to the budget so rung 1's ~2K-unit kept
+	// band (10 × ~200-unit decision index lines) still overflows while rung 2
+	// fits: ~16
+	// open-items × ~330-unit lines ≈ 5.3K units of open-set + ~4.0K units of
+	// fixed blocks, against the 10,000-unit budget.
+	// (The fixture is ASCII, so units == bytes here.)
 	//
-	// Measured margins (2026-08-26, after the supersession rewrite trimmed
-	// emitProtocol back to 3,032B — 57B under its pre-supersession size): full
-	// 20,852B, rung 1 17,998B (~1.6KB over, as required), rung 2 15,970B — 414B
-	// of headroom under the 16,384B budget. If this test starts failing with "STILL over budget"
-	// after a fixed block (emitProtocol, preamble, banner) grows, the FIXTURE
-	// has drifted out of its window — re-tune the open-item count downward;
-	// don't suspect the ladder. (2026-07-15 window, for reference: 38
-	// open-items, rung 2 ≈ 15.8KB.)
+	// If this test starts failing with "STILL over budget" after a fixed block
+	// (emitProtocol, preamble, banner) grows, the FIXTURE has drifted out of
+	// its window — re-tune the open-item count downward; don't suspect the
+	// ladder. (Historical windows, for reference: 16,384-BYTE budget era of
+	// 2026-08-26 took 36 open-items, rung 2 ≈ 15,970B; 2026-07-15 took 38.)
 	openBody := strings.Repeat("open loop ", 29) // ~290 chars, under the 300-rune cap
-	for i := 0; i < 36; i++ {
+	for i := 0; i < 16; i++ {
 		if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindOpenItem, Area: "sync", Body: openBody}); err != nil {
 			t.Fatalf("seed open-item %d: %v", i, err)
 		}
@@ -1642,8 +1721,8 @@ func TestSessionStartBudgetCollapsesAllWhenKeptBandOverflows(t *testing.T) {
 	if !strings.Contains(ctx, "open loop open loop") {
 		t.Errorf("degradation must never eat the open-set:\n%.2000s", ctx)
 	}
-	if len(ctx) > injectionBudgetBytes {
-		t.Errorf("rung-2 payload still over budget: %dB > %dB", len(ctx), injectionBudgetBytes)
+	if utf16Units(ctx) > injectionBudgetUnits {
+		t.Errorf("rung-2 payload still over budget: %d units > %d", utf16Units(ctx), injectionBudgetUnits)
 	}
 	health := readHealth(t, hub)
 	if !strings.Contains(health, "ALL decisions collapsed to count+pointer") {
@@ -1757,7 +1836,7 @@ func TestSessionStartBudgetAnchorsOnOldestPosition(t *testing.T) {
 		t.Fatalf("seed shared handoff: %v", err)
 	}
 	body := strings.Repeat("rationale ", 30) // ~300 chars, capped to a ~160-rune headline
-	for i := 0; i < 120; i++ {               // ~120 index lines ≈ 22KB > 16KB budget
+	for i := 0; i < 120; i++ {               // ~120 index lines ≈ 24K units > the 10,000-unit budget
 		if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindDecision, Area: "hooks", Body: body}); err != nil {
 			t.Fatalf("seed decision %d: %v", i, err)
 		}
@@ -1790,8 +1869,8 @@ func TestSessionStartBudgetAnchorsOnOldestPosition(t *testing.T) {
 	if !strings.Contains(ctx, "(120 older decision(s) elided for size — the newest 1 follow") {
 		t.Errorf("over-budget injection should elide only the pre-anchor decisions:\n%.2000s", ctx)
 	}
-	if len(ctx) > injectionBudgetBytes {
-		t.Errorf("degraded payload still over budget: %dB > %dB", len(ctx), injectionBudgetBytes)
+	if utf16Units(ctx) > injectionBudgetUnits {
+		t.Errorf("degraded payload still over budget: %d units > %d", utf16Units(ctx), injectionBudgetUnits)
 	}
 	health := readHealth(t, hub)
 	if !strings.Contains(health, "older decisions collapsed to count+pointer, newest 1 kept") {
