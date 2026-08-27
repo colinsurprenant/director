@@ -48,10 +48,14 @@ type Projection struct {
 	SupersededHandoffs []string
 }
 
-// Fold collapses an event set into a resolved Projection. It is a PURE function
-// of the SET, not the order: it sorts a copy by ULID (lexical = total order on a
-// single machine, §10) and then applies order-independent set logic, so any
-// permutation of the same events folds to an identical Projection.
+// Fold collapses an event set into a resolved Projection. For distinct ids —
+// the invariant Store.Append enforces — it is a PURE function of the SET, not
+// the order: it sorts a copy by ULID (lexical = total order on a single
+// machine, §10) and then applies order-independent set logic, so any
+// permutation of the same events folds to an identical Projection. A reused id
+// (a pathological log the guard predates) has no ULID order to give; there the
+// stable sort demotes the promise to input-order determinism — see the sort
+// below.
 //
 // Resolution rules:
 //   - open-set: an original open-item (open-item, status != closed) is OPEN
@@ -121,11 +125,15 @@ type Projection struct {
 // flagging same-millisecond cross-machine ties (rather than silently picking a
 // winner) is deferred to multi-machine sync; the fold never reorders to hide one.
 func Fold(events []event.Event) Projection {
-	// Sort a copy so the caller's slice is left untouched and the fold is a pure
-	// function of the set.
+	// Sort a copy so the caller's slice is left untouched. For distinct ids —
+	// the invariant Store.Append now enforces — the fold is a pure function of
+	// the set, input-order-independent. For a reused id (a pathological log:
+	// hand-edited, or written before the duplicate guard) the stable sort makes
+	// it instead a deterministic function of file order: the duplicates keep
+	// their input positions, later line wins.
 	sorted := make([]event.Event, len(events))
 	copy(sorted, events)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
 
 	proj := Projection{ResumeHandoffs: make(map[string][]event.Event)}
 

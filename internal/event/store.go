@@ -9,6 +9,7 @@ package event
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -62,6 +63,24 @@ func (s *Store) Path() string {
 func (s *Store) Append(ev Event) error {
 	if err := ev.Validate(); err != nil {
 		return fmt.Errorf("store: refusing to append invalid event: %w", err)
+	}
+
+	// A reused id would make the fold's total order ambiguous (two events, one
+	// ULID), so a duplicate is refused before it can poison the log. Two
+	// deliberate softenings keep this defense-in-depth, never an availability
+	// tax on the write path: (1) the check is not atomic with the append — two
+	// concurrent writers racing the SAME id could both pass — but ids are
+	// CLI-minted ULIDs, so a duplicate only arises from a replayed or
+	// hand-crafted id, the single-writer shape the scan does catch; (2) a log
+	// that cannot be READ skips the check rather than failing the append —
+	// emission must survive a read-broken log (the emit-on-unreadable-log
+	// degradation the CLI already promises), and the fold's stable sort keeps
+	// even an undetected duplicate deterministic. The scan makes each append
+	// O(log-length) — Θ(n²) cumulatively — accepted deliberately: writes are
+	// human-rate and logs human-scale, and the snapshot design (§15.5) is the
+	// planned answer if that ever stops being true.
+	if dup, err := s.hasID(ev.ID); err == nil && dup {
+		return fmt.Errorf("store: refusing to append event %s: id already exists in %s", ev.ID, s.Path())
 	}
 
 	line, err := Marshal(ev)
@@ -156,9 +175,32 @@ func (s *Store) Tail(n int) ([]Event, error) {
 	return out, nil
 }
 
+// errStopScan is scan's early-exit sentinel: a callback returns it to end the
+// stream without surfacing an error to the caller.
+var errStopScan = errors.New("stop scan")
+
+// hasID reports whether an event with the given id already exists in the log.
+// It streams and stops at the first hit, so the common no-duplicate append pays
+// one full read and a hit pays less. A missing log has no ids.
+func (s *Store) hasID(id string) (bool, error) {
+	found := false
+	err := s.scan(func(ev Event) error {
+		if ev.ID == id {
+			found = true
+			return errStopScan
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, errStopScan) {
+		return false, err
+	}
+	return found, nil
+}
+
 // scan opens the log and feeds each parsed event to fn in order. It centralizes
 // the missing-file-is-empty rule and the enlarged scanner buffer so ReadAll and
-// Tail share one streaming path.
+// Tail share one streaming path. A callback may return errStopScan to end the
+// stream early; scan propagates it for the caller to swallow.
 func (s *Store) scan(fn func(Event) error) error {
 	f, err := os.Open(s.Path())
 	if err != nil {

@@ -716,6 +716,36 @@ func TestFoldConclusionRetiresWholeStack(t *testing.T) {
 	assertOrderIndependent(t, events, proj)
 }
 
+// TestFoldDuplicateIDTiesBreakByInputOrder locks the tie-break contract for a
+// pathological log carrying a reused id (Store.Append refuses one now, but a
+// hand-edited or pre-guard log can still hold it): input order decides the tie
+// — the later file line wins the newest position. The guarantee itself rests on
+// sort.SliceStable's spec; this test discriminates by folding the same pair in
+// BOTH input orders and asserting the winner flips with them, which an
+// order-insensitive rewrite (e.g. dedup-keep-first) would fail.
+func TestFoldDuplicateIDTiesBreakByInputOrder(t *testing.T) {
+	dupID := mint(t)
+	a := event.Event{ID: dupID, SchemaVersion: event.SchemaVersion, Type: event.KindHandoff, Workstream: "ws1", Body: "A"}
+	b := event.Event{ID: dupID, SchemaVersion: event.SchemaVersion, Type: event.KindHandoff, Workstream: "ws1", Body: "B"}
+	other := event.Event{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindNote, Workstream: "ws1", Body: "bystander"}
+
+	newest := func(input []event.Event) string {
+		t.Helper()
+		stack := Fold(input).ResumeHandoffs["ws1"]
+		if len(stack) == 0 {
+			t.Fatal("no resume stack folded for ws1")
+		}
+		return stack[len(stack)-1].Body
+	}
+
+	if got := newest([]event.Event{a, b, other}); got != "B" {
+		t.Fatalf("newest position after [A,B] = %q, want the later line B", got)
+	}
+	if got := newest([]event.Event{b, a, other}); got != "A" {
+		t.Fatalf("newest position after [B,A] = %q, want the later line A", got)
+	}
+}
+
 // TestFoldLegacyEquivalenceProperty is the grandfather argument under randomized
 // pressure. The hand-written legacy cases pin the shapes we thought of; this one
 // generates thousands of LEGACY-shaped logs — every handoff implicit, notes
