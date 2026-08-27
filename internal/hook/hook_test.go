@@ -1620,8 +1620,9 @@ func TestUTF16Units(t *testing.T) {
 
 // TestSessionStartBudgetCountsUnitsNotBytes locks the budget to the unit the
 // cap counts, at the integration boundary: a multibyte-dense payload whose
-// BYTE length is over 10,000 but whose UTF-16 unit count is under must inject
-// the FULL digest with no degradation rung — byte-budgeting (the pre-change
+// BYTE length is over 10,000 but whose UTF-16 unit count is under the budget
+// must inject the FULL digest with no degradation rung — byte-budgeting (the
+// pre-change
 // behavior, and the regression this guards) would wrongly degrade it. Every
 // other budget fixture is ASCII (units == bytes), so only this test fails if
 // the comparison ever reverts to len().

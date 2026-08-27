@@ -303,10 +303,12 @@ const (
 )
 
 // recentDecisionsKept bounds DigestCompact's kept-newest band. A decision index
-// line runs ≤ ~200 UTF-16 units (ULID + area + capped headline), so the band
-// re-adds at most ~2K units to an over-budget payload — a fifth of the
-// 10,000-unit injection budget, affordable because the hook still has
-// DigestCollapsed as the next rung when even that overflows.
+// line runs ~200 UTF-16 units in practice (ULID + area + headline capped in
+// RUNES — supplementary-plane runes count two units each, so the hard bound is
+// nearer 2× that for emoji-dense bodies). The band therefore re-adds ~2K units
+// typical, ~4K worst case, to an over-budget payload — affordable against the
+// 10,000-unit injection budget because the hook still has DigestCollapsed as
+// the next rung when even that overflows.
 const recentDecisionsKept = 10
 
 // headline collapses a body to one line and caps it at max runes, marking a cut

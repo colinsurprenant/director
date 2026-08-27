@@ -160,9 +160,10 @@ func refreshFleet(hub string, ws identity.Workstream, uuid, cwd string) error {
 // belongs in this comment, not in a reflexive per-flavor split.
 const injectionBudgetUnits = 10_000
 
-// utf16Units measures s the way the harness cap does: UTF-16 code units — one
-// per BMP rune, two per supplementary rune (utf16.RuneLen); an invalid byte
-// decodes to U+FFFD, one unit, matching what any decoder would deliver.
+// utf16Units counts the UTF-16 code units of the decoded string s — the unit
+// the harness cap measures: one per BMP rune, two per supplementary rune
+// (utf16.RuneLen); an invalid byte decodes to U+FFFD, one unit, matching what
+// any decoder would deliver.
 func utf16Units(s string) int {
 	n := 0
 	for _, r := range s {
