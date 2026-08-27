@@ -176,7 +176,8 @@ func (s *Store) Tail(n int) ([]Event, error) {
 }
 
 // errStopScan is scan's early-exit sentinel: a callback returns it to end the
-// stream without surfacing an error to the caller.
+// stream early. scan propagates it like any callback error — the function that
+// installed the callback is responsible for swallowing it (see hasID).
 var errStopScan = errors.New("stop scan")
 
 // hasID reports whether an event with the given id already exists in the log.
