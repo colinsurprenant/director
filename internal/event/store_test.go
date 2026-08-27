@@ -398,6 +398,78 @@ func TestAppendRejectsInvalid(t *testing.T) {
 	}
 }
 
+// TestAppendRejectsDuplicateID locks the fold-determinism guard: a reused ULID
+// is refused before it reaches the log (two events sharing an id have no total
+// order), while distinct ids append freely around it.
+func TestAppendRejectsDuplicateID(t *testing.T) {
+	store := NewStore(t.TempDir(), "dup-repo")
+
+	first := newEvent(t, "original")
+	if err := store.Append(first); err != nil {
+		t.Fatalf("Append(first): %v", err)
+	}
+
+	replay := newEvent(t, "replayed under the same id")
+	replay.ID = first.ID
+	if err := store.Append(replay); err == nil {
+		t.Fatal("Append(duplicate id) = nil, want error")
+	} else if !strings.Contains(err.Error(), first.ID) {
+		t.Errorf("duplicate-id error does not name the id: %v", err)
+	}
+
+	other := newEvent(t, "distinct id still appends")
+	if err := store.Append(other); err != nil {
+		t.Fatalf("Append(other) after rejected duplicate: %v", err)
+	}
+
+	all, err := store.ReadAll()
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("log has %d events, want 2 (duplicate must not be written)", len(all))
+	}
+	if all[0].Body != "original" || all[1].Body != "distinct id still appends" {
+		t.Fatalf("log content wrong: %q / %q", all[0].Body, all[1].Body)
+	}
+}
+
+// TestAppendSurvivesUnreadableLog locks the availability side of the
+// duplicate-id guard: when the log cannot be READ, the check degrades and the
+// append still lands — emission must survive a read-broken log rather than
+// brick the write path on a defense-in-depth scan.
+func TestAppendSurvivesUnreadableLog(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod permission bits do not gate reads on Windows")
+	}
+	if os.Getuid() == 0 {
+		t.Skip("chmod 0 does not bar root from reading")
+	}
+	store := NewStore(t.TempDir(), "unreadable-repo")
+	if err := store.Append(newEvent(t, "seed")); err != nil {
+		t.Fatalf("Append(seed): %v", err)
+	}
+	if err := os.Chmod(store.Path(), 0o200); err != nil { // write-only: append works, read denied
+		t.Fatalf("chmod: %v", err)
+	}
+	defer os.Chmod(store.Path(), 0o644)
+
+	if err := store.Append(newEvent(t, "landed while unreadable")); err != nil {
+		t.Fatalf("Append on unreadable log: %v", err)
+	}
+
+	if err := os.Chmod(store.Path(), 0o644); err != nil {
+		t.Fatalf("chmod back: %v", err)
+	}
+	all, err := store.ReadAll()
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if len(all) != 2 || all[1].Body != "landed while unreadable" {
+		t.Fatalf("append did not land: %d events", len(all))
+	}
+}
+
 // TestAppendBodySizeBound locks the M3 write/read invariant: a body at the cap
 // appends AND reads back (the largest write-accepted line is always within the
 // reader's scanner limit), while an over-cap body is rejected before any write.
