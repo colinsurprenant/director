@@ -29,19 +29,19 @@ func runEmit(args []string) int {
 	}
 	body := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if typ == "" || body == "" {
-		fmt.Fprintln(os.Stderr, "emit: --type and a body are required")
+		failf("emit: --type and a body are required\n")
 		return 2
 	}
 
 	refList, err := canonicalRefs(refs)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "emit: %v\n", err)
+		failf("emit: %v\n", err)
 		return 2
 	}
 
 	hub, ws, err := resolveContext()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "emit: %v\n", err)
+		failf("emit: %v\n", err)
 		return 1
 	}
 	store := event.NewStore(hub, ws.RepoKey)
@@ -54,7 +54,7 @@ func runEmit(args []string) int {
 		Body:        body,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "emit: %v\n", err)
+		failf("emit: %v\n", err)
 		return 1
 	}
 	// stdout stays the bare ULID and nothing else: callers capture it, sometimes

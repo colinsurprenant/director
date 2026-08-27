@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/colinsurprenant/director/internal/event"
@@ -22,9 +21,9 @@ import (
 func runPromote(args []string) int {
 	usageErr := func(msg string) int {
 		if msg != "" {
-			fmt.Fprintf(os.Stderr, "promote: %s\n", msg)
+			failf("promote: %s\n", msg)
 		}
-		fmt.Fprintln(os.Stderr, "usage: director promote <ulid>... --to <doc>")
+		failf("usage: director promote <ulid>... --to <doc>\n")
 		return 2
 	}
 
@@ -35,13 +34,13 @@ func runPromote(args []string) int {
 
 	hub, ws, err := resolveContext()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "promote: %v\n", err)
+		failf("promote: %v\n", err)
 		return 1
 	}
 	store := event.NewStore(hub, ws.RepoKey)
 	marker, err := event.Promote(store, ws.ID, targets, doc)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "promote: %v\n", err)
+		failf("promote: %v\n", err)
 		// A rejected target or destination is the user's mistake (exit 2), not a
 		// system fault.
 		if errors.Is(err, event.ErrPromoteTargetNotFound) ||

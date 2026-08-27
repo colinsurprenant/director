@@ -76,16 +76,16 @@ func runDone(args []string) int {
 		// cwd identity — it works from anywhere.
 		hub, err := hubRoot()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "done: %v\n", err)
+			failf("done: %v\n", err)
 			return 1
 		}
 		n, err := fleet.DoneWorkstream(hub, workstream, time.Now().UTC())
 		if err != nil {
 			if errors.Is(err, fleet.ErrRowNotFound) {
-				fmt.Fprintf(os.Stderr, "done: no live rows for workstream %q (already archived, a typo, or its rows are unreadable — see `director status`)\n", workstream)
+				failf("done: no live rows for workstream %q (already archived, a typo, or its rows are unreadable — see `director status`)\n", workstream)
 				return 2
 			}
-			fmt.Fprintf(os.Stderr, "done: %v\n", err)
+			failf("done: %v\n", err)
 			return 1
 		}
 		// A targeted done can archive several rows; say how many so the close-out
@@ -96,11 +96,11 @@ func runDone(args []string) int {
 
 	hub, ws, err := resolveContext()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "done: %v\n", err)
+		failf("done: %v\n", err)
 		return 1
 	}
 	if err := fleet.Done(hub, ws.ID, sessionUUID(), time.Now().UTC()); err != nil {
-		fmt.Fprintf(os.Stderr, "done: %v\n", err)
+		failf("done: %v\n", err)
 		return 1
 	}
 	return 0

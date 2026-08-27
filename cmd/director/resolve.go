@@ -4,7 +4,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"os"
 
 	"github.com/colinsurprenant/director/internal/event"
 )
@@ -19,20 +18,20 @@ func runResolve(args []string) int {
 		return 2
 	}
 	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: director resolve <ulid>")
+		failf("usage: director resolve <ulid>\n")
 		return 2
 	}
 	target := fs.Arg(0)
 
 	hub, ws, err := resolveContext()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "resolve: %v\n", err)
+		failf("resolve: %v\n", err)
 		return 1
 	}
 	store := event.NewStore(hub, ws.RepoKey)
 	marker, err := event.Resolve(store, ws.ID, target)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "resolve: %v\n", err)
+		failf("resolve: %v\n", err)
 		// A rejected target is the user's mistake (exit 2), not a system fault.
 		if errors.Is(err, event.ErrTargetNotFound) || errors.Is(err, event.ErrAlreadyResolved) {
 			return 2
