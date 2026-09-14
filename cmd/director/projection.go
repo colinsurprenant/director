@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"os"
@@ -10,16 +11,19 @@ import (
 	"github.com/colinsurprenant/director/internal/render"
 )
 
-// runRender folds one project's LOG into the deterministic digest, prints it to
-// stdout (this is what SessionStart injects), and writes the §9 manifest. With
-// --verify it re-folds the same events in a different order and asserts the digest
-// is byte-identical — the §13 t4 gate, surfaced as a non-zero exit on drift.
+// runRender folds one project's LOG into a deterministic projection, prints its
+// text digest (the SessionStart input) or versioned JSON, and writes the §9
+// manifest. With --verify it re-folds the same events in a different order and
+// asserts the selected output is byte-identical — the §13 t4 gate, surfaced as
+// a non-zero exit on drift.
 func runRender(args []string) int {
 	fs := flag.NewFlagSet("render", flag.ContinueOnError)
 	var project string
 	var verify bool
+	var jsonOutput bool
 	fs.StringVar(&project, "project", "", "repo-key to render (default: current workstream)")
 	fs.BoolVar(&verify, "verify", false, "re-fold and assert the digest is byte-identical (§13 t4)")
+	fs.BoolVar(&jsonOutput, "json", false, "print the versioned machine-readable projection")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -43,7 +47,16 @@ func runRender(args []string) int {
 		return 1
 	}
 	proj := render.Fold(events)
-	digest := render.Digest(proj, repoKey)
+	var output []byte
+	if jsonOutput {
+		output, err = render.ProjectionJSON(proj, repoKey)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "render: encode JSON: %v\n", err)
+			return 1
+		}
+	} else {
+		output = []byte(render.Digest(proj, repoKey))
+	}
 
 	if verify {
 		// Determinism is a property of the fold over the event SET, not of a second
@@ -56,8 +69,18 @@ func runRender(args []string) int {
 		for i, ev := range events {
 			reordered[len(events)-1-i] = ev
 		}
-		if got := render.Digest(render.Fold(reordered), repoKey); got != digest {
-			fmt.Fprintln(os.Stderr, "render: --verify FAILED — re-folding the same events in a different order produced a different digest (non-deterministic render)")
+		var got []byte
+		if jsonOutput {
+			got, err = render.ProjectionJSON(render.Fold(reordered), repoKey)
+		} else {
+			got = []byte(render.Digest(render.Fold(reordered), repoKey))
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "render: --verify: encode JSON: %v\n", err)
+			return 1
+		}
+		if !bytes.Equal(got, output) {
+			fmt.Fprintln(os.Stderr, "render: --verify FAILED — re-folding the same events in a different order produced different output (non-deterministic render)")
 			return 1
 		}
 	}
@@ -69,7 +92,7 @@ func runRender(args []string) int {
 		fmt.Fprintf(os.Stderr, "render: manifest: %v\n", err)
 	}
 
-	fmt.Print(digest)
+	fmt.Print(string(output))
 	return 0
 }
 
