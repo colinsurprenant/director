@@ -8,6 +8,7 @@ import (
 
 	"github.com/colinsurprenant/director/internal/event"
 	"github.com/colinsurprenant/director/internal/id"
+	"github.com/colinsurprenant/director/internal/render"
 )
 
 // runShow prints one event's full record by ULID — the read affordance the
@@ -18,7 +19,9 @@ import (
 func runShow(args []string) int {
 	fs := flag.NewFlagSet("show", flag.ContinueOnError)
 	var project string
+	var jsonOutput bool
 	fs.StringVar(&project, "project", "", "repo-key to read (default: current workstream's repo)")
+	fs.BoolVar(&jsonOutput, "json", false, "print the versioned machine-readable event and lifecycle")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -29,7 +32,7 @@ func runShow(args []string) int {
 		}
 	}
 	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: director show [--project <repo-key>] <ulid>")
+		fmt.Fprintln(os.Stderr, "usage: director show [--project <repo-key>] [--json] <ulid>")
 		return 2
 	}
 	// Same input contract as resolve (internal/event/write.go): strict-parse and
@@ -55,6 +58,15 @@ func runShow(args []string) int {
 	}
 	for _, ev := range events {
 		if ev.ID == target {
+			if jsonOutput {
+				out, err := render.ShowJSON(events, render.Fold(events), repoKey, ev)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "show: encode JSON: %v\n", err)
+					return 1
+				}
+				fmt.Print(string(out))
+				return 0
+			}
 			fmt.Print(formatEvent(ev))
 			return 0
 		}
@@ -65,9 +77,9 @@ func runShow(args []string) int {
 
 // formatEvent renders one event in full: a headline line mirroring the digest
 // grammar (so the two are visually relatable), the remaining metadata, then the
-// untruncated body verbatim. It prints the event AS RECORDED — lifecycle state
-// (closed, superseded) lives in the fold, not here, so a resolved open-item
-// still shows [status:open]; the digest is where current state lives.
+// untruncated body verbatim. The default text form prints the event AS RECORDED,
+// so a resolved open-item still shows [status:open]; --json adds the folded
+// lifecycle without changing this human-facing output.
 func formatEvent(ev event.Event) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s %s", ev.ID, ev.Type)

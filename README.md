@@ -239,13 +239,13 @@ write path (model-emitted):
               (promote <ulid>... --to <doc>; a doc pointer stays in the digest)
 
 projections:
-  render      deterministic machine digest (+ --verify, manifest)
+  render      deterministic machine digest (+ --json, --verify, manifest)
   brief       human re-orientation view (the bigger picture)
   status      one-line-per-workstream fleet cockpit
   open-items  a workstream's unresolved open-items (ULID + body), for /complete
               (default: current workstream; --workstream <id> targets a sibling)
   show        one event in full by ULID — the pull path behind the digest's
-              capped headlines (--project <repo-key> targets another project)
+              capped headlines (+ --json; --project targets another project)
 
 fleet lifecycle (hook-emitted):
   register    create/refresh this workstream's fleet row
@@ -304,13 +304,15 @@ Validation is `resolve`-parity: every target must be a decision the CLI surfaced
 
 | Command | Audience | What it is |
 |---|---|---|
-| `render [--project <key>] [--verify]` | machines / hooks | the deterministic digest a session-start injects; `--verify` re-folds and asserts the digest is byte-identical, exiting non-zero on drift. Also writes a manifest under `health/`. |
+| `render [--project <key>] [--verify] [--json]` | machines / hooks | the deterministic digest a session-start injects; `--json` returns the same live projection as versioned JSON with complete event bodies; `--verify` re-folds and asserts the selected output is byte-identical, exiting non-zero on drift. Also writes a manifest under `health/`. |
 | `brief [--project <key>]` | human | the on-demand bigger-picture re-orientation view (outlook from CHARTER, the resume point(s) per workstream, open/escalate items, recent decisions), at project or whole-fleet altitude. |
 | `status` | human | the one-line-per-workstream fleet cockpit: handle · liveness · heartbeat recency · the **Needs-you** band (open `escalate` items). |
 
 `brief` and `render` share the same byte-identical fold of the log: the human reads the same picture a fresh session reads. A fourth, narrower projection, `open-items`, lists a workstream's unresolved open-items (ULID + body); it exists to feed `resolve` and `/director:complete`. It defaults to the current workstream; `--workstream <id>` retargets it at a sibling: the close-out path for a workstream whose session is already gone.
 
 The digest is deliberately an *index*: every line is capped to a headline so the injection stays small as a project's log grows, and nothing is lost: `show <ulid>` prints any single event in full (body verbatim, as recorded), one deterministic hop from any headline. When even the capped digest would overrun the injection budget, the decisions section collapses to a count-plus-pointer line and the overflow lands in `health/` as a grooming signal; the open-set and the resume points are never cut. The grooming verbs that keep that headroom are `resolve` (compacts the open-set), supersession via `--refs`, and `promote` (compacts the decision set into the docs).
+
+Machine consumers can use `render --json` instead of parsing the presentation-oriented digest. The JSON envelope has its own `schema_version`, independent of the durable event schema. It contains the active Decisions, open Open Items, and resumable Handoff stacks in deterministic order; every record includes its lifecycle and complete event. `show --json <ulid>` returns any current or historical event with its folded lifecycle. The default text output remains unchanged.
 
 ### Fleet lifecycle
 

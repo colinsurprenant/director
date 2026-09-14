@@ -1,11 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/colinsurprenant/director/internal/event"
 	"github.com/colinsurprenant/director/internal/id"
+	"github.com/colinsurprenant/director/internal/render"
 )
 
 // TestShowExitCodes locks show's dispatch contract: found → 0 (lowercase ids
@@ -53,6 +55,65 @@ func TestShowExitCodes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunShowJSONIncludesFoldedLifecycle(t *testing.T) {
+	hub := t.TempDir()
+	t.Setenv("DIRECTOR_HUB", hub)
+	store := event.NewStore(hub, "widget")
+	target := event.Event{
+		ID: mintID(t), SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem,
+		Status: event.StatusOpen, Workstream: "widget-main", Body: strings.Repeat("complete body ", 80),
+	}
+	marker := event.Event{
+		ID: mintID(t), SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem,
+		Status: event.StatusClosed, Workstream: "widget-main", Refs: []string{target.ID}, Body: "resolved",
+	}
+	for _, ev := range []event.Event{target, marker} {
+		if err := store.Append(ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var code int
+	stdout, stderr := captureStreams(t, func() {
+		code = runShow([]string{"--project", "widget", "--json", target.ID})
+	})
+	if code != 0 || stderr != "" {
+		t.Fatalf("show --json exit = %d stderr = %q", code, stderr)
+	}
+	var got render.JSONEvent
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("parse show JSON: %v\n%s", err, stdout)
+	}
+	if got.SchemaVersion != render.JSONSchemaVersion || got.Project != "widget" {
+		t.Errorf("envelope = version %d project %q", got.SchemaVersion, got.Project)
+	}
+	if got.Record.Lifecycle != "closed" {
+		t.Errorf("lifecycle = %q, want closed", got.Record.Lifecycle)
+	}
+	if got.Record.Event.Body != target.Body {
+		t.Error("show --json changed or truncated the event body")
+	}
+
+	stdout, stderr = captureStreams(t, func() {
+		code = runShow([]string{"--project", "widget", target.ID})
+	})
+	if code != 0 || stderr != "" {
+		t.Fatalf("default show exit = %d stderr = %q", code, stderr)
+	}
+	if stdout != formatEvent(target) {
+		t.Errorf("default show changed:\n--- want ---\n%s\n--- got ---\n%s", formatEvent(target), stdout)
+	}
+}
+
+func mintID(t *testing.T) string {
+	t.Helper()
+	value, err := id.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
 }
 
 // TestFormatEvent locks the full-record rendering: headline line mirrors the
