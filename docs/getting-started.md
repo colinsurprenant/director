@@ -420,11 +420,13 @@ perform for the model:
 
 There are exactly four event kinds: `decision`, `open-item` (the home for "documented, not dropped";
 `--risk escalate` is the "needs a human" subset that surfaces in `status`), `handoff`, and `note`. There is
-no `blocker` kind and `done` is fleet-liveness only. Two `--refs` pairings carry reserved meaning: a
+no `blocker` kind and `done` is fleet-liveness only. Three `--refs` pairings carry reserved meaning: a
 `note` whose refs name a `handoff` **concludes** it (that is how `/director:complete` stops a finished
-workstream from offering a dead resume point), and a `handoff` whose refs name same-workstream
+workstream from offering a dead resume point), a `handoff` whose refs name same-workstream
 `handoff`(s) **supersedes** exactly those positions and nothing else, so a position it never named
-survives instead of being silently overwritten. A handoff carrying no such refs falls back to retiring
+survives instead of being silently overwritten, and a `decision` whose refs name `decision`(s)
+**supersedes** them, dropping them from the digest's active decisions (any decision, any workstream,
+no ordering check). A handoff carrying no such refs falls back to retiring
 every older position of its workstream. Your job is to **review**: read `status`/`brief`,
 answer the escalations, edit CHARTERs to steer, not to relay.
 
