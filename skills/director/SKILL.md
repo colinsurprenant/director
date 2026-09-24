@@ -55,7 +55,7 @@ There are exactly four model-emitted kinds. Pick by what the fact *is*:
 | `handoff` | current task · next action · hypotheses · dead ends (positional snapshot at a boundary) | `director emit --type handoff --area store --refs <the resume point ULID(s) you rehydrated from> "Done: NDJSON append. Next: wire emit dispatch. Hypothesis: O_APPEND is line-atomic on POSIX. Dead end: fsync-per-line, 30x too slow"` |
 | `note` | FYI / context for a parallel or future session; a finished task's outcome (a review verdict, an investigation result) | `director emit --type note --to @next-on-hooks --area hooks "settings.json merge is _managedBy-tagged — don't strip GSD entries"` |
 
-Two **reserved ref meanings**, both load-bearing:
+Three **reserved ref meanings**, all load-bearing:
 
 - A `note` whose `--refs` names a **handoff** CONCLUDES it — that handoff (and the workstream's
   older ones) leaves the digest's resume points, staying in the log. `/director:complete` uses
@@ -67,11 +67,17 @@ Two **reserved ref meanings**, both load-bearing:
   position on the same workstream survives instead of being silently overwritten. A handoff with
   no such refs retires ALL older positions of the workstream, including one you never saw.
   `/director:handoff` does this on every checkpoint.
+- A `decision` whose `--refs` names **decision(s)** SUPERSEDES them: they leave the digest's active
+  decisions, staying in the log. There is no status, workstream, or ordering check: any decision's
+  refs retire any decision they name. Ref the earlier decision when yours replaces, amends, or
+  withdraws it; a withdrawal is itself a decision, emitted like any other. A `note`'s refs on a
+  decision retire nothing.
 
-Refs to decisions and open-items carry no such effect. When your injected state shows **several**
-resume points for your workstream, that is two parallel sessions' positions stacked: read them
-all, consolidate them into your next handoff body, and `--refs` each — that collapses the stack
-back to one.
+Refs you pass to `emit` never retire an open-item; only `resolve` does, by writing a closed
+open-item marker whose refs name its targets. A `note`'s or an `open-item`'s refs to a decision
+do not supersede it. When your injected state shows **several** resume points for
+your workstream, that is two parallel sessions' positions stacked: read them all, consolidate them
+into your next handoff body, and `--refs` each — that collapses the stack back to one.
 
 Routing rule: an **open loop you carry forward** → an `open-item` event (its one home).
 **Durable structured knowledge** (intent, architecture, a decision's full rationale) → the living
