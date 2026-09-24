@@ -73,8 +73,9 @@ Three **reserved ref meanings**, all load-bearing:
   withdraws it; a withdrawal is itself a decision, emitted like any other. A `note`'s refs on a
   decision retire nothing.
 
-Refs to open-items carry no such effect, whatever kind names them, and neither do a `note`'s or
-an `open-item`'s refs to a decision. When your injected state shows **several** resume points for
+Refs you pass to `emit` never retire an open-item; only `resolve` does, by writing a closed
+open-item marker whose refs name its targets. A `note`'s or an `open-item`'s refs to a decision
+do not supersede it. When your injected state shows **several** resume points for
 your workstream, that is two parallel sessions' positions stacked: read them all, consolidate them
 into your next handoff body, and `--refs` each — that collapses the stack back to one.
 
