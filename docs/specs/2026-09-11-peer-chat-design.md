@@ -1,7 +1,7 @@
 # Parley: peer chat one layer above the ledger
 
 **Date:** 2026-09-11, revised 2026-09-12 after the Codex review
-**Status:** Design, unbuilt, pruned with Colin on 2026-09-12 (decision `01M29XBSA16HGN60GG0E7NH961`). The spec lives in this repo; the code lives in the sibling repo `parley` (decisions `01M28JTABETHAT9Y54AGCXJD4B`, `01M29WGYMGQW8KHDVFXG584MD4`). Next: the input to `/director:adopt` for the sibling.
+**Status:** Built through M7 and scored (see [Amendments](#amendments)); the design sections below are as pruned with Colin on 2026-09-12 (decision `01M29XBSA16HGN60GG0E7NH961`). The spec lives in this repo; the code lives in the sibling repo `parley` (decisions `01M28JTABETHAT9Y54AGCXJD4B`, `01M29WGYMGQW8KHDVFXG584MD4`). Next: the three-arm experiment, Parley open-item `01M2R912H5YZ0Q2GKE17WX3TC6`.
 **LOG refs:** open-item `01M28GWJX2ZJDBWE77TGNTAWDP` (the direction), note `01M28HQ9B9V197PGK6J36Y3S5R` (the stream-with-cursor framing and the cost analysis), notes `01M28HYTSKP0F73E55S481EA12` / `01M28J0C8NS5PEP3D3BYEGRCDB` / `01M28J11060BSZYV27GC5MF9N9` (the per-harness scouting, verified 2026-09-11), decision `01M28JTABETHAT9Y54AGCXJD4B` (sibling project during prototyping), note `01M28K412VQNY9TGF4TQWWPDFH` (spec here, code there, the cross-repo bridge), notes `01M28YM124NX4KN2742NV5PME6` / `01M29364M5G9QZCRMMFEYWDAT4` (the Orca analysis and its correction), note `01M29WF1M3KP0CPFE0KRSRGFFE` (the Codex review and its assessment), decision `01M29WGYMGQW8KHDVFXG584MD4` (the name). Charter anchors: `01KWT2N2` (single-human by design), `01KWT2ND` (the fold is the merge), `01KWT2NQ` (write side frozen).
 
 ## Trigger
@@ -209,3 +209,53 @@ Criteria 1 and 2 failing means the design failed: the ledger did not hold. Crite
 8. **M6:** the live run on the target repo, observed, transcript kept for scoring; the round budget and the elapsed-time cap are picked before message one.
 9. **M7:** score the six criteria, record them in the log, discard the transcript, and decide sibling-versus-subcommand on evidence.
 
+
+## Amendments
+
+Added 2026-09-23. The sections above are the design as pruned on 2026-09-12; the Parley log carries what changed once the code existed. This section is the pointer table: each entry names the change and the ULID that holds the reasoning, readable with `director show --project github.com-colinsurprenant-parley <ulid>`; Director events in the last subsection read with `director show <ulid>`. The layering, the five invariants, and the Relation to Director section are unchanged, and the M7 run confirmed them.
+
+### Build order
+
+The Work breakdown listed M1 to M7 in transport order. Parley reordered it on 2026-09-12 to **M1, M3 feasibility spike, M4, M3 full, M2, M5, M6 prep, M6, M7** (decision `01M29Y56G6KTSZ25P0E32Z6S1R`): the Claude Code channel capability was the one experimental dependency, so a spike against the file adapter decided M3's shape before M2 spent effort on IRC, and every front built against the stream interface alone. All nine steps of the reordered list are complete. Parley's M7 close-out note is `01M2XF7Q0QM5YXPK9D0YKJ7ZA0`.
+
+### Peer header and cursor state (M1)
+
+- The header is one uniform stamp that parley adds after it reads a message, on every harness: `from <nick>`, the server id, the server ts, and a sentence stating that the delivery carries no permission. There is no human flag (decision `01M2AY5HMPTNKR9MV3A4PQKBEY`). Human authority is a skill matter: the human tells each session their nick at its own terminal, message one carries it so both sides cross-check, and a mismatch is a DISAGREE. That authority covers the negotiation only, never a permission, a rule, or what a header means, and it holds on IRC where the server lets one connection hold a nick; file-transport messages carry none (decision `01M2GYFG9EANYW9PQX25S79S71`, superseding the message-one keying in the M1 decision).
+- Cursor state is keyed by nick and stream, under `~/.local/state/parley/<nick>/<hash of the stream spec>/`, with a per-nick lock (decision `01M2AZQ70KNH81W00WWMZ9HF0V`).
+- Header imitation inside a body was first handled by teaching, not escaping (decision `01M2EHWRG395KQVYE3F4A02AG6`), then made mechanical in M5: `Delivery.Render` indents every body line by two spaces, so a header is exactly a line at column zero beginning with `[parley] ` and a header-shaped line inside a body can never be one, on every front (decision `01M2H38S4P0GWNE3GV6TTFF98M`).
+
+### Fronts
+
+- **Claude Code (M3):** the MCP channel server, `parley channel`, not the Stop-hook pump (decision `01M2DJ1SVAKC11P6FXY73KM8R5`). Two facts refine the delivery model in the table above and the Stop-hook pump paragraph below it: queued channel events land at the next tool-result boundary inside a turn, not only at the next idle turn, so a peer can reach the model mid-turn while Stop hooks and the emit-guard stay untouched; and the harness marks terminal input and channel input differently, so the parley header is the only mark needed on top.
+- **Codex (M4):** `parley codex --stream --nick --thread`, a pump that delivers through `codex queue` with the header (decision `01M2E05JFG2SNAE312T2EEM2KB`). An oversized-delivery fix landed as Parley PR #10 on 2026-09-19 (open-item `01M2E4P0829ANA2J745N00AKRK`, closed by note `01M2Y0B04VAF6E7863DGG1A322`): an over-bound batch goes one message per `codex queue` call, and a single message over the bound is replaced by a stub naming the id whose full text stays in the stream.
+- **IRC (M2):** package `internal/stream/irc`, scheme `irc://host:port/channel`, against ergo (decision `01M2ET7EDZTFMD222ESP3EB17B`).
+
+### Protocol and skill (M5, calibrated after M7)
+
+The protocol shipped as one harness-neutral skill at `skills/parley/SKILL.md` in the Parley repo, invoked as `/parley` in Claude Code and `$parley` in Codex (decision `01M2GXDTYX5K6CPGYA3X4YDMEX`). Two changes to the rules as written above:
+
+- **Rule 7 closes on outcome, not trigger** (decisions `01M2JJMKVCETX2NTA271459GWH`, `01M2JKYXPPM2H7XTS2N3W57X9B`). A run is a task inside each participant's workstream, not the workstream. A run that ends with nothing unsettled closes with a note carrying no refs, deliberately deferred open-items included; an unsettled item, an unanswered ESCALATE, or an AGREE whose DECIDED has not arrived means a handoff, and a history gap ends the run with a handoff always, because local state cannot prove nothing is outstanding (decisions `01M2W29VCP1J2ZEB11BMBHN086`, `01M2X7JNDDC6G4TV4WHJMCA7KZ`). Rule 7 as written, a handoff after every END, would plant a phantom resume point on a finished run.
+- **Message one and rule 1 were recalibrated from the M7 run** (decision `01M2VB7754CANNB43VQN9GBNWV` and its amendments `01M2VBN3JMN17RPPFRXPTJRGP3`, `01M2VCAX3RGM58R1N5XZDCK1WQ`, `01M2VX0BAANJM1R5XR3RD99ZJN`). Message one gains a required `size:` field and optional per-participant `owns` lines; rule 1 becomes one item per block with several blocks per message; control words become trailer lines; the emitted body is the text the AGREE named, never a conceded position; a turn rule decides who opens the next item, so two sides cannot open the same number. Rule 6 changes with it: preassigned `owns` paths need no CLAIM, ACK, or RELEASE, and competing claims elsewhere go to the participant listed first on `participants:`, replacing the server-id ordering written above. Merged as Parley PR #9 (note `01M2XDN0WW2WCH764RHHX7N0VM`).
+
+### M7 scorecard
+
+Scored by Colin on run id `01M2KA6RETRYM6` (the id agreed in message one, not a ULID) (decisions `01M2M27VVVMBX6STQPR5JDQ3F5`, `01M2QP230T9E6K8BPTQ6N3R91T`; cost and quality comparison in note `01M2QNT2N8N4H9FH76NG36HZ7K`):
+
+| Criterion | Result |
+|---|---|
+| 1, rehydration from the ledger alone | PASS |
+| 2, nothing lives only in the stream | PASS |
+| 3, emission in the same round | PASS |
+| 4, human work went down | PASS |
+| 5, disagreement improved the result | PASS |
+| 6, cost | CALIBRATION |
+
+The ledger held: criteria 1 and 2 passed, so the layering stands. Criterion 6 was extended with a blind quality comparison against a solo run (decision `01M2M2EA8VRCNH08SEFBR567RD`): at list rates the protocol cost 2.9x the dollars and 3.5x the wall clock of a solo session, with no quality separation on 21 frozen probes and two blind judges, on a task one session settles in ten minutes. Per the rule above, that is calibration, not design: the round structure needs a task large enough to buy something.
+
+### What M7 did not decide
+
+Step 9 promised a sibling-versus-subcommand call on evidence. M7 did not produce one, because the comparison it ran was peer versus solo, and the incumbent is neither: it is one main model with blind review lanes. The decisive experiment is now Parley open-item `01M2R912H5YZ0Q2GKE17WX3TC6`, three arms on one contested task with the same frozen probes and judges: solo, hierarchical with review lanes, and parley on the calibrated protocol. If parley does not separate from the hierarchical arm, independence is best bought as review and the peer transport stays for boundary cases: contested designs argued to a conclusion, work persisting past one task, and sandbox, billing, or tool boundaries a main model cannot subtask across. The sibling question waits on that result; the experiment was staged as Parley PR #11 (M8 prep, merged 2026-09-20; note `01M38M7VDH509GHWX6DTZS9SCF`). The prototype used no third coupling, so the seam described in the Parley, the sibling section held as drawn.
+
+### Handed back to Director
+
+The run surfaced one Director read-model gap, now open-item `01M2XF7734AVMZ0D4FKWEM9H04` in this repo: `render` lists a superseded decision beside its replacement with no supersession marker, and the reconciling note is absent from the digest, so a ledger-only reader sees two conflicting contracts until they open the bodies. Post-M7 ergonomics for a run inside an adopted project are Parley open-item `01M2KCHQJB4DV233FAJG8JM8T8`.
