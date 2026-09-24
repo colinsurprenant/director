@@ -114,14 +114,19 @@ func concludedBy(pairs []conclusion, id string) string {
 
 // nextImplicit returns the lowest implicit handoff of a workstream strictly
 // above id — the first "everything older is mine" claim that retires it. ids is
-// ULID-ascending.
+// ULID-ascending (Pass 1b appends in sorted order), so the search is a binary
+// one.
 func nextImplicit(ids []string, id string) string {
-	for _, candidate := range ids {
-		if candidate > id {
-			return candidate
-		}
+	// SearchStrings lands on the first element at or above id; an exact match
+	// is id itself, which never retires itself, so step past it.
+	i := sort.SearchStrings(ids, id)
+	if i < len(ids) && ids[i] == id {
+		i++
 	}
-	return ""
+	if i == len(ids) {
+		return ""
+	}
+	return ids[i]
 }
 
 // Fold collapses an event set into a resolved Projection. For distinct ids —

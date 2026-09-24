@@ -965,3 +965,145 @@ func TestFoldRetired(t *testing.T) {
 		}
 	}
 }
+
+// noteEvent is the note shorthand the retirement scenarios lean on: a note
+// whose Refs name handoffs of its workstream concludes that trail up to and
+// including the highest position named.
+func noteEvent(id, ws, body string, refs ...string) event.Event {
+	return event.Event{
+		ID: id, SchemaVersion: event.SchemaVersion,
+		Type: event.KindNote, Workstream: ws, Refs: refs, Body: body,
+	}
+}
+
+// assertRetired pins the WHOLE retirement trail, as given and under shuffles:
+// a spurious entry and an order-dependent winner both fail here.
+func assertRetired(t *testing.T, events []event.Event, want map[string]Retirement) {
+	t.Helper()
+	if got := Fold(events).Retired; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Retired = %+v, want %+v", got, want)
+	}
+	for _, seed := range []int64{1, 7, 99} {
+		if got := Fold(shuffled(events, seed)).Retired; !reflect.DeepEqual(got, want) {
+			t.Fatalf("Retired is order-dependent (seed %d): %+v, want %+v", seed, got, want)
+		}
+	}
+}
+
+// TestFoldRetiredTieBreaks names the expected winner outright for every id that
+// more than one rule retires, in both ULID orderings where the orderings can
+// differ. Shuffle equality alone cannot see a flipped tie-break (every shuffle
+// agrees on the wrong answer just as stably), so each case pins the By and the
+// Verb a reader would have to reproduce by hand.
+func TestFoldRetiredTieBreaks(t *testing.T) {
+	// (a) One position, two rules: an explicit same-workstream supersession and
+	// a note that concludes it. The lower ULID stands, so the winner flips with
+	// the minting order and the verb flips with it.
+	t.Run("superseder below the concluding note", func(t *testing.T) {
+		h, superseder, note := mint(t), mint(t), mint(t)
+		events := []event.Event{
+			handoffEvent(h, "ws1", "the contested position"),
+			handoffEvent(superseder, "ws1", "consumes it explicitly", h),
+			noteEvent(note, "ws1", "and a note concludes it", h),
+		}
+		assertRetired(t, events, map[string]Retirement{
+			h: {By: superseder, Verb: VerbSuperseded},
+		})
+	})
+
+	t.Run("concluding note below the superseder", func(t *testing.T) {
+		h, note, superseder := mint(t), mint(t), mint(t)
+		events := []event.Event{
+			handoffEvent(h, "ws1", "the contested position"),
+			noteEvent(note, "ws1", "a note concludes it", h),
+			handoffEvent(superseder, "ws1", "consumes it explicitly", h),
+		}
+		assertRetired(t, events, map[string]Retirement{
+			h: {By: note, Verb: VerbConcluded},
+		})
+	})
+
+	// (b) A position BELOW the conclusion mark, where the marked position is
+	// named by two different notes: the lower note is the one on record. h1 is
+	// named by no handoff and sits at the implicit mark, so conclusion is the
+	// only rule that reaches it and the note it names is unambiguous.
+	t.Run("two notes name the mark, the lower one is recorded", func(t *testing.T) {
+		h0, h1, h2 := mint(t), mint(t), mint(t)
+		noteA, noteB := mint(t), mint(t)
+		events := []event.Event{
+			handoffEvent(h0, "ws1", "oldest position"),
+			handoffEvent(h1, "ws1", "position no handoff ever names"),
+			handoffEvent(h2, "ws1", "consolidates the oldest only", h0),
+			noteEvent(noteA, "ws1", "first note to conclude the trail", h2),
+			noteEvent(noteB, "ws1", "second note naming the same position", h2),
+		}
+		assertRetired(t, events, map[string]Retirement{
+			h0: {By: h1, Verb: VerbSuperseded}, // implicit mark beats both notes
+			h1: {By: noteA, Verb: VerbConcluded},
+			h2: {By: noteA, Verb: VerbConcluded},
+		})
+	})
+
+	// The same mark reached by two notes naming DIFFERENT positions: the
+	// high-water reduction takes the lowest note over every pair at or above
+	// the target, not the note that happens to name the target directly.
+	t.Run("lower note wins across different concluded positions", func(t *testing.T) {
+		h0, h1, h2 := mint(t), mint(t), mint(t)
+		noteA, noteB := mint(t), mint(t)
+		events := []event.Event{
+			handoffEvent(h0, "ws1", "oldest position"),
+			handoffEvent(h1, "ws1", "position no handoff ever names"),
+			handoffEvent(h2, "ws1", "consolidates the oldest only", h0),
+			noteEvent(noteA, "ws1", "concludes the newest position", h2),
+			noteEvent(noteB, "ws1", "names the middle position directly", h1),
+		}
+		assertRetired(t, events, map[string]Retirement{
+			h0: {By: h1, Verb: VerbSuperseded},
+			h1: {By: noteA, Verb: VerbConcluded},
+			h2: {By: noteA, Verb: VerbConcluded},
+		})
+	})
+
+	// (c) One decision consumed by both a promote-marker and a superseding
+	// decision: same rule, different reason, so the lower ULID decides which
+	// reason `director show` prints.
+	t.Run("promote-marker below the superseding decision", func(t *testing.T) {
+		dec, promoter, superseder := mint(t), mint(t), mint(t)
+		events := []event.Event{
+			{ID: dec, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Body: "the call both events consume"},
+			{ID: promoter, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Status: event.StatusPromoted, PromotedTo: "docs/why.md", Refs: []string{dec}, Body: "promoted"},
+			{ID: superseder, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Refs: []string{dec}, Body: "supersedes"},
+		}
+		assertRetired(t, events, map[string]Retirement{
+			dec: {By: promoter, Verb: VerbPromoted, PromotedTo: "docs/why.md"},
+		})
+	})
+
+	t.Run("superseding decision below the promote-marker", func(t *testing.T) {
+		dec, superseder, promoter := mint(t), mint(t), mint(t)
+		events := []event.Event{
+			{ID: dec, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Body: "the call both events consume"},
+			{ID: superseder, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Refs: []string{dec}, Body: "supersedes"},
+			{ID: promoter, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Status: event.StatusPromoted, PromotedTo: "docs/why.md", Refs: []string{dec}, Body: "promoted"},
+		}
+		assertRetired(t, events, map[string]Retirement{
+			dec: {By: superseder, Verb: VerbSuperseded},
+		})
+	})
+
+	// (d) Implicit retirement names the NEXT claim above the position, not the
+	// workstream's highest one: h1 is retired by h2, which is itself retired by
+	// h3.
+	t.Run("implicit retirement names the next position", func(t *testing.T) {
+		h1, h2, h3 := mint(t), mint(t), mint(t)
+		events := []event.Event{
+			handoffEvent(h1, "ws1", "oldest position"),
+			handoffEvent(h2, "ws1", "middle position"),
+			handoffEvent(h3, "ws1", "newest position"),
+		}
+		assertRetired(t, events, map[string]Retirement{
+			h1: {By: h2, Verb: VerbSuperseded},
+			h2: {By: h3, Verb: VerbSuperseded},
+		})
+	})
+}
