@@ -46,6 +46,87 @@ type Projection struct {
 	// the handoff that superseded it; the implicit mark's removals need no list
 	// because they are legible from the surviving stack itself.
 	SupersededHandoffs []string
+
+	// Retired maps a retired event's id to what retired it and how: the close
+	// marker of a resolved open-item, the decision or promote-marker that
+	// consumed a decision, and for a handoff that left the resume stack, the
+	// note that concluded it or the later same-workstream handoff that
+	// superseded it. An event still in the active set has NO entry. It carries
+	// no digest weight — `director show` reads it to print the derived
+	// lifecycle beside the as-recorded status, which is why the reason is kept
+	// here rather than folded into the id lists above.
+	Retired map[string]Retirement
+}
+
+// The lifecycle verbs: how an event left the active set.
+const (
+	VerbClosed     = "closed"     // open-item, by a close-marker's Refs
+	VerbSuperseded = "superseded" // decision by a later decision; handoff by a later same-workstream handoff
+	VerbPromoted   = "promoted"   // decision by a promote-marker's Refs
+	VerbConcluded  = "concluded"  // handoff by a note's Refs, directly or by the workstream high-water mark
+)
+
+// Retirement names the event that retired another and the rule that did it.
+// When several events retire the same target the LOWEST ULID stands, so the
+// answer is a function of the set like the rest of the fold, never of the order
+// the paths happen to be checked in.
+type Retirement struct {
+	By         string // the retiring event's id
+	Verb       string // one of the Verb constants
+	PromotedTo string // the promote-marker's doc pointer, when Verb is VerbPromoted
+}
+
+// retire records r as what retired the event at id, keeping the lowest-ULID
+// retiring event when more than one path applies (a handoff can be concluded
+// and superseded at once).
+func retire(m map[string]Retirement, id string, r Retirement) {
+	if r.By == "" {
+		return
+	}
+	if cur, ok := m[id]; ok && cur.By <= r.By {
+		return
+	}
+	m[id] = r
+}
+
+// conclusion pairs a concluded handoff with the note that named it.
+type conclusion struct {
+	handoff string
+	note    string
+}
+
+// concludedBy returns the lowest-ULID note that concludes the handoff at id:
+// one that named it directly, or one that named a position at or above it in
+// the same workstream (conclusion is a high-water mark). pairs may be in any
+// order; the minimum is not.
+func concludedBy(pairs []conclusion, id string) string {
+	by := ""
+	for _, c := range pairs {
+		if c.handoff < id {
+			continue
+		}
+		if by == "" || c.note < by {
+			by = c.note
+		}
+	}
+	return by
+}
+
+// nextImplicit returns the lowest implicit handoff of a workstream strictly
+// above id — the first "everything older is mine" claim that retires it. ids is
+// ULID-ascending (Pass 1b appends in sorted order), so the search is a binary
+// one.
+func nextImplicit(ids []string, id string) string {
+	// SearchStrings lands on the first element at or above id; an exact match
+	// is id itself, which never retires itself, so step past it.
+	i := sort.SearchStrings(ids, id)
+	if i < len(ids) && ids[i] == id {
+		i++
+	}
+	if i == len(ids) {
+		return ""
+	}
+	return ids[i]
 }
 
 // Fold collapses an event set into a resolved Projection. For distinct ids —
@@ -114,6 +195,10 @@ type Projection struct {
 //     NOTE refs a handoff ONLY to conclude it, and conclusion is unchanged by
 //     the supersession rule above. A handoff emitted after the mark (a
 //     genuinely new position) surfaces normally.
+//   - retirement trail: every id the rules above remove gets an entry in
+//     Retired naming the event that removed it and by which rule, the lowest
+//     ULID winning when more than one applies. It decides no resolved set; it
+//     records the reason behind one, for `director show`.
 //
 // Bounded-read note: deriving the open-set correctly needs the full history (a
 // close-marker may sit arbitrarily far from its open-item), so v1 folds over the
@@ -135,32 +220,50 @@ func Fold(events []event.Event) Projection {
 	copy(sorted, events)
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
 
-	proj := Projection{ResumeHandoffs: make(map[string][]event.Event)}
+	proj := Projection{
+		ResumeHandoffs: make(map[string][]event.Event),
+		Retired:        make(map[string]Retirement),
+	}
 
 	// Pass 1: build the resolution sets — ids closed by a marker, ids
 	// superseded by a later decision, and handoff ids concluded by a note —
-	// independent of iteration order.
-	closed := make(map[string]bool)
-	superseded := make(map[string]bool)
-	noteRefs := make(map[string]bool)
-	handoffWS := make(map[string]string) // handoff id → its workstream
+	// independent of iteration order. Each set keeps WHICH event did the
+	// retiring rather than a bare flag, so Retired can name it; the scan is
+	// ULID-ascending, so the first writer is the lowest-ULID one and membership
+	// is unchanged.
+	closedBy := make(map[string]string)         // ref → close-marker id
+	supersededBy := make(map[string]Retirement) // ref → the decision that consumed it
+	noteRefs := make(map[string]string)         // ref → note id
+	handoffWS := make(map[string]string)        // handoff id → its workstream
 	for _, ev := range sorted {
 		switch ev.Type {
 		case event.KindOpenItem:
 			if ev.Status == event.StatusClosed {
 				for _, ref := range ev.Refs {
-					closed[ref] = true
+					if _, seen := closedBy[ref]; !seen {
+						closedBy[ref] = ev.ID
+					}
 				}
 			}
 		case event.KindDecision:
+			// A promote-marker retires by the same rule; only the reason and
+			// the doc pointer it carries differ.
+			r := Retirement{By: ev.ID, Verb: VerbSuperseded}
+			if ev.Status == event.StatusPromoted {
+				r = Retirement{By: ev.ID, Verb: VerbPromoted, PromotedTo: ev.PromotedTo}
+			}
 			for _, ref := range ev.Refs {
-				superseded[ref] = true
+				if _, seen := supersededBy[ref]; !seen {
+					supersededBy[ref] = r
+				}
 			}
 		case event.KindHandoff:
 			handoffWS[ev.ID] = ev.Workstream
 		case event.KindNote:
 			for _, ref := range ev.Refs {
-				noteRefs[ref] = true
+				if _, seen := noteRefs[ref]; !seen {
+					noteRefs[ref] = ev.ID
+				}
 			}
 		}
 	}
@@ -170,15 +273,20 @@ func Fold(events []event.Event) Projection {
 	// handoff at or below it is retired from the resume stack.
 	concluded := make(map[string]bool)
 	maxConcluded := make(map[string]string)
-	for id := range noteRefs {
-		ws, isHandoff := handoffWS[id]
+	// conclusions keeps the (handoff, note) pairs behind that mark so a
+	// high-water retirement can name the note. Map iteration leaves the slices
+	// in an arbitrary order; only order-free reductions read them.
+	conclusions := make(map[string][]conclusion)
+	for ref, note := range noteRefs {
+		ws, isHandoff := handoffWS[ref]
 		if !isHandoff {
 			continue
 		}
-		concluded[id] = true
-		if id > maxConcluded[ws] {
-			maxConcluded[ws] = id
+		concluded[ref] = true
+		if ref > maxConcluded[ws] {
+			maxConcluded[ws] = ref
 		}
+		conclusions[ws] = append(conclusions[ws], conclusion{handoff: ref, note: note})
 	}
 
 	// Pass 1b: classify handoffs and build the retirement set. It runs after
@@ -192,8 +300,9 @@ func Fold(events []event.Event) Projection {
 	// a mark sweeps every position below it, including a parallel one its author
 	// never saw and never named (R < B1 < A1 < A2 with A2 refs A1 would bury B1),
 	// which is the very silence this rule exists to end.
-	supersededHandoff := make(map[string]bool) // handoff ids explicitly retired
-	maxImplicit := make(map[string]string)     // ws → highest implicit handoff id
+	supersededHandoff := make(map[string]string) // handoff id → the handoff that named it
+	implicit := make(map[string][]string)        // ws → implicit handoff ids, ULID-ascending
+	maxImplicit := make(map[string]string)       // ws → highest implicit handoff id
 	for _, ev := range sorted {
 		if ev.Type != event.KindHandoff {
 			continue
@@ -203,7 +312,9 @@ func Fold(events []event.Event) Projection {
 			if ws, isHandoff := handoffWS[ref]; !isHandoff || ws != ev.Workstream || ref >= ev.ID {
 				continue
 			}
-			supersededHandoff[ref] = true
+			if _, seen := supersededHandoff[ref]; !seen {
+				supersededHandoff[ref] = ev.ID
+			}
 			explicit = true
 		}
 		if explicit {
@@ -211,6 +322,7 @@ func Fold(events []event.Event) Projection {
 		}
 		// Implicit: no consumed position named, so the legacy rule applies —
 		// this handoff retires every strictly-older position of its workstream.
+		implicit[ev.Workstream] = append(implicit[ev.Workstream], ev.ID)
 		if ev.ID > maxImplicit[ev.Workstream] {
 			maxImplicit[ev.Workstream] = ev.ID
 		}
@@ -220,22 +332,28 @@ func Fold(events []event.Event) Projection {
 	for _, ev := range sorted {
 		switch ev.Type {
 		case event.KindDecision:
-			if !superseded[ev.ID] {
+			if r, gone := supersededBy[ev.ID]; gone {
+				retire(proj.Retired, ev.ID, r)
+			} else {
 				proj.Decisions = append(proj.Decisions, ev)
 			}
 		case event.KindOpenItem:
 			// Close-markers are themselves open-item+closed entries; they are
 			// resolution metadata, never part of the open-set. Only un-closed
 			// originals survive.
-			if ev.Status != event.StatusClosed && !closed[ev.ID] {
-				proj.OpenItems = append(proj.OpenItems, ev)
+			if ev.Status != event.StatusClosed {
+				if by, gone := closedBy[ev.ID]; gone {
+					retire(proj.Retired, ev.ID, Retirement{By: by, Verb: VerbClosed})
+				} else {
+					proj.OpenItems = append(proj.OpenItems, ev)
+				}
 			}
 		case event.KindHandoff:
 			proj.Handoffs = append(proj.Handoffs, ev)
 			if concluded[ev.ID] {
 				proj.ConcludedHandoffs = append(proj.ConcludedHandoffs, ev.ID)
 			}
-			if supersededHandoff[ev.ID] {
+			if supersededHandoff[ev.ID] != "" {
 				proj.SupersededHandoffs = append(proj.SupersededHandoffs, ev.ID)
 			}
 			// The three retirements, applied together: strictly above the
@@ -245,8 +363,20 @@ func Fold(events []event.Event) Projection {
 			// makes the appended stack ULID-ascending, and a workstream with
 			// no survivor never gets a key.
 			ws := ev.Workstream
-			if ev.ID > maxConcluded[ws] && !supersededHandoff[ev.ID] && ev.ID >= maxImplicit[ws] {
+			if ev.ID > maxConcluded[ws] && supersededHandoff[ev.ID] == "" && ev.ID >= maxImplicit[ws] {
 				proj.ResumeHandoffs[ws] = append(proj.ResumeHandoffs[ws], ev)
+			} else {
+				// Off the stack: record every retirement that applies and let
+				// retire keep the lowest-ULID one.
+				if ev.ID <= maxConcluded[ws] {
+					retire(proj.Retired, ev.ID, Retirement{By: concludedBy(conclusions[ws], ev.ID), Verb: VerbConcluded})
+				}
+				if by := supersededHandoff[ev.ID]; by != "" {
+					retire(proj.Retired, ev.ID, Retirement{By: by, Verb: VerbSuperseded})
+				}
+				if ev.ID < maxImplicit[ws] {
+					retire(proj.Retired, ev.ID, Retirement{By: nextImplicit(implicit[ws], ev.ID), Verb: VerbSuperseded})
+				}
 			}
 		case event.KindNote:
 			proj.Notes = append(proj.Notes, ev)
