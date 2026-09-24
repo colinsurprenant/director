@@ -927,3 +927,41 @@ func TestFoldLegacyLogRendersOneLinePerWorkstream(t *testing.T) {
 		}
 	}
 }
+
+// TestFoldRetired locks the retirement trail: only events the fold actually
+// removed get an entry, the verb distinguishes promotion from plain
+// supersession, and when two events retire the same target the lowest ULID is
+// the one on record.
+func TestFoldRetired(t *testing.T) {
+	decOld, decPromoted := mint(t), mint(t)
+	open := mint(t)
+	decActive := mint(t)
+	supersedeA, supersedeB := mint(t), mint(t) // both name decOld
+	promoter, closer := mint(t), mint(t)
+
+	events := []event.Event{
+		{ID: decOld, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Body: "the earlier call"},
+		{ID: decPromoted, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Body: "rationale that moved to a doc"},
+		{ID: open, SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Body: "will be closed"},
+		{ID: decActive, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Body: "still stands"},
+		{ID: supersedeA, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Refs: []string{decOld}, Body: "supersedes"},
+		{ID: supersedeB, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Refs: []string{decOld}, Body: "supersedes again"},
+		{ID: promoter, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Status: event.StatusPromoted, PromotedTo: "docs/why.md", Refs: []string{decPromoted}, Body: "promoted"},
+		{ID: closer, SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusClosed, Refs: []string{open}, Body: "closed"},
+	}
+
+	want := map[string]Retirement{
+		decOld:      {By: supersedeA, Verb: VerbSuperseded},
+		decPromoted: {By: promoter, Verb: VerbPromoted, PromotedTo: "docs/why.md"},
+		open:        {By: closer, Verb: VerbClosed},
+	}
+	proj := Fold(events)
+	if !reflect.DeepEqual(proj.Retired, want) {
+		t.Fatalf("Retired = %+v, want %+v", proj.Retired, want)
+	}
+	for _, seed := range []int64{1, 5, 23} {
+		if got := Fold(shuffled(events, seed)); !reflect.DeepEqual(got.Retired, want) {
+			t.Fatalf("Retired not order-independent for seed %d: %+v", seed, got.Retired)
+		}
+	}
+}

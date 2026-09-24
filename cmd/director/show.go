@@ -8,6 +8,7 @@ import (
 
 	"github.com/colinsurprenant/director/internal/event"
 	"github.com/colinsurprenant/director/internal/id"
+	"github.com/colinsurprenant/director/internal/render"
 )
 
 // runShow prints one event's full record by ULID — the read affordance the
@@ -53,9 +54,13 @@ func runShow(args []string) int {
 		fmt.Fprintf(os.Stderr, "show: %v\n", err)
 		return 1
 	}
+	// The fold is what knows whether the record is still live, so it runs over
+	// the same set the lookup scans and hands formatEvent the one derived fact
+	// the as-recorded print cannot carry.
+	retired := render.Fold(events).Retired
 	for _, ev := range events {
 		if ev.ID == target {
-			fmt.Print(formatEvent(ev))
+			fmt.Print(formatEvent(ev, retired[ev.ID]))
 			return 0
 		}
 	}
@@ -65,10 +70,13 @@ func runShow(args []string) int {
 
 // formatEvent renders one event in full: a headline line mirroring the digest
 // grammar (so the two are visually relatable), the remaining metadata, then the
-// untruncated body verbatim. It prints the event AS RECORDED — lifecycle state
-// (closed, superseded) lives in the fold, not here, so a resolved open-item
-// still shows [status:open]; the digest is where current state lives.
-func formatEvent(ev event.Event) string {
+// untruncated body verbatim. Every field is printed AS RECORDED — a resolved
+// open-item still shows [status:open], because that is what the log says. The
+// one derived addition is the trailing `lifecycle:` line, which the fold (not
+// this function) decides: it is what corrects the recorded status for a reader
+// who followed a pointer here, and it is absent for an active event, whose
+// output is byte-for-byte the as-recorded record.
+func formatEvent(ev event.Event, retirement render.Retirement) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s %s", ev.ID, ev.Type)
 	if ev.Status != "" {
@@ -90,6 +98,14 @@ func formatEvent(ev event.Event) string {
 	}
 	if len(ev.Refs) > 0 {
 		fmt.Fprintf(&b, "refs: %s\n", strings.Join(ev.Refs, " "))
+	}
+	// Last header line, so it sits beside the [status:...] tag it corrects.
+	if retirement.By != "" {
+		fmt.Fprintf(&b, "lifecycle: %s by %s", retirement.Verb, retirement.By)
+		if retirement.Verb == render.VerbPromoted && retirement.PromotedTo != "" {
+			fmt.Fprintf(&b, " to %s", retirement.PromotedTo)
+		}
+		b.WriteString("\n")
 	}
 	b.WriteString("\n")
 	b.WriteString(ev.Body)
