@@ -1,7 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -54,6 +57,57 @@ func TestShowExitCodes(t *testing.T) {
 				t.Fatalf("run(%v) = %d, want %d", tt.args, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRunShowJSONIncludesFoldedLifecycle(t *testing.T) {
+	hub := t.TempDir()
+	t.Setenv("DIRECTOR_HUB", hub)
+	store := event.NewStore(hub, "widget")
+	target := event.Event{
+		ID: mintID(t), SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem,
+		Status: event.StatusOpen, Workstream: "widget-main", Body: strings.Repeat("complete body ", 80),
+	}
+	marker := event.Event{
+		ID: mintID(t), SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem,
+		Status: event.StatusClosed, Workstream: "widget-main", Refs: []string{target.ID}, Body: "resolved",
+	}
+	for _, ev := range []event.Event{target, marker} {
+		if err := store.Append(ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var code int
+	stdout, stderr := captureStreams(t, func() {
+		code = runShow([]string{"--project", "widget", "--json", target.ID})
+	})
+	if code != 0 || stderr != "" {
+		t.Fatalf("show --json exit = %d stderr = %q", code, stderr)
+	}
+	var got render.JSONEvent
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("parse show JSON: %v\n%s", err, stdout)
+	}
+	if got.SchemaVersion != render.JSONSchemaVersion || got.Project != "widget" {
+		t.Errorf("envelope = version %d project %q", got.SchemaVersion, got.Project)
+	}
+	if got.Record.Lifecycle != "closed" {
+		t.Errorf("lifecycle = %q, want closed", got.Record.Lifecycle)
+	}
+	if got.Record.Event.Body != target.Body {
+		t.Error("show --json changed or truncated the event body")
+	}
+
+	stdout, stderr = captureStreams(t, func() {
+		code = runShow([]string{"--project", "widget", target.ID})
+	})
+	if code != 0 || stderr != "" {
+		t.Fatalf("default show exit = %d stderr = %q", code, stderr)
+	}
+	want := formatEvent(target, render.Retirement{By: marker.ID, Verb: render.VerbClosed})
+	if stdout != want {
+		t.Errorf("default show changed:\n--- want ---\n%s\n--- got ---\n%s", want, stdout)
 	}
 }
 
@@ -283,6 +337,95 @@ func TestShowLifecycleLine(t *testing.T) {
 			}
 			if stdout != tt.want {
 				t.Errorf("show output:\n%q\nwant:\n%q", stdout, tt.want)
+			}
+		})
+	}
+}
+
+// writeRawLog writes events straight into the project's log, bypassing the
+// store's validation, so a test can hold records the writer would refuse: a
+// type no build knows, or an id reused across kinds.
+func writeRawLog(t *testing.T, hub, project string, events ...event.Event) {
+	t.Helper()
+	path := event.NewStore(hub, project).Path()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	for _, ev := range events {
+		line, err := json.Marshal(ev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.Write(line)
+		b.WriteString("\n")
+	}
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The JSON contract is strict and the text output is not: where `show --json`
+// cannot derive a lifecycle it exits 1 with nothing on stdout, and text `show`
+// prints exactly what it printed before --json existed: the record plus the
+// fold's own Retired entry, exit 0, nothing on stderr. Two logs `show --json`
+// rejects: a type the fold does not project, and an id reused across kinds,
+// where the lower-ULID superseding decision stands as the retirer of both and
+// the open-item would read "superseded".
+func TestShowTextUnchangedWhereJSONRejects(t *testing.T) {
+	hub := t.TempDir()
+	t.Setenv("DIRECTOR_HUB", hub)
+
+	unprojected := event.Event{
+		ID: mintID(t), SchemaVersion: event.SchemaVersion, Type: event.Kind("blocker"),
+		Workstream: "widget-main", Area: "hooks", TS: lifecycleTS, Body: "a kind this build does not know",
+	}
+	reused, superseder, closer := mintID(t), mintID(t), mintID(t)
+	item := event.Event{ID: reused, SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Status: event.StatusOpen, Workstream: "widget-main", TS: lifecycleTS, Body: "the open-item"}
+	events := []event.Event{
+		unprojected,
+		item,
+		{ID: reused, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "widget-main", TS: lifecycleTS, Body: "the decision"},
+		{ID: superseder, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "widget-main", Refs: []string{reused}, TS: lifecycleTS, Body: "supersedes"},
+		{ID: closer, SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Status: event.StatusClosed, Workstream: "widget-main", Refs: []string{reused}, TS: lifecycleTS, Body: "closed"},
+	}
+	writeRawLog(t, hub, "widget", events...)
+	retired := render.Fold(events).Retired
+
+	tests := []struct {
+		name     string
+		ev       event.Event
+		wantLine string // the lifecycle line the fold's Retired entry gives the text form, or ""
+	}{
+		{"unprojected type", unprojected, ""},
+		{"id reused across kinds", item, "lifecycle: superseded by " + superseder + "\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name+" text", func(t *testing.T) {
+			var code int
+			stdout, stderr := captureStreams(t, func() {
+				code = runShow([]string{"--project", "widget", tt.ev.ID})
+			})
+			if code != 0 || stderr != "" {
+				t.Errorf("exit = %d stderr = %q, want exit 0 and nothing on stderr", code, stderr)
+			}
+			if want := formatEvent(tt.ev, retired[tt.ev.ID]); stdout != want {
+				t.Errorf("stdout:\n%q\nwant what the pre-JSON path prints:\n%q", stdout, want)
+			}
+			if got := strings.Contains(stdout, "lifecycle:"); got != (tt.wantLine != "") || !strings.Contains(stdout, tt.wantLine) {
+				t.Errorf("stdout lifecycle line = %q, want %q:\n%s", stdout, tt.wantLine, stdout)
+			}
+		})
+		t.Run(tt.name+" json", func(t *testing.T) {
+			var code int
+			stdout, stderr := captureStreams(t, func() {
+				code = runShow([]string{"--project", "widget", "--json", tt.ev.ID})
+			})
+			if code != 1 || stdout != "" {
+				t.Errorf("exit = %d stdout = %q, want exit 1 and no stdout", code, stdout)
+			}
+			if !strings.HasPrefix(stderr, "show: ") || strings.Count(stderr, "\n") != 1 {
+				t.Errorf("stderr = %q, want one `show: ...` line", stderr)
 			}
 		})
 	}

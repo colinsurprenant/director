@@ -89,6 +89,13 @@ func retire(m map[string]Retirement, id string, r Retirement) {
 	m[id] = r
 }
 
+// isCloseMarker reports whether ev is a close-marker: an open-item whose status
+// is closed. The fold keeps one out of the open-set and never retires it, and
+// LifecycleOf names it from this same predicate.
+func isCloseMarker(ev event.Event) bool {
+	return ev.Type == event.KindOpenItem && ev.Status == event.StatusClosed
+}
+
 // conclusion pairs a concluded handoff with the note that named it.
 type conclusion struct {
 	handoff string
@@ -238,7 +245,7 @@ func Fold(events []event.Event) Projection {
 	for _, ev := range sorted {
 		switch ev.Type {
 		case event.KindOpenItem:
-			if ev.Status == event.StatusClosed {
+			if isCloseMarker(ev) {
 				for _, ref := range ev.Refs {
 					if _, seen := closedBy[ref]; !seen {
 						closedBy[ref] = ev.ID
@@ -341,7 +348,7 @@ func Fold(events []event.Event) Projection {
 			// Close-markers are themselves open-item+closed entries; they are
 			// resolution metadata, never part of the open-set. Only un-closed
 			// originals survive.
-			if ev.Status != event.StatusClosed {
+			if !isCloseMarker(ev) {
 				if by, gone := closedBy[ev.ID]; gone {
 					retire(proj.Retired, ev.ID, Retirement{By: by, Verb: VerbClosed})
 				} else {

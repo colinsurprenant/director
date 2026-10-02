@@ -118,13 +118,13 @@ write path (model-emitted):
               promote <ulid>... --to <doc> (a doc pointer stays in the digest)
 
 projections:
-  render      deterministic machine digest (+ --verify, manifest)
+  render      deterministic machine digest (+ --json, --verify, manifest)
   brief       human re-orientation view (the bigger picture)
   status      one-line-per-workstream fleet cockpit
   open-items  a workstream's unresolved open-items (ULID + body), for /complete
               (default: current workstream; --workstream <id> targets a sibling)
   show        one event in full by ULID — the pull path behind the digest's
-              capped headlines (--project <repo-key> targets another project)
+              capped headlines (+ --json; --project targets another project)
 
 fleet lifecycle (hook-emitted):
   register    create/refresh this workstream's fleet row

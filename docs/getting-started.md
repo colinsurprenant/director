@@ -402,6 +402,11 @@ director resolve <ulid>   # the ULID from emit/render/open-items/show; rejects i
 director show <ulid>      # read any event in full first — digest lines are capped headlines
 ```
 
+For an integration, use `director render --json` to read the live semantic projection
+without parsing the text digest. Use `director show --json <ulid>` when the integration
+needs one current or historical event and its folded lifecycle. Both outputs carry a
+top-level `schema_version`; their nested events retain the durable event schema version.
+
 ---
 
 ## 5. How the model uses Director

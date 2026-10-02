@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"os"
@@ -10,16 +11,19 @@ import (
 	"github.com/colinsurprenant/director/internal/render"
 )
 
-// runRender folds one project's LOG into the deterministic digest, prints it to
-// stdout (this is what SessionStart injects), and writes the §9 manifest. With
-// --verify it re-folds the same events in a different order and asserts the digest
-// is byte-identical — the §13 t4 gate, surfaced as a non-zero exit on drift.
+// runRender folds one project's LOG into a deterministic projection, prints its
+// text digest (the SessionStart input) or versioned JSON, and writes the §9
+// manifest. With --verify it re-folds the same events in a different order and
+// asserts the selected output is byte-identical — the §13 t4 gate, surfaced as
+// a non-zero exit on drift.
 func runRender(args []string) int {
 	fs := flag.NewFlagSet("render", flag.ContinueOnError)
 	var project string
 	var verify bool
+	var jsonOutput bool
 	fs.StringVar(&project, "project", "", "repo-key to render (default: current workstream)")
-	fs.BoolVar(&verify, "verify", false, "re-fold and assert the digest is byte-identical (§13 t4)")
+	fs.BoolVar(&verify, "verify", false, "re-fold and assert the output (digest, or the JSON with --json) is byte-identical (§13 t4)")
+	fs.BoolVar(&jsonOutput, "json", false, "print the versioned machine-readable projection")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -28,6 +32,13 @@ func runRender(args []string) int {
 			fmt.Fprintf(os.Stderr, "render: %v\n", err)
 			return 2
 		}
+	}
+	// Go's flag package stops at the first positional, so a flag after one
+	// (`render extra --json`) would be silently ignored and the text digest
+	// printed to a machine consumer that asked for JSON.
+	if fs.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, "usage: director render [--project <repo-key>] [--json] [--verify]")
+		return 2
 	}
 
 	hub, repoKey, err := projectTarget(project)
@@ -43,7 +54,23 @@ func runRender(args []string) int {
 		return 1
 	}
 	proj := render.Fold(events)
-	digest := render.Digest(proj, repoKey)
+	// One encoder serves the printed output and the --verify re-fold, so the
+	// JSON-or-text choice is made once.
+	encode := func(p render.Projection) ([]byte, error) {
+		if !jsonOutput {
+			return []byte(render.Digest(p, repoKey)), nil
+		}
+		out, err := render.ProjectionJSON(p, repoKey)
+		if err != nil {
+			return nil, fmt.Errorf("encode JSON: %w", err)
+		}
+		return out, nil
+	}
+	output, err := encode(proj)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "render: %v\n", err)
+		return 1
+	}
 
 	if verify {
 		// Determinism is a property of the fold over the event SET, not of a second
@@ -56,8 +83,13 @@ func runRender(args []string) int {
 		for i, ev := range events {
 			reordered[len(events)-1-i] = ev
 		}
-		if got := render.Digest(render.Fold(reordered), repoKey); got != digest {
-			fmt.Fprintln(os.Stderr, "render: --verify FAILED — re-folding the same events in a different order produced a different digest (non-deterministic render)")
+		got, err := encode(render.Fold(reordered))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "render: --verify: %v\n", err)
+			return 1
+		}
+		if !bytes.Equal(got, output) {
+			fmt.Fprintln(os.Stderr, "render: --verify FAILED — re-folding the same events in a different order produced different output (non-deterministic render)")
 			return 1
 		}
 	}
@@ -69,7 +101,7 @@ func runRender(args []string) int {
 		fmt.Fprintf(os.Stderr, "render: manifest: %v\n", err)
 	}
 
-	fmt.Print(digest)
+	fmt.Print(string(output))
 	return 0
 }
 

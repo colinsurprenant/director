@@ -1064,6 +1064,44 @@ func TestFoldRetiredTieBreaks(t *testing.T) {
 		})
 	})
 
+	// (b2) The same contest where the note never names the position: h1 is below
+	// the mark (the note names hx, above it), so conclusion reaches h1 only
+	// through the high-water mark while h2 supersedes it explicitly. hx refs h0,
+	// which keeps h1 out of the implicit mark's way (h1 is the highest implicit
+	// handoff, so nothing implicit retires it). The lower ULID still stands, and
+	// the whole trail is pinned so the sweep's By is the note, not hx.
+	t.Run("swept by the mark, note below the superseder", func(t *testing.T) {
+		h0, h1, hx, note, h2 := mint(t), mint(t), mint(t), mint(t), mint(t)
+		events := []event.Event{
+			handoffEvent(h0, "ws1", "oldest position"),
+			handoffEvent(h1, "ws1", "position the note never names"),
+			handoffEvent(hx, "ws1", "names the oldest only", h0),
+			noteEvent(note, "ws1", "concludes up to hx", hx),
+			handoffEvent(h2, "ws1", "consumes h1 explicitly", h1),
+		}
+		assertRetired(t, events, map[string]Retirement{
+			h0: {By: h1, Verb: VerbSuperseded}, // implicit mark, below both the note and hx
+			h1: {By: note, Verb: VerbConcluded},
+			hx: {By: note, Verb: VerbConcluded},
+		})
+	})
+
+	t.Run("swept by the mark, superseder below the note", func(t *testing.T) {
+		h0, h1, hx, h2, note := mint(t), mint(t), mint(t), mint(t), mint(t)
+		events := []event.Event{
+			handoffEvent(h0, "ws1", "oldest position"),
+			handoffEvent(h1, "ws1", "position the note never names"),
+			handoffEvent(hx, "ws1", "names the oldest only", h0),
+			handoffEvent(h2, "ws1", "consumes h1 explicitly", h1),
+			noteEvent(note, "ws1", "concludes up to hx", hx),
+		}
+		assertRetired(t, events, map[string]Retirement{
+			h0: {By: h1, Verb: VerbSuperseded},
+			h1: {By: h2, Verb: VerbSuperseded},
+			hx: {By: note, Verb: VerbConcluded},
+		})
+	})
+
 	// (c) One decision consumed by both a promote-marker and a superseding
 	// decision: same rule, different reason, so the lower ULID decides which
 	// reason `director show` prints.
