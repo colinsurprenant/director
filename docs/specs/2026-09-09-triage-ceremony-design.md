@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-09
 **Status:** Design, unbuilt. Review settled 2026-10-02: the eight open questions are decided (see [Resolved questions](#resolved-questions)), together with the end-of-workstream disposition amendment. Next: the build in [Work breakdown](#work-breakdown), then the ingest dogfood.
-**LOG refs:** decision `01KYJAXYZXZF2TDFTY7E6H28EZ` (the disposition policy, ratified 2026-07-27), open-item `01KYJAY9A3E2R9A8FY26D1CW98` (its implementation item, still open), note `01M1PDKMCG2WJPYRS66NN0SJ20` (the 2026-09-04 measurements), decision `01M1PQ6RCPCZZ3CFKQSX9Q4RPG` (ceremony shape: manual trigger, anti-nag), decision `01M1PQ6RD9BVYC9AW0MQZ53SW9` (ingest is the first dogfood; route by kind of fact), decisions `01M3Z9TG6XTVQW0AP9T7W8N193`, `01M3ZA2C4PCXRP3073S32P8AN4`, `01M3ZA868BJ7DN2XGY80GNCR0A`, `01M3ZACWKRHVXNEHT3JVK8QHWH`, `01M3ZAMPCPE12K5MEGHMSDAX91`, `01M3ZAYZKBMNJ0VD8TQMMFZPX9`, `01M3ZB7RYTY0MHYC8MR1TDQNV2`, `01M3ZBB3DFZP3VZJRRW3BHQQ0E` (the review's answers to Q1 through Q8), decision `01M3ZPJV4CFHXSHZCQEK8CN6MF` (no-Tracker fallback, found while landing this edit), decision `01M3ZAQE08Y6WWJE5KB2KV25N9` (promote discoverability), decision `01M3Z83FSY4P2GH32QA6YR4VTH` (the complete-vs-handoff merge and its end-of-workstream disposition amendment), note `01M3YKP18AKVXTMSBTTMFVD1GR` (the 2026-10-02 hygiene measurement)
+**LOG refs:** decision `01KYJAXYZXZF2TDFTY7E6H28EZ` (the disposition policy, ratified 2026-07-27), open-item `01KYJAY9A3E2R9A8FY26D1CW98` (its implementation item, still open), note `01M1PDKMCG2WJPYRS66NN0SJ20` (the 2026-09-04 measurements), decision `01M1PQ6RCPCZZ3CFKQSX9Q4RPG` (ceremony shape: manual trigger, anti-nag), decision `01M1PQ6RD9BVYC9AW0MQZ53SW9` (ingest is the first dogfood; route by kind of fact), decisions `01M3Z9TG6XTVQW0AP9T7W8N193`, `01M3ZA2C4PCXRP3073S32P8AN4`, `01M3ZA868BJ7DN2XGY80GNCR0A`, `01M3ZACWKRHVXNEHT3JVK8QHWH`, `01M3ZAMPCPE12K5MEGHMSDAX91`, `01M3ZAYZKBMNJ0VD8TQMMFZPX9`, `01M3ZB7RYTY0MHYC8MR1TDQNV2`, `01M3ZBB3DFZP3VZJRRW3BHQQ0E` (the review's answers to Q1 through Q8), decisions `01M3ZR1JASX3EX7KEEYF7MPQJD` and `01M3ZR1MKTGH423F92MP195KB4` (Q2 and Q4 as amended after the PR #76 reviews), decision `01M3ZPJV4CFHXSHZCQEK8CN6MF` (no-Tracker fallback, found while landing this edit), decision `01M3ZAQE08Y6WWJE5KB2KV25N9` (promote discoverability), decision `01M3Z83FSY4P2GH32QA6YR4VTH` (the complete-vs-handoff merge and its end-of-workstream disposition amendment), note `01M3YKP18AKVXTMSBTTMFVD1GR` (the 2026-10-02 hygiene measurement)
 
 ## Problem
 
@@ -78,6 +78,8 @@ The July decision (`01KYJAXYZXZF2TDFTY7E6H28EZ`) ratified three. KEEP is the fou
 
 A `risk:escalate` item adds a de-escalation decision in front of MIGRATE or a lower-risk KEEP; see [Guards](#guards).
 
+**Each step runs only after the previous one succeeded.** An order protects nothing if a failed step does not stop the sequence: a DROP whose decision emit failed must not go on to resolve. Run each write as its own command and read its output (the URL `gh` printed, the ULID `director emit` printed) before running the next.
+
 ### DONE
 
 ```bash
@@ -94,9 +96,13 @@ File the tracker entry FIRST. Resolve-then-file is deletion with good intentions
 # 1. File. The body carries the ULID and the ORIGINAL body verbatim.
 #    Pass it on stdin as a quoted heredoc: nothing inside expands, so
 #    backticks, apostrophes and $VAR in the original body survive.
+#    Two hazards: the delimiter must not appear as a line of the body
+#    (pick another quoted delimiter if it does), and title and label go
+#    in single quotes (an apostrophe inside is written '\''), because a
+#    double-quoted title runs any $(...) it contains.
 gh issue create \
-  --title "<short title>" \
-  --label "<label mapped from the Director --area>" \
+  --title '<short title>' \
+  --label '<label mapped from the Director --area>' \
   --body-file - <<'DIRECTOR_EOF'
 From Director open-item 01ABC... (emitted <date>, area <area>):
 
@@ -106,13 +112,13 @@ Filed by /director:triage on <date>.
 DIRECTOR_EOF
 # → https://github.com/<owner>/<repo>/issues/N
 
-# 2. Only now, close the loop in Director, naming where it went.
-director resolve --to https://github.com/<owner>/<repo>/issues/N 01ABC...
+# 2. Only after step 1 printed the URL: close the loop, naming where it went.
+director resolve --to 'https://github.com/<owner>/<repo>/issues/N' 01ABC...
 ```
 
 Labels are mapped from the item's `--area`, not invented per item: the area field is already the repo's own subsystem vocabulary.
 
-`--to` takes the destination's address: an issue URL, or, for a planning doc the CHARTER `Tracker:` line names, a path plus heading anchor (`BACKLOG.md#parser`). The address lands in the close-marker's body, and `director show <ulid>` prints it on the resolved item, so the migration is one `director show` away. On the Director side MIGRATE is now atomic: one resolve both closes the loop and records where it went. The cross-system half still rests on order, exactly as `promote` relies on write-the-doc-then-promote ordering rather than dialing the target: the tracker entry exists before the loop closes. (This spec's first draft wrote a separate pointer note after the resolve; [Rejected alternatives](#rejected-alternatives) says why it went.)
+`--to` takes the destination's address: an issue URL, or, for a planning doc the CHARTER `Tracker:` line names, a path plus heading anchor (`BACKLOG.md#parser`). It is validated before the marker is written, the way `promote` validates its doc pointer: non-empty, one line, bounded, no control characters (`show` prints it as a metadata line, so a newline could forge the lines around it), and portable, a URL or a repo-relative path, never a checkout-local absolute path (`checkPortableAddress`, `internal/event/write.go:296`). A planning-doc destination exists only once the edit is committed on the default branch, because the log is shared by every checkout and an uncommitted or feature-branch edit can vanish with its worktree: triage migrates into a doc only from the default branch's checkout, and commits the doc edit before the resolve. The address lands in the close-marker's body, and `director show <ulid>` prints it on the resolved item, so the migration is one `director show` away. On the Director side MIGRATE is now atomic: one resolve both closes the loop and records where it went. The cross-system half still rests on order, exactly as `promote` relies on write-the-doc-then-promote ordering rather than dialing the target: the tracker entry exists before the loop closes. (This spec's first draft wrote a separate pointer note after the resolve; [Rejected alternatives](#rejected-alternatives) says why it went.)
 
 ### DROP
 
@@ -120,6 +126,8 @@ Labels are mapped from the item's `--area`, not invented per item: the area fiel
 director emit --type decision --area <area> - <<'DIRECTOR_EOF'
 dropping open-item 01ABC... (<one line: what changed so it stopped mattering>)
 DIRECTOR_EOF
+
+# Only after the emit printed its ULID:
 director resolve 01ABC...
 ```
 
@@ -129,19 +137,21 @@ Calling a dropped item resolved with no rationale is the real lie in the ledger.
 
 KEEP requires a one-line why-open from the human. That sentence is the why-is-this-open test applied item by item, which makes triage the cheapest place to produce it.
 
-Items that wait on the human or on the outside world (human-must-run, external-wait) take a stricter form: what is awaited, plus a recheck-by date, e.g. *awaiting awesome-claude-code #2497 triage, recheck by 2026-11-01* (decision `01M3ZACWKRHVXNEHT3JVK8QHWH`). They get no fifth route. They are neither loops the tracker should own nor rationale a doc should own, and they are not escalate by default: human-owned is not interrupt-me.
+Every KEEP also carries a recheck-by date (decision `01M3ZR1MKTGH423F92MP195KB4`, amending Q4). Items that wait on the human or on the outside world (human-must-run, external-wait) name what is awaited and take the date from it, e.g. *awaiting awesome-claude-code #2497 triage, recheck by 2026-11-01*; any other KEEP gets a 30-day default the human can change during the walk. The waiting items get no fifth route. They are neither loops the tracker should own nor rationale a doc should own, and they are not escalate by default: human-owned is not interrupt-me.
 
 Recording: **one batched note per triage run**, listing each kept ULID with its why-open line. Every run writes it, even with zero KEEPs, so the log records when triage last ran: the heads-up mutes on it, and the next run reads it (decision `01M3Z9TG6XTVQW0AP9T7W8N193`).
 
 ```bash
-director emit --type note --area close-out - <<'DIRECTOR_EOF'
-triage <date>: kept 01ABC... (awaiting upstream fix, recheck by 2026-11-01) · 01DEF... (mine, next block) · 01GHI... (blocked on Colin's call on retention, recheck by 2026-10-20)
+director emit --type note --area triage - <<'DIRECTOR_EOF'
+triage 2026-10-02: kept 01ABC... (awaiting upstream fix, recheck by 2026-11-01) · 01DEF... (mine, next block, recheck by 2026-11-01) · 01GHI... (blocked on Colin's call on retention, recheck by 2026-10-20)
 DIRECTOR_EOF
 ```
 
+The note is a contract, read by the heads-up hook and by the next run, so its shape is fixed: `--area triage`; a body that starts `triage <YYYY-MM-DD>: kept `; then one entry per kept item, `<full ULID> (<why-open>, recheck by <YYYY-MM-DD>)`, joined by ` · ` (a run with zero KEEPs writes `kept none`). The area plus that prefix is how a triage note is recognized. Malformed parts fail toward visibility: an entry whose ULID or date does not parse suppresses nothing, so its item counts as aged again, and a note without the prefix is not a triage run and mutes nothing. The dates live in the body, so the note needs no `--refs`.
+
 The alternative is to record nothing, on the reasoning that a kept item is already visible in the digest and a note is not. That alternative loses the *why*, which is the only part that distinguishes a live loop from wallpaper. The batched form wins over one note per item because N notes for N kept items is a second accumulation problem: notes stay out of the digest, but they grow the log every future run has to read through to find the latest one. One note per run keeps the write cost proportional to the ceremony, not to the backlog.
 
-The recheck date is what makes triage the recheck mechanism. The next run reads the latest batched note and, for each kept item past its date, proposes keep-with-a-new-date or DROP. Time triggers fire at triage, with no timer anywhere; the 2026-10-02 hygiene pass found that time triggers written into open-item bodies never fire on their own. Until its recheck date, an item kept in the latest run counts as referenced for the aged-unreferenced heads-up count (see [Trigger and heads-up](#trigger-and-heads-up)). How the build marks that is open, with one constraint: refs carry reserved meanings in the fold (a note whose refs name a handoff concludes it), so marking through the note's `--refs` needs the fold checked first.
+The recheck date is what makes triage the recheck mechanism. The next run reads the latest batched note and, for each kept item past its date, proposes keep-with-a-new-date or DROP. Time triggers fire at triage, with no timer anywhere; the 2026-10-02 hygiene pass found that time triggers written into open-item bodies never fire on their own. Until its recheck date, an item kept in the latest run counts as referenced for the aged-unreferenced heads-up count (see [Trigger and heads-up](#trigger-and-heads-up)).
 
 ### Chains
 
@@ -151,11 +161,11 @@ A parent with fold-in children migrates as **ONE issue with a checklist**, not N
 
 Both come from the July decision's stress test:
 
-- **`risk:escalate` items are NOT migratable** without an explicit de-escalation by the human during the walk, and **the de-escalation is a decision event**, written first (decision `01M3ZA2C4PCXRP3073S32P8AN4`). Migrating one silently converts a *needs-you* into a backlog row, clearing the single signal designed to interrupt the human (the `status` Needs-you band). `--risk` is set only at emit (`cmd/director/emit.go`) and nothing changes it later, so an escalate item leaves the Needs-you band only by being resolved, and the why must sit on an event `render` shows: notes do not enter render, so a de-escalation recorded in a note is escalate laundering nobody sees. Per disposition:
+- **`risk:escalate` items are NOT migratable** without an explicit de-escalation by the human during the walk, and **the de-escalation is a decision event**, written first (decision `01M3ZR1JASX3EX7KEEYF7MPQJD`, amending Q2). Migrating one silently converts a *needs-you* into a backlog row, clearing the single signal designed to interrupt the human (the `status` Needs-you band). `--risk` is set only at emit (`cmd/director/emit.go`) and nothing changes it later, so an escalate item leaves the Needs-you band only by being resolved, and the why must sit on an event `render` shows: notes do not enter render, so a de-escalation recorded in a note is escalate laundering nobody sees. Per disposition:
   - DONE: nothing extra; the work happened.
   - DROP: its own decision covers it, one event that also says it de-escalates.
   - MIGRATE: the de-escalation decision, then the tracker entry, then `resolve --to`.
-  - KEEP at lower risk: the decision, `resolve`, then a re-emit with `--risk low`, the same body, and `(re-emitted from <ULID>)`, per convention `01KWW2T7TCVH9K3DKHT6CJ6FYW`.
+  - KEEP at lower risk: the decision, then a re-emit with `--risk low`, the same body, and `(re-emitted from <ULID>)`, per convention `01KWW2T7TCVH9K3DKHT6CJ6FYW`, then `resolve` on the original. The re-emit comes before the resolve so that a failure partway leaves a visible duplicate, with the escalate item still in the Needs-you band, never a lost loop.
 - **An item that would bite an unwarned session SPLITS**: the work goes to the tracker, the warning goes to the CHARTER. Migrating it whole leaves the next session unwarned, because a tracker is not an injected home.
 
 Worked example for the split, from the July stress test: open-item `01KY50ACQZJTZHRKEYST7TT21V` records that a throwaway clone of an adopted repo gets full Director treatment (identity is keyed by origin URL, not path), so a review sandbox or CI checkout receives digest injection it did not want. That item is two facts wearing one body. The *work* ("add a first-class `DIRECTOR_DISABLE=1` opt-out, weigh against surface-frozen") is a tracker issue: it has a lifecycle and closes on a merge. The *warning* ("a clone of an adopted repo is injected; today's only opt-out is an undocumented internal affordance") must reach the next session that builds a sandbox, which means the CHARTER, and it must land there BEFORE the item is resolved. Migrating the whole body as one issue passes the letter of MIGRATE and loses the warning entirely.
@@ -166,9 +176,9 @@ The general test: ask whether a session that never reads the tracker would be ha
 
 Five steps. Nothing durable is written before step 4.
 
-1. **Gather.** `director open-items`. Triage operates at PROJECT scope, every workstream, because the sink is the hub workstream and a workstream-scoped listing cannot see it from a worktree session. The CLI does not support this yet: `open-items` takes only `--workstream <id>` (`cmd/director/projection.go:175`), and `render.OpenItemsFor` filters the project-wide open-set down to one workstream (`internal/render/openitems.go:16`). Triage needs a `--project`/`--all` scope flag. Until it exists, the walk enumerates workstreams from `director status` and runs `open-items --workstream <id>` per row, which is correct but noisy.
+1. **Gather.** `director open-items`. Triage operates at PROJECT scope, every workstream, because the sink is the hub workstream and a workstream-scoped listing cannot see it from a worktree session. The CLI does not support this yet: `open-items` takes only `--workstream <id>` (`cmd/director/projection.go:175`), and `render.OpenItemsFor` filters the project-wide open-set down to one workstream (`internal/render/openitems.go:16`). Triage needs a `--project`/`--all` scope flag. Until it exists, the walk reads the project-wide open-set from `director render --json` (`open_items` carries full events, `internal/render/json.go:46`). Enumerating `director status` rows is NOT a fallback: status lists live fleet rows only (`internal/fleet/liveness.go:53` ignores the archive), and a finished workstream's row is archived while its follow-ups stay open.
 
-   Gather also reads the CHARTER `Tracker:` line and the latest batched triage note. No `Tracker:` line means no one has asked yet (a repo adopted before adopt asked, on its first triage run): the walk asks principle 6's question before classifying, because every MIGRATE proposal depends on the answer, and step 4 writes the line, with the human's confirmation, before anything else. The latest triage note supplies the items kept last time and their recheck dates.
+   Gather also reads the CHARTER `Tracker:` line and the latest batched triage note. No `Tracker:` line means no one has asked yet (a repo adopted before adopt asked, on its first triage run): the walk asks principle 6's question before classifying, because every MIGRATE proposal depends on the answer, and step 4 writes the line, with the human's confirmation, before anything else. The latest triage note supplies the items kept last time and their recheck dates. Today no CLI surface lists notes (`render` carries only a note count, `internal/render/render.go:169`, and `show` needs a known ULID), so project-scope `open-items` prints the latest triage note's ULID and date in its header, and the walk reaches the body with `director show`.
 2. **Classify.** The model reads each body and proposes a disposition with a one-line reason. It presents items in batches grouped by `--area`, oldest first, with age. Batching by area is not cosmetic: it is what makes duplicates and chains visible, since restatements of one problem land in the same area, and it lets the human hold one subsystem in mind per batch instead of context-switching per item.
 
    Classification is body-text reading, not keyword matching (the same discipline `adopt.md` imposes on its code-TODO reader: judge what the marker actually is, not what the word says). The shapes worth naming, because the 2026-09-04 pass found all of them:
@@ -183,8 +193,8 @@ Five steps. Nothing durable is written before step 4.
 
    The model proposes. It never decides, and it never guesses at an item whose body is too thin to classify: an unreadable item is presented as unreadable, and the human says what it was.
 3. **Wait.** Nothing is written until the human confirms a batch. The human may override any disposition, and an override needs no justification.
-4. **Execute**, per disposition, in the exact orders above. Never reorder MIGRATE, DROP, or an escalate item's de-escalation sequence (decision first, always). The batched triage note is written last, even with zero KEEPs.
-5. **Report.** Counts per disposition (already-done counted separately), the tracker URLs, the ULIDs of the decisions and the note written, and digest bytes before and after. One more fact line names promotion candidates, e.g. *N decisions older than 60 days; `/director:promote` folds them into docs* (decision `01M3ZAQE08Y6WWJE5KB2KV25N9`). It states a count; it does not ask.
+4. **Execute**, per disposition, in the exact orders above. Never reorder MIGRATE, DROP, or an escalate item's de-escalation sequence (decision first, always), and never start a step whose predecessor failed. The batched triage note is written last, even with zero KEEPs.
+5. **Report.** Counts per disposition (already-done counted separately), the tracker URLs, the ULIDs of the decisions and the note written, and the injection size before and after. One more fact line names promotion candidates, e.g. *N decisions older than 60 days; `/director:promote` folds them into docs* (decision `01M3ZAQE08Y6WWJE5KB2KV25N9`). It states a count; it does not ask.
 
 **Triage emits no handoff.** It is a grooming pass, not a position: writing one would plant a resume point for work that is not in flight, the same failure `/director:complete` is built to avoid.
 
@@ -196,8 +206,8 @@ Deterministic read-model signals only. No model classification inside a hook: a 
 |---|---|---|
 | Open-items older than 14 days that no live handoff references | ULID timestamps plus `ResumeHandoffs`; an item kept in the latest triage run counts as referenced until its recheck date | Always shown on the banner, as a plain count. At 10 or more, appends `(triage suggested)`. 10 is a starting guess, calibrated in the ingest dogfood. |
 | Digest over the injection budget | the existing over-budget path (`sessionstart.go:301`) | Appends `(triage suggested)`. Already computed and health-logged; triage just names the remedy. |
-| Block re-entry after 14 or more idle days | fleet heartbeat age | Nothing on the banner. A moment where the model may mention triage, still at most once per session. |
-| A triage run in the last 14 days or so | the latest batched triage note | Mutes the suggestion. The aged count still shows. |
+| Block re-entry after 14 or more idle days | the project's newest heartbeat across live AND archived fleet rows, taken before this session registers: SessionStart runs `refreshFleet` before `buildGroundTruth` (`internal/hook/sessionstart.go:86`, `:97`), so the current row always reads fresh | Nothing on the banner. A moment where the model may mention triage, still at most once per session. |
+| A triage run in the last 14 days or so | the latest batched triage note, recognized by its area and prefix (see [KEEP](#keep)) | Mutes the suggestion. The aged count still shows. |
 
 There is deliberately no absolute open-item count (see [Rejected alternatives](#rejected-alternatives)).
 
@@ -248,9 +258,9 @@ No new event kind. All of it under the §13 gate: `go test ./... -race`. No sche
 1. **`internal/install/commands/triage.md`.** A fourth model-orchestrated command markdown, same shape as `complete.md`. Install wiring is automatic across all four harnesses: `writeCommands` (Claude Code, `~/.claude/commands/director/`), `writeCodexSkills` (Codex, `~/.agents/skills/director-triage/SKILL.md`), and `writeOpenCodeCommands` (OpenCode, `/director-triage`) all enumerate the embedded `commands/` directory rather than a hardcoded list, and the Copilot target reuses `writeCodexSkills` against the shared `~/.agents/skills` dir. What is NOT automatic: the hardcoded name lists in `internal/install/{codex,opencode,copilot}_test.go` and the two in `internal/install/install_test.go` (the install and uninstall cases) need a fourth entry each.
 2. **`complete.md` step 3 rewrite** to the four dispositions, as propose-and-confirm with *leave it for triage* a free answer, plus the destination-must-exist guardrail. The complete-vs-handoff build (decision `01M3Z83FSY4P2GH32QA6YR4VTH`) rewrites the same file, so the two land in one order, not in parallel.
 3. **`adopt.md` alignment**: backlog's home is whatever the CHARTER `Tracker:` line names, so *backlog* reads identically in all three, and the CHARTER proposal asks principle 6's question and includes the field.
-4. **SessionStart heads-up segment**: a Go read-model change in `startupBanner`, deterministic and testable. The aged-unreferenced derivation (items kept until a recheck date count as referenced), the suffix rule (10 aged, or over budget), and the mute after a triage run.
-5. **`director open-items` gains project scope and age/area columns.** The fold already carries what is needed (`Projection.OpenItems` holds full `event.Event` values, so `Area`, `TS`, `Risk`, and `Workstream` are all present); this is a formatting and flag change, not a fold change.
-6. **`director resolve --to <address>`.** The close-marker's body carries the destination (an issue URL, or a path plus heading anchor), and `director show` prints it on the resolved item (decision `01M3ZAYZKBMNJ0VD8TQMMFZPX9`). The event schema is untouched: `Validate` already allows a body on a close-marker (`internal/event/event.go:142`). The read side is real work in three places, because nothing carries a close-marker's body forward today: the fold's `Retirement` (it holds only `By`, `Verb`, `PromotedTo`), `show`'s lifecycle line (`cmd/director/show.go:119`), and `show --json`'s `EventState` (`internal/render/json.go`), which gains an optional field; per the JSON projection spec, a new optional field does not bump the contract version. `resolve` parses with a plain `flag.FlagSet`, which stops at the first positional, so `--to` goes before the ULID unless the build adopts `promote`'s interspersed parsing (`parsePromoteArgs`).
+4. **SessionStart heads-up segment**: a Go read-model change in `startupBanner`, deterministic and testable. The aged-unreferenced derivation (items kept until a recheck date count as referenced, parsed from the latest triage note per its contract in [KEEP](#keep)), the suffix rule (10 aged, or over budget), the mute after a triage run, and the previous-activity time for re-entry (newest heartbeat across live and archived rows, read before this session's registration).
+5. **`director open-items` gains project scope and age/area columns.** The fold already carries what is needed (`Projection.OpenItems` holds full `event.Event` values, so `Area`, `TS`, `Risk`, and `Workstream` are all present); this is a formatting and flag change, not a fold change. The project-scope header also names the latest triage note (ULID and date), the walk's only CLI path to it.
+6. **`director resolve --to <address>`.** The close-marker's body carries the destination (an issue URL, or a path plus heading anchor), and `director show` prints it on the resolved item (decision `01M3ZAYZKBMNJ0VD8TQMMFZPX9`). `resolve` validates the address before appending, as `promote` does for its doc pointer: non-empty, single-line, bounded, no control characters, portable (reuse `checkPortableAddress`). The event schema is untouched: `Validate` already allows a body on a close-marker (`internal/event/event.go:142`). The read side is real work in three places, because nothing carries a close-marker's body forward today: the fold's `Retirement` (it holds only `By`, `Verb`, `PromotedTo`), `show`'s lifecycle line (`cmd/director/show.go:119`), and `show --json`'s `EventState` (`internal/render/json.go`), which gains an optional field; per the JSON projection spec, a new optional field does not bump the contract version. `resolve` parses with a plain `flag.FlagSet`, which stops at the first positional, so `--to` goes before the ULID unless the build adopts `promote`'s interspersed parsing (`parsePromoteArgs`).
 7. **Docs**: the README ceremony section, and the `docs/README.md` spec index.
 
 **Inlet changes, before the ingest dogfood** (decision `01M3ZB7RYTY0MHYC8MR1TDQNV2`). The general narrowing of what counts as an open-item waits until after the dogfood, informed by its classification counts. Two targeted changes ship first:
@@ -264,11 +274,11 @@ Changing the inlet first does not lose the before-baseline: the 2026-09-04 inges
 
 The first run is the ingest project (balise-prototype: 70 open at the 2026-09-04 measurement, 96 on 2026-10-02), with the human, using the built `/director:triage` (decision `01M1PQ6RD9BVYC9AW0MQZ53SW9`). Ingest is chosen because it is the largest such triage available and it already has a live GitHub tracker with 135+ labelled issues, so MIGRATE has a real destination once the first-run question records it.
 
-Measure: counts per disposition, issues filed, chains collapsed, overrides, wall-clock time, digest bytes before and after, whether every remaining item carries a why-open line, and whether emission resumes unforced in the following session (a triage pass that scares the session out of emitting has broken the inlet to fix the outlet). The classification counts also feed the post-dogfood narrowing of the inlet.
+Measure: counts per disposition, issues filed, chains collapsed, overrides, wall-clock time, the injection size before and after (UTF-16 units, with digest bytes as a diagnostic), whether every remaining item carries a why-open line, and whether emission resumes unforced in the following session (a triage pass that scares the session out of emitting has broken the inlet to fix the outlet). The classification counts also feed the post-dogfood narrowing of the inlet.
 
 Success criteria:
 
-- The digest fits under the injection budget, so ingest sessions get inline ground truth again instead of a persisted-file pointer.
+- The whole assembled SessionStart injection fits under the injection budget, measured as `sessionstart.go:301` measures it (UTF-16 units of the full payload, not the digest alone), and ingest sessions are observed receiving inline ground truth again instead of a persisted-file pointer.
 - Zero silent losses: every migrated item's close-marker names its destination, and every dropped or de-escalated item has its decision.
 - Every kept item has a why-open line, dated where it awaits someone or something.
 - The human can review the remaining set in one sitting.
@@ -288,9 +298,9 @@ These are the ways the ceremony fails while appearing to succeed, listed so the 
 The review session (2026-10-02) settled all eight; the answers are folded into the sections above.
 
 1. **Threshold values.** No absolute count. The aged-unreferenced count always shows; `(triage suggested)` appends at 10 aged or over budget; muted for about 14 days after a run. Decision `01M3Z9TG6XTVQW0AP9T7W8N193`.
-2. **Is de-escalating a `risk:escalate` item a decision event?** Yes, written first. The one-word-field-change premise was wrong: `--risk` is set only at emit. Decision `01M3ZA2C4PCXRP3073S32P8AN4`.
+2. **Is de-escalating a `risk:escalate` item a decision event?** Yes, written first. The one-word-field-change premise was wrong: `--risk` is set only at emit. Decision `01M3ZA2C4PCXRP3073S32P8AN4`, amended by `01M3ZR1JASX3EX7KEEYF7MPQJD` (a lower-risk KEEP re-emits before it resolves).
 3. **How is the tracker detected?** It is not: it is asked (by adopt, or by the first triage run) and recorded as a CHARTER `Tracker:` line, with `gh repo view` proposing the default and `Tracker: none` a valid answer. Decision `01M3ZA868BJ7DN2XGY80GNCR0A`.
-4. **Human-must-run and external-wait items.** KEEP, with what is awaited plus a recheck-by date; no fifth route; the next triage run is the recheck. Decision `01M3ZACWKRHVXNEHT3JVK8QHWH`.
+4. **Human-must-run and external-wait items.** KEEP, naming what is awaited; no fifth route; the next triage run is the recheck. Decision `01M3ZACWKRHVXNEHT3JVK8QHWH`, amended by `01M3ZR1MKTGH423F92MP195KB4` (every KEEP carries a recheck-by date, 30 days by default).
 5. **Should triage and promote share one grooming pass?** No. Triage first, then promote, made discoverable. Decisions `01M3ZAMPCPE12K5MEGHMSDAX91` and `01M3ZAQE08Y6WWJE5KB2KV25N9`.
 6. **Does the pointer need a surface?** No render surface. Auditability is enough once it is reachable, so `resolve --to` is built with triage. Decision `01M3ZAYZKBMNJ0VD8TQMMFZPX9`.
 7. **Does emission discipline ship with this or after the dogfood?** Split: the review-leftovers rule and the emit-guard fix before, the general narrowing after. Decision `01M3ZB7RYTY0MHYC8MR1TDQNV2`; with no `Tracker:` line the rule falls back to an open-item, and adopt asks the tracker question, decision `01M3ZPJV4CFHXSHZCQEK8CN6MF`.
