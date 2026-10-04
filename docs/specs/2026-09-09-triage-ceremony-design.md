@@ -10,9 +10,9 @@ The open-set has two inlets and no outlet.
 
 The inlets: the SessionStart-injected protocol tells every session to emit "an open-item when you defer a loop" (`internal/hook/sessionstart.go:52`), and the Stop-hook emit-guard blocks a turn that looks like it deferred a loop without emitting (`internal/hook/stop.go`, `emitGuardReason`). Both are working as designed. Emission is not the defect.
 
-The outlets: a session finishing the exact item and running `director resolve`, or `/director:complete`. And `/director:complete` step 3 recommends *keep*: "genuine follow-up, untouched → *(rec: keep, migrates to the repo backlog)*", with step 4 clarifying that keep means the item **stays open in the log**, inherited by the next session on `main`. So the second outlet is not an outlet. Combine that with complete.md's rule that the main hub workstream is never closed out, and the hub is a sink.
+The outlets: a session finishing the exact item and running `director resolve`, or `/director:complete`. And `/director:complete` step 3 recommends *keep* for an untouched follow-up, labelling it as migrating to the repo backlog (`internal/install/commands/complete.md:21`), with step 4 clarifying that keep means the item **stays open in the log**, inherited by the next session on `main`. So the second outlet is not an outlet. Combine that with complete.md's rule that the main hub workstream is never closed out, and the hub is a sink.
 
-The word *backlog* is the root cause, and it means opposite things in the two ceremonies. `adopt.md` step 3 defines backlog as deliberate future work "whose home is the repo's own tracker/TODO/planning docs, NEVER the log", and step 5 refuses to import it. `complete.md` step 3 uses the same word for work that stays in the log forever. One ceremony refuses backlog at the entrance; the other files it in the living room.
+The word *backlog* is the root cause, and it means opposite things in the two ceremonies. `adopt.md` step 3 defines backlog as deliberate future work whose home is the repo's own tracker, TODO or planning docs and never the log, and step 5 refuses to import it. `complete.md` step 3 uses the same word for work that stays in the log forever. One ceremony refuses backlog at the entrance; the other files it in the living room.
 
 The standard this breaks is the why-is-this-open test: every open item is resolved, or its keeper can say why it stays open. Wallpaper items nobody remembers fail it, and today the design produces them structurally.
 
@@ -27,7 +27,7 @@ From note `01M1PDKMCG2WJPYRS66NN0SJ20`:
 - Chains hang off unresolved parents: 6 items off one parent, and one thread is 4 restatements of the same problem.
 - The digest is 49.9KB against the 10k UTF-16 unit injection budget (`injectionBudgetUnits`, `internal/hook/sessionstart.go:161`, PR #70). Only decisions collapse under budget pressure; open-items and the resume stack are never cut. So ingest sessions receive a persisted-file pointer instead of inline ground truth: the open-set is now costing sessions the very grounding it exists to provide.
 
-Director's own hub sat at 21 when this spec was written. The July decision named the identical defect at 19. Five and a half weeks later ingest was at 3.5x. By 2026-10-02, with no outlet built in between, ingest stood at 96 open and Director at 26.
+Director's own hub sat at 21 when this spec was written. The July decision named the identical defect at 19. Five and a half weeks later ingest was at 3.5x. By the 2026-10-02 review, with no outlet built in between, ingest stood at 96 open and Director at 28 (decision `01M3Z9TG6XTVQW0AP9T7W8N193`).
 
 ## Principles
 
@@ -139,7 +139,7 @@ KEEP requires a one-line why-open from the human. That sentence is the why-is-th
 
 Every KEEP also carries a recheck-by date (decision `01M3ZR1MKTGH423F92MP195KB4`, amending Q4). Items that wait on the human or on the outside world (human-must-run, external-wait) name what is awaited and take the date from it, e.g. *awaiting awesome-claude-code #2497 triage, recheck by 2026-11-01*; any other KEEP gets a 30-day default the human can change during the walk. The waiting items get no fifth route. They are neither loops the tracker should own nor rationale a doc should own, and they are not escalate by default: human-owned is not interrupt-me.
 
-Recording: **one batched note per triage run**, listing each kept ULID with its why-open line. Every run writes it, even with zero KEEPs, so the log records when triage last ran: the heads-up mutes on it, and the next run reads it (decision `01M3Z9TG6XTVQW0AP9T7W8N193`).
+Recording: **one batched note per triage run**, listing each kept ULID with its why-open line. Every run writes it, even with zero KEEPs, so the log records when triage last ran: the heads-up mutes on it, and the next run reads it (decision `01M3ZS13C0PVRAAXWP6SXNNDX9`, the amended Q1).
 
 ```bash
 director emit --type note --area triage - <<'DIRECTOR_EOF'
@@ -239,7 +239,7 @@ The end of a workstream is a different moment, and the complete-vs-handoff merge
 
 **MIGRATE as file, resolve, then a pointer note (this spec's first draft).** The draft deferred `resolve --to` until a first migration pass, per the July decision, and leaned on a note to keep the migration one `director show` away. Rejected at review (decision `01M3ZAYZKBMNJ0VD8TQMMFZPX9`): `director show` on a resolved item prints only `lifecycle: closed by <close-marker>` (verified on `01M0927E9602NJW8NG6ZQA5RQD`), and the note names the item only in its body text, so the audit path the note promised was unreachable from the item. `resolve --to` is built with triage instead, and the note is gone.
 
-**An absolute open-item count trigger.** The first draft proposed 15. Rejected (decision `01M3Z9TG6XTVQW0AP9T7W8N193`): a fixed count fires forever in every active repo (on 2026-10-02: Director 26, SpringLoader 167, ingest 96), and a signal that never clears is wallpaper of its own. The aged-unreferenced count measures the failure shape, and the budget signal measures the resource actually under pressure.
+**An absolute open-item count trigger.** The first draft proposed 15. Rejected (decision `01M3Z9TG6XTVQW0AP9T7W8N193`): a fixed count fires forever in every active repo (the review counted Director 28, SpringLoader 164, ingest 96), and a signal that never clears is wallpaper of its own. The aged-unreferenced count measures the failure shape, and the budget signal measures the resource actually under pressure.
 
 **Detecting the tracker with `gh repo view`.** Rejected (decision `01M3ZA868BJ7DN2XGY80GNCR0A`): issues are enabled by default on every GitHub repo, so detection cannot tell a used tracker from an unused one; a live dogfooder runs ADRs plus Director with no tracker at all. Detection survives only as the proposed default inside the question.
 
