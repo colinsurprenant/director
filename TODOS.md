@@ -3,8 +3,8 @@
 Deferred/future work surfaced during design, office-hours, and eng-review (2026-06-04).
 v1 = visibility-first CLI (see `docs/specs/2026-06-03-director-coordination-design.md` §11, §15).
 
-## Standing checkpoint
-- **Abandonment kill-criteria review** — due at the first genuine Pager re-entry, or **2026-10-01**, whichever comes first. The ratified criteria live in the Director CHARTER (decision `01KWMKYP5S`): the kill-scoped re-entry test, emission-during-block, the why-is-this-open sweep of the open-set, and the always-on lie test. Kill = re-entry fails AND emission dead; anything else is calibration.
+## Kill-criteria checkpoint (passed)
+- **Abandonment kill-criteria review**: passed 2026-10-02 (decision `01M3YJZNVG`, criteria from decision `01KWMKYP5S`). The kill-scoped re-entry test passes, and the 2026-08-23 Pager re-entry had already met it (note `01M3YKH0HW`). No new checkpoint is scheduled; the lie test stays standing in the CHARTER.
 
 ## At the OSS-release milestone
 - **Release pipeline** — ✅ shipped via `.github/workflows/release.yml` (plain `go build` cross-compile matrix, darwin/linux/windows × amd64/arm64 (`.tar.gz` for darwin/linux, zipped `director.exe` for windows); published to GitHub Releases on tag push). A tag-time `windows-gate` job (build + `test -race` on `windows-latest`) blocks publish, so a release never ships what windows tests didn't pass. Remaining sub-item: a `curl|sh` installer (unix-likes, including WSL; native Windows would need its own path).
