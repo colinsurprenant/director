@@ -67,7 +67,7 @@ func TestRunDoctorReportsDisabledHooks(t *testing.T) {
 	if !strings.Contains(out, "⚠ hooks disabled: DIRECTOR_DISABLE is set in the shell environment") {
 		t.Errorf("report missing the hooks-disabled warning line:\n%s", out)
 	}
-	if !strings.Contains(out, "⚠ Director is installed, but DIRECTOR_DISABLE switches every hook off; see the ⚠ items above.") {
+	if !strings.Contains(out, "⚠ Director is installed, but DIRECTOR_DISABLE switches hooks off; see the ⚠ items above.") {
 		t.Errorf("report missing the disabled closing line:\n%s", out)
 	}
 	if strings.Contains(out, "works, with caveats") {

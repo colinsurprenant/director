@@ -548,7 +548,7 @@ func writeReport(w io.Writer, rep doctorReport) {
 	case !rep.healthy:
 		fmt.Fprintln(w, "✗ Director is NOT healthy: coordination will not fire. Fix the ✗ items above.")
 	case rep.hasDisabled():
-		fmt.Fprintln(w, "⚠ Director is installed, but DIRECTOR_DISABLE switches every hook off; see the ⚠ items above.")
+		fmt.Fprintln(w, "⚠ Director is installed, but DIRECTOR_DISABLE switches hooks off; see the ⚠ items above.")
 	case rep.hasWarn():
 		fmt.Fprintln(w, "⚠ Director works, with caveats — see the ⚠ items above.")
 	default:
