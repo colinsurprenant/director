@@ -899,6 +899,23 @@ func ExpectedShims() []string {
 // ambient shell env, to predict what the shim will actually resolve. A missing
 // file, absent env block, or non-string/empty value all read as "not pinned".
 func SettingsDirectorBin(path string) (string, bool) {
+	return settingsEnvString(path, "DIRECTOR_BIN")
+}
+
+// SettingsDirectorDisable returns the DIRECTOR_DISABLE value pinned in the
+// settings file's top-level "env" block, if any, raw and unparsed (the caller
+// applies the same truthiness rule the hooks use). Claude Code injects that env
+// into every hook process, so a pinned value silences Director in every Claude
+// Code session, which is why `director doctor` looks here and not only at the
+// ambient shell. A missing file, absent env block, or non-string/empty value all
+// read as "not pinned".
+func SettingsDirectorDisable(path string) (string, bool) {
+	return settingsEnvString(path, "DIRECTOR_DISABLE")
+}
+
+// settingsEnvString reads one non-empty string value from the settings file's
+// top-level "env" block.
+func settingsEnvString(path, key string) (string, bool) {
 	root, err := loadSettings(path)
 	if err != nil {
 		return "", false
@@ -907,7 +924,7 @@ func SettingsDirectorBin(path string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	if v := stringAt(env, "DIRECTOR_BIN"); v != "" {
+	if v := stringAt(env, key); v != "" {
 		return v, true
 	}
 	return "", false

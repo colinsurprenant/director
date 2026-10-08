@@ -69,8 +69,11 @@ const emitProtocol = "## Director protocol — keep this current as you work\n" 
 func handleSessionStart(in Input, out io.Writer, hub string) error {
 	// Filter subagent/throwaway sessions BEFORE any fleet write: they would
 	// otherwise materialize liveness rows for work that isn't a real workstream.
-	// The signal is approximate in v1 (see isThrowawaySession); we still inject
-	// Ground Truth for them (it's harmless context) but skip register/heartbeat.
+	// The signal is approximate in v1 (see isThrowawaySession) and only gates the
+	// fleet rows (register/heartbeat): such a session is still injected with the
+	// full Ground Truth, which is cross-project coordination state it may have no
+	// business receiving. The explicit full opt-out (no injection, no emit guard,
+	// no fleet rows) is DIRECTOR_DISABLE, honored in Dispatch before this runs.
 	throwaway := isThrowawaySession(in)
 
 	ws, err := identity.Resolve(in.CWD)
@@ -557,15 +560,11 @@ func charterText(hub, repoKey string) string {
 // v1 limitation (documented, per §5.4): CC's hook payload exposes no first-class
 // "is subagent" flag at SessionStart, so the signal here is APPROXIMATE. We treat
 // a missing session_id as throwaway (a real interactive session always carries
-// one) and honor an explicit DIRECTOR_HOOK_THROWAWAY=1 escape hatch a subagent
-// launcher can set. As CC surfaces a firmer signal, this is the one place to
-// tighten — the rest of the handler is signal-agnostic.
+// one). The verdict only keeps such a session out of fleet/ (register and
+// heartbeat); it does not stop the SessionStart injection or the Stop guard. A
+// caller that wants an explicit, complete opt-out sets DIRECTOR_DISABLE, which
+// Dispatch honors before any handler runs. As CC surfaces a firmer signal, this
+// is the one place to tighten: the rest of the handler is signal-agnostic.
 func isThrowawaySession(in Input) bool {
-	if strings.TrimSpace(in.SessionID) == "" {
-		return true
-	}
-	if v := os.Getenv("DIRECTOR_HOOK_THROWAWAY"); v == "1" || strings.EqualFold(v, "true") {
-		return true
-	}
-	return false
+	return strings.TrimSpace(in.SessionID) == ""
 }

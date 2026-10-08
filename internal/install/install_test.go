@@ -837,6 +837,39 @@ func TestSettingsDirectorBin(t *testing.T) {
 	}
 }
 
+// TestSettingsDirectorDisable: same read contract as the DIRECTOR_BIN pin, on its
+// own key. The value comes back raw (the caller applies the truthiness rule), and
+// a different key in the env block is not mistaken for it.
+func TestSettingsDirectorDisable(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+
+	if v, ok := SettingsDirectorDisable(filepath.Join(dir, "does-not-exist.json")); ok {
+		t.Errorf("missing file: got (%q, true), want not pinned", v)
+	}
+	if v, ok := SettingsDirectorDisable(write("other-key.json", `{"env":{"DIRECTOR_BIN":"/opt/director"}}`)); ok {
+		t.Errorf("only DIRECTOR_BIN pinned: got (%q, true), want not pinned", v)
+	}
+	if v, ok := SettingsDirectorDisable(write("empty.json", `{"env":{"DIRECTOR_DISABLE":""}}`)); ok {
+		t.Errorf("empty value: got (%q, true), want not pinned", v)
+	}
+	if v, ok := SettingsDirectorDisable(write("wrong-type.json", `{"env":{"DIRECTOR_DISABLE":1}}`)); ok {
+		t.Errorf("non-string value: got (%q, true), want not pinned", v)
+	}
+	if v, ok := SettingsDirectorDisable(write("pinned.json", `{"env":{"DIRECTOR_DISABLE":"1"}}`)); !ok || v != "1" {
+		t.Errorf("pinned value: got (%q, %v), want (1, true)", v, ok)
+	}
+	if v, ok := SettingsDirectorDisable(write("pinned-false.json", `{"env":{"DIRECTOR_DISABLE":"0"}}`)); !ok || v != "0" {
+		t.Errorf("a falsy pin still reads back raw: got (%q, %v), want (0, true)", v, ok)
+	}
+}
+
 // writeTree re-serializes a settings tree loadTree decoded, so a test can mutate
 // an install into a state a REAL older binary would have left (an entry set from
 // before a hook event existed) instead of hand-writing the whole file.

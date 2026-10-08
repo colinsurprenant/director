@@ -472,7 +472,7 @@ can still re-emit with the right ULIDs.
 ## 6. Troubleshooting
 
 Start with **`director doctor`**: it checks the whole install chain (binary resolution, Claude Code,
-Codex, OpenCode, and Copilot CLI hooks, shims present, the hub's sandbox write grant, hub writable) and names the broken link, exiting non-zero when coordination
+Codex, OpenCode, and Copilot CLI hooks, shims present, the hub's sandbox write grant, hub writable, and a `DIRECTOR_DISABLE` left set) and names the broken link, exiting non-zero when coordination
 would not fire. The table covers the specifics.
 
 | Symptom | Cause & fix |
@@ -481,6 +481,7 @@ would not fire. The table covers the specifics.
 | **Coordination silently does nothing** | The shims fail-safe to exit 0 when the binary is missing. Ensure `DIRECTOR_BIN` (or `PATH`, or the `~/.claude/director/bin/director` symlink a re-run of `director install` refreshes) resolves `director`. |
 | **Works in the terminal, dead in the desktop app** | Dock/Launchpad launches get the bare launchd `PATH` ([anthropics/claude-code#44649](https://github.com/anthropics/claude-code/issues/44649)), so the shims' `PATH` tier misses. Re-run `director install` (it drops the `~/.claude/director/bin/director` symlink the shims fall back to), or pin the binary explicitly with `DIRECTOR_BIN` via `"env"` in `settings.json`. |
 | **State is in the wrong place** | All cross-repo state lives under `DIRECTOR_HUB` (default `~/.director`). If you set it for one command, set it for all: sessions and your CLI must agree. |
+| **A sandbox or CI clone gets the digest and the emit guard** | Identity is keyed by the origin URL, so any clone of an adopted repo (a review sandbox, a CI checkout, a dispatched agent's scratch copy) is treated as that project: it receives the session digest and the Stop emit guard. Set `DIRECTOR_DISABLE=1` (or `true`) for that shell, job, or agent to turn every hook into a no-op: no digest injection, no emit guard, no fleet rows, nothing written to the hub. The CLI verbs (`emit`, `resolve`, `render`, ...) still work. Claude Code, Codex, Copilot CLI, and OpenCode all honor it, because they share one hook entry point (`director _hook`). Any other value (`0`, `false`, `yes`, empty) leaves Director on. The variable is read from the hook process's environment, so export it where the agent is launched; that reaching hooks is confirmed for Claude Code, Codex, and OpenCode, and not yet confirmed for Copilot CLI. On Claude Code it can also be set in the `"env"` block of `settings.json`, but that disables Director in every Claude Code session. `director doctor` warns when it is set in either place. |
 | **A hook seems broken** | Hooks are fail-safe by design: a failure never blocks a session, it logs. Read `$DIRECTOR_HUB/health/hook.log` (one line per outcome, `ok=false` marks failures). |
 | **`director _hook ...`** | Internal: invoked by the shims, never run by hand. |
 | **A row reads `idle` or `dormant` though the session is active** | Liveness is derived from heartbeat age. `PostToolUse` refreshes it on every tool call, so a session making no tool calls can age to `idle` (after 4h) then `dormant` (after 2d). Dormant is the normal between-blocks state, not an error. |

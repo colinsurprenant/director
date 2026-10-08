@@ -242,7 +242,8 @@ type handler func(in Input, out io.Writer, hub string) error
 // fail-safe: a panic or an error in parsing or in any handler is recovered,
 // logged loudly to health/, and yields exit 0 with NO blocking output. The only
 // path that blocks is the Stop emit-guard, which writes its block from inside the
-// handler before returning nil.
+// handler before returning nil. When DIRECTOR_DISABLE is truthy it does none of
+// that: it returns 0 at once and writes nothing anywhere.
 //
 // It always returns 0 in v1: §13 t5 requires that a broken hook never blocks a
 // session, and the only "control" Director exerts (SessionStart injection, the
@@ -258,6 +259,13 @@ func Dispatch(event string, in io.Reader, out io.Writer, hub string) (code int) 
 			code = 0
 		}
 	}()
+
+	// The explicit opt-out (see EnvDisable): a pure early return, ahead of the hub
+	// check and the stdin read, so a disabled hook writes nothing (no stdout, no
+	// stderr, no health line, no fleet row) and never touches the hub.
+	if Disabled() {
+		return 0
+	}
 
 	if hub == "" {
 		// An unresolved hub has nowhere to coordinate — and every handler path
