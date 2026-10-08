@@ -199,7 +199,8 @@ func doctorInputsFromEnv() (doctorInputs, error) {
 }
 
 // diagnose assembles the health checks and the overall verdict. healthy is true
-// when no check failed (warnings don't sink it — coordination still fires).
+// when no check failed. Warnings don't sink it, though one of them (an active
+// DIRECTOR_DISABLE) means hooks deliberately do nothing.
 func diagnose(in doctorInputs) doctorReport {
 	var r doctorReport
 	r.checks = append(r.checks, binaryResolutionCheck(in))
