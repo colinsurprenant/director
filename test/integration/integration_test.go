@@ -23,6 +23,9 @@ import (
 var binPath string
 
 func TestMain(m *testing.M) {
+	// The binary under test inherits os.Environ(); a DIRECTOR_DISABLE exported in
+	// the developer's shell would turn every hook it runs into a no-op.
+	os.Unsetenv("DIRECTOR_DISABLE")
 	tmp, err := os.MkdirTemp("", "director-bin-*")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

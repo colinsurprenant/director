@@ -260,9 +260,6 @@ func Dispatch(event string, in io.Reader, out io.Writer, hub string) (code int) 
 		}
 	}()
 
-	// The explicit opt-out (see EnvDisable): a pure early return, ahead of the hub
-	// check and the stdin read, so a disabled hook writes nothing (no stdout, no
-	// stderr, no health line, no fleet row) and never touches the hub.
 	if Disabled() {
 		return 0
 	}

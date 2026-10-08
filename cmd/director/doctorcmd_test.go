@@ -586,20 +586,7 @@ func TestDoctorHubMissingIsOK(t *testing.T) {
 // TestRunDoctorSandboxed drives the full CLI wrapper through env overrides so no
 // real ~/.claude or ~/.director is touched, covering the exit codes.
 func TestRunDoctorSandboxed(t *testing.T) {
-	skipUnixOnlyDoctor(t)
-	root := t.TempDir()
-	settings := filepath.Join(root, "settings.json")
-	t.Setenv("DIRECTOR_HOOKS_DIR", filepath.Join(root, "hooks"))
-	t.Setenv("DIRECTOR_COMMANDS_DIR", filepath.Join(root, "commands"))
-	t.Setenv("DIRECTOR_SETTINGS_PATH", settings)
-	t.Setenv("DIRECTOR_CODEX_HOOKS_PATH", filepath.Join(root, "no-codex.json"))
-	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", filepath.Join(root, "no-plugin.js"))
-	t.Setenv("DIRECTOR_COPILOT_HOOKS_PATH", filepath.Join(root, "no-copilot.json"))
-	t.Setenv("DIRECTOR_HUB", root)
-	t.Setenv("DIRECTOR_BIN", "") // unset override → rely on the symlink tier
-	if err := install.Install(settings); err != nil {
-		t.Fatal(err)
-	}
+	root, _ := doctorEnvFixture(t)
 	if code := runDoctor(nil); code != 0 {
 		t.Fatalf("healthy install: runDoctor exit = %d, want 0", code)
 	}
@@ -618,20 +605,7 @@ func TestRunDoctorSandboxed(t *testing.T) {
 // (see TestRunDoctorSandboxed), so a flip to exit 1 can only come from doctor
 // reading the settings-level pin.
 func TestDoctorSettingsPinnedBinBroken(t *testing.T) {
-	skipUnixOnlyDoctor(t)
-	root := t.TempDir()
-	settings := filepath.Join(root, "settings.json")
-	t.Setenv("DIRECTOR_HOOKS_DIR", filepath.Join(root, "hooks"))
-	t.Setenv("DIRECTOR_COMMANDS_DIR", filepath.Join(root, "commands"))
-	t.Setenv("DIRECTOR_SETTINGS_PATH", settings)
-	t.Setenv("DIRECTOR_CODEX_HOOKS_PATH", filepath.Join(root, "no-codex.json"))
-	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", filepath.Join(root, "no-plugin.js"))
-	t.Setenv("DIRECTOR_COPILOT_HOOKS_PATH", filepath.Join(root, "no-copilot.json"))
-	t.Setenv("DIRECTOR_HUB", root)
-	t.Setenv("DIRECTOR_BIN", "") // NOT pinned in the shell
-	if err := install.Install(settings); err != nil {
-		t.Fatal(err)
-	}
+	root, settings := doctorEnvFixture(t)
 	pinSettingsEnv(t, settings, "DIRECTOR_BIN", filepath.Join(root, "not-a-binary"))
 	if code := runDoctor(nil); code != 1 {
 		t.Fatalf("a dead settings.json-pinned DIRECTOR_BIN must fail doctor: exit = %d, want 1", code)
@@ -796,20 +770,7 @@ func TestDoctorUntaggedEntriesWarn(t *testing.T) {
 // wrapper: a warning is not a failure, so the exit code stays 0 and a re-install
 // clears it.
 func TestRunDoctorUntaggedEntriesExitsZero(t *testing.T) {
-	skipUnixOnlyDoctor(t)
-	root := t.TempDir()
-	settings := filepath.Join(root, "settings.json")
-	t.Setenv("DIRECTOR_HOOKS_DIR", filepath.Join(root, "hooks"))
-	t.Setenv("DIRECTOR_COMMANDS_DIR", filepath.Join(root, "commands"))
-	t.Setenv("DIRECTOR_SETTINGS_PATH", settings)
-	t.Setenv("DIRECTOR_CODEX_HOOKS_PATH", filepath.Join(root, "no-codex.json"))
-	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", filepath.Join(root, "no-plugin.js"))
-	t.Setenv("DIRECTOR_COPILOT_HOOKS_PATH", filepath.Join(root, "no-copilot.json"))
-	t.Setenv("DIRECTOR_HUB", root)
-	t.Setenv("DIRECTOR_BIN", "")
-	if err := install.Install(settings); err != nil {
-		t.Fatal(err)
-	}
+	_, settings := doctorEnvFixture(t)
 	stripManagedTags(t, settings)
 
 	if code := runDoctor(nil); code != 0 {
@@ -981,6 +942,30 @@ func dropHookEvent(t *testing.T, path, event string) {
 	if err := os.WriteFile(path, out, 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// doctorEnvFixture installs into temp dirs and points the DIRECTOR_* overrides at
+// them (hub = root, symlink tier for the binary, DIRECTOR_DISABLE cleared), so
+// runDoctor and doctorInputsFromEnv resolve the fixture instead of the real
+// ~/.claude and ~/.director. Returns the temp root and the settings path.
+func doctorEnvFixture(t *testing.T) (root, settings string) {
+	t.Helper()
+	skipUnixOnlyDoctor(t)
+	root = t.TempDir()
+	settings = filepath.Join(root, "settings.json")
+	t.Setenv("DIRECTOR_HOOKS_DIR", filepath.Join(root, "hooks"))
+	t.Setenv("DIRECTOR_COMMANDS_DIR", filepath.Join(root, "commands"))
+	t.Setenv("DIRECTOR_SETTINGS_PATH", settings)
+	t.Setenv("DIRECTOR_CODEX_HOOKS_PATH", filepath.Join(root, "no-codex.json"))
+	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", filepath.Join(root, "no-plugin.js"))
+	t.Setenv("DIRECTOR_COPILOT_HOOKS_PATH", filepath.Join(root, "no-copilot.json"))
+	t.Setenv("DIRECTOR_HUB", root)
+	t.Setenv("DIRECTOR_BIN", "")
+	t.Setenv("DIRECTOR_DISABLE", "")
+	if err := install.Install(settings); err != nil {
+		t.Fatal(err)
+	}
+	return root, settings
 }
 
 // pinSettingsEnv merges an env-var pin into a settings.json file's top-level

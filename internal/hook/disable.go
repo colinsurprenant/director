@@ -20,13 +20,13 @@ import (
 // working, so a human or agent can still read and write the hub deliberately.
 const EnvDisable = "DIRECTOR_DISABLE"
 
-// DisableValue reports whether v, a raw DIRECTOR_DISABLE value, switches the
+// DisabledBy reports whether v, a raw DIRECTOR_DISABLE value, switches the
 // hooks off. Only "1" and "true" (case-insensitive, surrounding space ignored)
 // count: unset, empty, "0", "false", and anything else, "yes" included, leave
 // Director on. The strict set keeps a typo from silently disabling coordination
 // in a real session. Exported so `director doctor` evaluates a value read from
 // settings.json's "env" block with the same rule the hooks apply.
-func DisableValue(v string) bool {
+func DisabledBy(v string) bool {
 	v = strings.TrimSpace(v)
 	return v == "1" || strings.EqualFold(v, "true")
 }
@@ -34,5 +34,5 @@ func DisableValue(v string) bool {
 // Disabled reports whether DIRECTOR_DISABLE is truthy in this process's
 // environment.
 func Disabled() bool {
-	return DisableValue(os.Getenv(EnvDisable))
+	return DisabledBy(os.Getenv(EnvDisable))
 }

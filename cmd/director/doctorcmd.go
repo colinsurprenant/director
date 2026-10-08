@@ -52,6 +52,15 @@ type doctorReport struct {
 	healthy bool // no fail-level checks
 }
 
+func (r doctorReport) hasDisabled() bool {
+	for _, c := range r.checks {
+		if c.title == disableCheckTitle {
+			return true
+		}
+	}
+	return false
+}
+
 func (r doctorReport) hasWarn() bool {
 	for _, c := range r.checks {
 		if c.level == levelWarn {
@@ -164,14 +173,13 @@ func doctorInputsFromEnv() (doctorInputs, error) {
 			fromSettings = true
 		}
 	}
-	// DIRECTOR_DISABLE is read from both places for the same reason as DIRECTOR_BIN
-	// above, but independently rather than as a precedence ladder: either source
-	// switches the hooks off, and the settings.json pin is the dangerous one (it
-	// silences every Claude Code session, not just one shell).
+	// DIRECTOR_DISABLE is read from both places like DIRECTOR_BIN, but disableCheck
+	// reports the settings.json pin first: Claude Code injects that env into the
+	// session, so a doctor run inside one sees the pin in its own environment too.
 	disableFromEnv := hook.Disabled()
 	disableFromSettings := false
 	if pinned, ok := install.SettingsDirectorDisable(settingsPath); ok {
-		disableFromSettings = hook.DisableValue(pinned)
+		disableFromSettings = hook.DisabledBy(pinned)
 	}
 	return doctorInputs{
 		directorBin:             directorBin,
@@ -283,25 +291,28 @@ func binaryResolutionCheck(in doctorInputs) check {
 	}
 }
 
+// disableCheckTitle names the check disableCheck emits; writeReport keys its
+// closing line on it.
+const disableCheckTitle = "hooks disabled"
+
 // disableCheck surfaces an active DIRECTOR_DISABLE. The switch is right for a
 // sandbox or CI clone and for a dispatched agent, but it turns every hook into a
 // silent no-op, which is the "installed and nothing happens" state doctor exists
 // to explain. Warning-grade: nothing is broken, it is just rarely what a
 // developer's own machine wants. Nothing is reported (false) when the switch is
-// off, matching how doctor treats other optional config. A settings.json pin gets
-// sharper wording: it is invisible from the shell and silences every Claude Code
-// session.
+// off, matching how doctor treats other optional config. The settings.json pin is
+// checked first and gets sharper wording: it is invisible from the shell and
+// silences every Claude Code session. Inside a Claude Code session the pin also
+// appears in doctor's own environment, so reporting the shell too would blame an
+// export that does not exist.
 func disableCheck(in doctorInputs) (check, bool) {
 	const effect = "every hook no-ops (no digest injection, no emit guard, no fleet rows)"
 	switch {
-	case in.disableFromSettings && in.disableFromEnv:
-		return check{"hooks disabled", levelWarn, fmt.Sprintf(
-			"DIRECTOR_DISABLE is set in the shell environment and pinned in the \"env\" block of %s: %s, and the pin applies to every Claude Code session. Unset both unless this machine is meant to run without Director.", in.settingsPath, effect)}, true
 	case in.disableFromSettings:
-		return check{"hooks disabled", levelWarn, fmt.Sprintf(
+		return check{disableCheckTitle, levelWarn, fmt.Sprintf(
 			"DIRECTOR_DISABLE is pinned in the \"env\" block of %s: %s in every Claude Code session. Remove it from that env block unless this machine is meant to run without Director.", in.settingsPath, effect)}, true
 	case in.disableFromEnv:
-		return check{"hooks disabled", levelWarn, fmt.Sprintf(
+		return check{disableCheckTitle, levelWarn, fmt.Sprintf(
 			"DIRECTOR_DISABLE is set in the shell environment: %s. Unset it unless this shell is a sandbox or CI one.", effect)}, true
 	}
 	return check{}, false
@@ -536,6 +547,8 @@ func writeReport(w io.Writer, rep doctorReport) {
 	switch {
 	case !rep.healthy:
 		fmt.Fprintln(w, "✗ Director is NOT healthy: coordination will not fire. Fix the ✗ items above.")
+	case rep.hasDisabled():
+		fmt.Fprintln(w, "⚠ Director is installed, but DIRECTOR_DISABLE switches every hook off; see the ⚠ items above.")
 	case rep.hasWarn():
 		fmt.Fprintln(w, "⚠ Director works, with caveats — see the ⚠ items above.")
 	default:
