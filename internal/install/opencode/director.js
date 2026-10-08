@@ -50,6 +50,16 @@ function fallbackBin() {
   }
 }
 
+// disabled mirrors hook.DisabledBy (internal/hook/disable.go): DIRECTOR_DISABLE
+// set to 1 or true (case-insensitive, trimmed) opts this server out of Director.
+// The Go side already no-ops every `_hook`, but the plugin does its own work
+// before spawning one (the classify lookup), so an opted-out server registers
+// no handlers at all.
+function disabled() {
+  const v = (process.env.DIRECTOR_DISABLE ?? "").trim()
+  return v === "1" || v.toLowerCase() === "true"
+}
+
 // hookTimeoutMs bounds one `director _hook` invocation so a wedged subprocess
 // can't stall the session's turn. The Go verbs are fast (ms-scale folds); ten
 // seconds is generous headroom, and on expiry the child is killed and the hook
@@ -139,6 +149,8 @@ function runOne(bin, event, payload) {
 }
 
 export const DirectorPlugin = async ({ directory, client }) => {
+  if (disabled()) return {}
+
   // Per-server-instance state. injected: sessions already carrying the ground
   // truth. children/tops: subagent classification (children are excluded from
   // injection and fleet everywhere, mirroring the CC throwaway filter).

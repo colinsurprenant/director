@@ -12,6 +12,12 @@ import (
 // a session on internal error (§13 t5) — so this wrapper only resolves the hub
 // and degrades to a no-op on misuse, never a non-zero exit.
 func runHook(args []string) int {
+	// DIRECTOR_DISABLE is honored here as well as in hook.Dispatch so that a
+	// disabled hook stays fully silent even where the hub cannot be resolved
+	// (the stderr lines below would otherwise fire in an opted-out sandbox).
+	if hook.Disabled() {
+		return 0
+	}
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "director _hook: missing event name")
 		return 0 // fail-safe even on misuse: a hook must never block a session

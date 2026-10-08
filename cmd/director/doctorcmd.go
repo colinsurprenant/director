@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/colinsurprenant/director/internal/hook"
 	"github.com/colinsurprenant/director/internal/install"
 )
 
@@ -51,6 +52,15 @@ type doctorReport struct {
 	healthy bool // no fail-level checks
 }
 
+func (r doctorReport) hasDisabled() bool {
+	for _, c := range r.checks {
+		if c.title == disableCheckTitle {
+			return true
+		}
+	}
+	return false
+}
+
 func (r doctorReport) hasWarn() bool {
 	for _, c := range r.checks {
 		if c.level == levelWarn {
@@ -67,6 +77,8 @@ func (r doctorReport) hasWarn() bool {
 type doctorInputs struct {
 	directorBin             string                // effective DIRECTOR_BIN the shim will see ("" if unset)
 	directorBinFromSettings bool                  // the value came from settings.json's env block, not the shell
+	disableFromEnv          bool                  // DIRECTOR_DISABLE is truthy in the shell environment
+	disableFromSettings     bool                  // DIRECTOR_DISABLE is pinned truthy in settings.json's env block
 	lookDirector            func() (string, bool) // resolves `director` on PATH → (path, found)
 	settingsPath            string                // ~/.claude/settings.json
 	hooksDir                string                // where the shims live
@@ -161,9 +173,19 @@ func doctorInputsFromEnv() (doctorInputs, error) {
 			fromSettings = true
 		}
 	}
+	// DIRECTOR_DISABLE is read from both places like DIRECTOR_BIN, but disableCheck
+	// reports the settings.json pin first: Claude Code injects that env into the
+	// session, so a doctor run inside one sees the pin in its own environment too.
+	disableFromEnv := hook.Disabled()
+	disableFromSettings := false
+	if pinned, ok := install.SettingsDirectorDisable(settingsPath); ok {
+		disableFromSettings = hook.DisabledBy(pinned)
+	}
 	return doctorInputs{
 		directorBin:             directorBin,
 		directorBinFromSettings: fromSettings,
+		disableFromEnv:          disableFromEnv,
+		disableFromSettings:     disableFromSettings,
 		lookDirector:            func() (string, bool) { p, e := exec.LookPath("director"); return p, e == nil },
 		settingsPath:            settingsPath,
 		hooksDir:                hooksDir,
@@ -177,10 +199,14 @@ func doctorInputsFromEnv() (doctorInputs, error) {
 }
 
 // diagnose assembles the health checks and the overall verdict. healthy is true
-// when no check failed (warnings don't sink it — coordination still fires).
+// when no check failed. Warnings don't sink it, though one of them (an active
+// DIRECTOR_DISABLE) means hooks deliberately do nothing.
 func diagnose(in doctorInputs) doctorReport {
 	var r doctorReport
 	r.checks = append(r.checks, binaryResolutionCheck(in))
+	if c, on := disableCheck(in); on {
+		r.checks = append(r.checks, c)
+	}
 	// Targets are assessed symmetrically: each installed agent gets its check,
 	// and the Claude Code check — historically unconditional — is skipped only
 	// when CC is genuinely absent (no managed entries AND no parse error, which
@@ -264,6 +290,33 @@ func binaryResolutionCheck(in doctorInputs) check {
 		return check{"binary", levelFail, fmt.Sprintf(
 			"director is not on your PATH and the install symlink %s is missing or broken — the hooks will silently no-op. Re-run `director install` (or put director on your PATH).", in.binPath)}
 	}
+}
+
+// disableCheckTitle names the check disableCheck emits; writeReport keys its
+// closing line on it.
+const disableCheckTitle = "hooks disabled"
+
+// disableCheck surfaces an active DIRECTOR_DISABLE. The switch is right for a
+// sandbox or CI clone and for a dispatched agent, but it turns every hook into a
+// silent no-op, which is the "installed and nothing happens" state doctor exists
+// to explain. Warning-grade: nothing is broken, it is just rarely what a
+// developer's own machine wants. Nothing is reported (false) when the switch is
+// off, matching how doctor treats other optional config. The settings.json pin is
+// checked first and gets sharper wording: it is invisible from the shell and
+// silences every Claude Code session. Inside a Claude Code session the pin also
+// appears in doctor's own environment, so reporting the shell too would blame an
+// export that does not exist.
+func disableCheck(in doctorInputs) (check, bool) {
+	const effect = "every hook no-ops (no digest injection, no emit guard, no fleet rows)"
+	switch {
+	case in.disableFromSettings:
+		return check{disableCheckTitle, levelWarn, fmt.Sprintf(
+			"DIRECTOR_DISABLE is pinned in the \"env\" block of %s: %s in every Claude Code session. Remove it from that env block unless this machine is meant to run without Director.", in.settingsPath, effect)}, true
+	case in.disableFromEnv:
+		return check{disableCheckTitle, levelWarn, fmt.Sprintf(
+			"DIRECTOR_DISABLE is set in the shell environment: %s. Unset it unless this shell is a sandbox or CI one.", effect)}, true
+	}
+	return check{}, false
 }
 
 // claudeHooksCheck verifies the Claude Code side is wired: the FULL set of
@@ -495,6 +548,8 @@ func writeReport(w io.Writer, rep doctorReport) {
 	switch {
 	case !rep.healthy:
 		fmt.Fprintln(w, "✗ Director is NOT healthy: coordination will not fire. Fix the ✗ items above.")
+	case rep.hasDisabled():
+		fmt.Fprintln(w, "⚠ Director is installed, but DIRECTOR_DISABLE switches hooks off; see the ⚠ items above.")
 	case rep.hasWarn():
 		fmt.Fprintln(w, "⚠ Director works, with caveats — see the ⚠ items above.")
 	default:

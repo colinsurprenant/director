@@ -837,6 +837,19 @@ func TestSettingsDirectorBin(t *testing.T) {
 	}
 }
 
+// TestSettingsDirectorDisable: a pinned value reads back raw (the caller applies
+// the truthiness rule). The not-pinned shapes share SettingsDirectorBin's reader
+// and are covered by TestSettingsDirectorBin.
+func TestSettingsDirectorDisable(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(p, []byte(`{"env":{"DIRECTOR_DISABLE":"0"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := SettingsDirectorDisable(p); !ok || v != "0" {
+		t.Errorf("got (%q, %v), want (0, true)", v, ok)
+	}
+}
+
 // writeTree re-serializes a settings tree loadTree decoded, so a test can mutate
 // an install into a state a REAL older binary would have left (an entry set from
 // before a hook event existed) instead of hand-writing the whole file.
