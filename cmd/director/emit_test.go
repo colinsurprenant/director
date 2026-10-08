@@ -214,7 +214,9 @@ func TestRunEmitBodyFromStdin(t *testing.T) {
 	// Over the store's cap: refused at the read, one byte past the limit,
 	// so a runaway producer is never buffered whole.
 	r, w = mustPipe(t)
-	go func() {
+	// The writer takes its own pipe: it outlives this case (the read stops at the
+	// cap), and capturing w would let it write into the next case's pipe.
+	go func(w *os.File) {
 		defer w.Close()
 		chunk := strings.Repeat("x", 4096)
 		for i := 0; i < 64; i++ { // 256 KiB, four times the cap
@@ -222,7 +224,7 @@ func TestRunEmitBodyFromStdin(t *testing.T) {
 				return
 			}
 		}
-	}()
+	}(w)
 	os.Stdin = r
 	_, errOut = captureStreams(t, func() { code = runEmit([]string{"--type", "note", "--area", "x", "-"}) })
 	if code != 2 || !strings.Contains(errOut, "exceeds") {
@@ -233,10 +235,10 @@ func TestRunEmitBodyFromStdin(t *testing.T) {
 	// is judged on the trimmed body, as the positional path judges it, so
 	// this lands.
 	r, w = mustPipe(t)
-	go func() { // past the pipe buffer, so the write must not wait on the read
+	go func(w *os.File) { // past the pipe buffer, so the write must not wait on the read
 		defer w.Close()
 		_, _ = w.WriteString(strings.Repeat("y", 64*1024) + "\n")
-	}()
+	}(w)
 	os.Stdin = r
 	emitCapture(t, "--type", "note", "--area", "x", "-")
 
