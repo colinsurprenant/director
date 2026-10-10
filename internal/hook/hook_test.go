@@ -315,9 +315,10 @@ func TestSessionStartInjectsGroundTruth(t *testing.T) {
 		t.Errorf("injected protocol should clarify that emit RECORDS (not a commitment to act):\n%s", ctx)
 	}
 	for _, want := range []string{
-		"beside your next tool call, not in a message of its own", // ride along
-		"never drafted in a file first",                           // no Write turn for the body
-		"- <<'DIRECTOR_EOF'",                                      // body on stdin, nothing expands, delimiter no body line matches
+		"beside your next tool call rather than in a message of its own", // ride along
+		"emit anyway as the turn's last call",                            // never lose a fact to the ride-along rule
+		"never drafted in a file first",                                  // no Write turn for the body
+		"- <<'DIRECTOR_EOF'",                                             // body on stdin, nothing expands, delimiter no body line matches
 	} {
 		if !strings.Contains(ctx, want) {
 			t.Errorf("injected protocol should teach ride-along emits; missing %q:\n%s", want, ctx)
