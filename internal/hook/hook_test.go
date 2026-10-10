@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -310,14 +311,13 @@ func TestSessionStartInjectsGroundTruth(t *testing.T) {
 	if r, d := strings.Index(ctx, "## Resume point"), strings.Index(ctx, "# director render"); r < 0 || d < 0 || r < d {
 		t.Errorf("resume point must follow the render digest it references (resume@%d, digest@%d):\n%s", r, d, ctx)
 	}
-	if !strings.Contains(ctx, "commitment to act") {
+	if !strings.Contains(ctx, "commits you to nothing and needs no approval") {
 		t.Errorf("injected protocol should clarify that emit RECORDS (not a commitment to act):\n%s", ctx)
 	}
 	for _, want := range []string{
-		"same message as your next tool call",   // ride along
-		"last tool call of the turn",            // the end-of-turn tie-break
-		"never drafted in a scratch file first", // no Write turn for the body
-		"- <<'DIRECTOR_EOF'",                    // body on stdin, nothing expands, delimiter no body line matches
+		"beside your next tool call, not in a message of its own", // ride along
+		"never drafted in a file first",                           // no Write turn for the body
+		"- <<'DIRECTOR_EOF'",                                      // body on stdin, nothing expands, delimiter no body line matches
 	} {
 		if !strings.Contains(ctx, want) {
 			t.Errorf("injected protocol should teach ride-along emits; missing %q:\n%s", want, ctx)
@@ -1682,8 +1682,9 @@ func TestSessionStartBudgetCountsUnitsNotBytes(t *testing.T) {
 
 // TestSessionStartBudgetCollapsesAllWhenKeptBandOverflows locks the ladder's
 // SECOND rung: when even the kept-newest band leaves the payload over budget,
-// every decision collapses to the count+pointer line — and the actionable
-// sections are still never eaten.
+// every decision collapses to the count+pointer line, the open-items keep
+// their full headlines (the last rung must NOT fire while this one fits), and
+// the actionable sections are still never dropped.
 func TestSessionStartBudgetCollapsesAllWhenKeptBandOverflows(t *testing.T) {
 	hub := t.TempDir()
 	repo := gitRepo(t, "widget", "main")
@@ -1692,21 +1693,24 @@ func TestSessionStartBudgetCollapsesAllWhenKeptBandOverflows(t *testing.T) {
 	store := event.NewStore(hub, ws.RepoKey)
 	// Bulk the ACTIONABLE section close to the budget so rung 1's ~2K-unit kept
 	// band (10 × ~200-unit decision index lines) still overflows while rung 2
-	// fits: ~14
-	// open-items × ~330-unit lines ≈ 4.6K units of open-set + ~5.2K units of
-	// fixed blocks, against the 10,000-unit budget. Measured at the 2026-09-28
-	// retune: rung-2 payload 9,815 units, so under 200 units of headroom; the
-	// next fixed-block sentence trips this test, which is the intended tripwire.
+	// fits: ~20
+	// open-items × ~330-unit lines ≈ 6.6K units of open-set + ~3.1K units of
+	// fixed blocks, against the 10,000-unit budget. Measured at the protocol
+	// trim (emitProtocol 4,197 → 2,038 units): rung-2 payload 9,716 units, so
+	// under 300 units of headroom; the next fixed-block sentence trips this
+	// test, which is the intended tripwire. One more open-item (21) lands on
+	// the open-item-shortening rung instead, which the test pins as absent.
 	// (The fixture is ASCII, so units == bytes here.)
 	//
-	// If this test starts failing with "STILL over budget" after a fixed block
-	// (emitProtocol, preamble, banner) grows, the FIXTURE has drifted out of
-	// its window — re-tune the open-item count downward; don't suspect the
-	// ladder. (Historical windows, for reference: 16,384-BYTE budget era of
-	// 2026-08-26 took 36 open-items, rung 2 ≈ 15,970B; 2026-07-15 took 38;
-	// 2026-09-28 took 16 before the ride-along emit rule grew emitProtocol.)
+	// If this test starts failing with "open-item headlines shortened" or
+	// "STILL over budget" after a fixed block (emitProtocol, preamble, banner)
+	// grows, the FIXTURE has drifted out of its window — re-tune the open-item
+	// count downward; don't suspect the ladder. (Historical windows, for
+	// reference: 16,384-BYTE budget era of 2026-08-26 took 36 open-items, rung
+	// 2 ≈ 15,970B; 2026-07-15 took 38; 2026-09-28 took 16, then 14 once the
+	// ride-along emit rule grew emitProtocol; the 2026-10 protocol trim took it to 20.)
 	openBody := strings.Repeat("open loop ", 29) // ~290 chars, under the 300-rune cap
-	for i := 0; i < 14; i++ {
+	for i := 0; i < 20; i++ {
 		if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindOpenItem, Area: "sync", Body: openBody}); err != nil {
 			t.Fatalf("seed open-item %d: %v", i, err)
 		}
@@ -1741,8 +1745,250 @@ func TestSessionStartBudgetCollapsesAllWhenKeptBandOverflows(t *testing.T) {
 	if !strings.Contains(health, "ALL decisions collapsed to count+pointer") {
 		t.Errorf("rung 2 should be health-logged by name, got:\n%s", health)
 	}
+	if strings.Contains(health, "STILL over budget") || strings.Contains(health, "open-item headlines shortened") {
+		t.Errorf("fixture should fit once all decisions collapse, before any open-item shortens:\n%s", health)
+	}
+}
+
+// sessionStartCtx dispatches a startup SessionStart for repo and returns the
+// injected context.
+func sessionStartCtx(t *testing.T, hub, repo string) string {
+	t.Helper()
+	in := `{"session_id":"s-real","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	var out bytes.Buffer
+	if code := Dispatch(EventSessionStart, strings.NewReader(in), &out, hub); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	return injectedContext(t, out.String())
+}
+
+// TestSessionStartBudgetShortensOpenItemsOnLastRung locks the ladder's LAST
+// rung: when the payload is still over budget after every decision collapses,
+// the open-set itself is what overflows, so every open-item headline shortens
+// to openItemCompactRunes (160) plus the cut marker. Nothing is dropped: every
+// ULID, the date tag and the escalate tag survive, the handoff keeps its full
+// headline, and the rung is health-logged by name with the before/after units.
+func TestSessionStartBudgetShortensOpenItemsOnLastRung(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+
+	store := event.NewStore(hub, ws.RepoKey)
+	handoffBody := strings.Repeat("handoff ", 50) // 400 chars: under handoffBodyRunes, over the open-item compact cap
+	if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindHandoff, Area: "hooks", Body: handoffBody}); err != nil {
+		t.Fatalf("seed handoff: %v", err)
+	}
+	// 24 open-items × ~330 units ≈ 8K units of open-set on top of ~3.1K of
+	// fixed blocks: over the 10,000-unit budget with every decision collapsed
+	// (11,044 measured), under it once the headlines shorten (7,948 measured).
+	// The fixture is ASCII, so units == bytes.
+	openBody := strings.Repeat("open loop ", 29) // 290 chars: under the 300-rune normal cap
+	var ids []string
+	var escalateID string
+	for i := 0; i < 24; i++ {
+		p := event.EmitParams{Type: event.KindOpenItem, Area: "sync", Body: openBody}
+		if i == 5 {
+			p.Risk = event.RiskEscalate
+		}
+		ev, err := event.Emit(store, ws.ID, p)
+		if err != nil {
+			t.Fatalf("seed open-item %d: %v", i, err)
+		}
+		ids = append(ids, ev.ID)
+		if i == 5 {
+			escalateID = ev.ID
+		}
+	}
+	// Decisions newer than the handoff make rung 1 non-empty, so the ladder
+	// really walks 1 → 2 → 3.
+	for i := 0; i < 25; i++ {
+		if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindDecision, Area: "hooks", Body: strings.Repeat("rationale ", 30)}); err != nil {
+			t.Fatalf("seed decision %d: %v", i, err)
+		}
+	}
+
+	ctx := sessionStartCtx(t, hub, repo)
+
+	if u := utf16Units(ctx); u > injectionBudgetUnits {
+		t.Errorf("last-rung payload still over budget: %d units > %d", u, injectionBudgetUnits)
+	}
+	lines := strings.Split(ctx, "\n")
+	tagRE := regexp.MustCompile(`^\(\d{4}-\d{2}-\d{2}\) (\[risk:escalate\] )?`)
+	for _, id := range ids {
+		var line string
+		for _, l := range lines {
+			if strings.HasPrefix(l, "- "+id+" ") {
+				line = l
+			}
+		}
+		if line == "" {
+			t.Errorf("open-item %s dropped from the last-rung payload", id)
+			continue
+		}
+		tags := tagRE.FindStringSubmatch(strings.TrimPrefix(line, "- "+id+" "))
+		if tags == nil {
+			t.Errorf("open-item %s lost its date tag:\n%s", id, line)
+			continue
+		}
+		head := strings.TrimPrefix(strings.TrimPrefix(line, "- "+id+" "), tags[0])
+		if !strings.HasSuffix(head, "…") {
+			t.Errorf("open-item %s headline not shortened:\n%s", id, line)
+		}
+		if n := len([]rune(head)); n > 160+1 {
+			t.Errorf("open-item %s headline is %d runes, want <= 160 plus the cut marker:\n%s", id, n, line)
+		}
+		if wantEsc := id == escalateID; (tags[1] != "") != wantEsc {
+			t.Errorf("open-item %s escalate tag = %t, want %t:\n%s", id, tags[1] != "", wantEsc, line)
+		}
+	}
+	if !strings.Contains(ctx, strings.TrimSpace(handoffBody)) {
+		t.Errorf("handoff headline must be untouched by the last rung:\n%.2000s", ctx)
+	}
+	if !strings.Contains(ctx, "25 active decisions elided for size") {
+		t.Errorf("the last rung keeps every decision collapsed:\n%.2000s", ctx)
+	}
+
+	health := readHealth(t, hub)
+	m := regexp.MustCompile(`collapsed to count\+pointer \((\d+) units\), still over: open-item headlines shortened.*\(now (\d+) units\)`).FindStringSubmatch(health)
+	if m == nil {
+		t.Fatalf("last rung should be health-logged by name with before/after units, got:\n%s", health)
+	}
+	before, _ := strconv.Atoi(m[1])
+	after, _ := strconv.Atoi(m[2])
+	if before <= injectionBudgetUnits || after > injectionBudgetUnits || after != utf16Units(ctx) {
+		t.Errorf("health units before=%d after=%d inconsistent with budget %d and the payload (%d units)", before, after, injectionBudgetUnits, utf16Units(ctx))
+	}
 	if strings.Contains(health, "STILL over budget") {
-		t.Errorf("fixture should fit once all decisions collapse:\n%s", health)
+		t.Errorf("fixture should fit once the headlines shorten:\n%s", health)
+	}
+}
+
+// TestSessionStartUnderBudgetKeepsFullOpenItemHeadlines: the last rung must
+// not leak into the normal path. An under-budget payload carries the digest
+// byte-for-byte (open-item headlines at the normal 300-rune cap) and logs no
+// budget rung.
+func TestSessionStartUnderBudgetKeepsFullOpenItemHeadlines(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+
+	store := event.NewStore(hub, ws.RepoKey)
+	openBody := strings.Repeat("open loop ", 29) // 290 chars: kept whole at the normal cap, cut at the compact one
+	for i := 0; i < 3; i++ {
+		if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindOpenItem, Area: "sync", Body: openBody}); err != nil {
+			t.Fatalf("seed open-item %d: %v", i, err)
+		}
+	}
+	events, err := store.ReadAll()
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+
+	ctx := sessionStartCtx(t, hub, repo)
+
+	if u := utf16Units(ctx); u > injectionBudgetUnits {
+		t.Fatalf("fixture must be under budget: %d units", u)
+	}
+	if want := render.Digest(render.Fold(events), ws.RepoKey); !strings.Contains(ctx, want) {
+		t.Errorf("under-budget payload must carry the render digest byte-for-byte:\n--- want ---\n%s\n--- got ---\n%.3000s", want, ctx)
+	}
+	if !strings.Contains(ctx, strings.TrimSpace(openBody)) || strings.Contains(ctx, "…") {
+		t.Errorf("under-budget open-items must keep the full headline:\n%.3000s", ctx)
+	}
+	if health := readHealth(t, hub); strings.Contains(health, "injection budget") {
+		t.Errorf("no budget rung should fire under budget, got:\n%s", health)
+	}
+}
+
+// TestSessionStartBudgetStillOverOnActionableSections: when the resume stack
+// alone overflows, nothing is dropped and the overflow is named loudly. The
+// last rung is logged only when it actually shortened something: with
+// open-items already under the compact cap it would be byte-identical to the
+// previous rung, and claiming it ran would misname the diagnostic.
+func TestSessionStartBudgetStillOverOnActionableSections(t *testing.T) {
+	cases := []struct {
+		name        string
+		openBody    string
+		wantShorten bool
+	}{
+		{"long open-items shorten, still over", strings.Repeat("open loop ", 29), true},
+		{"short open-items: rung skipped, still over", "short loop", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			hub := t.TempDir()
+			repo := gitRepo(t, "widget", "main")
+			ws := mustResolve(t, repo)
+
+			store := event.NewStore(hub, ws.RepoKey)
+			// 30 sibling workstreams, one 400-char position each: ~13K units of
+			// resume stack, which no open-item cap can fix.
+			handoffBody := strings.Repeat("handoff ", 50)
+			for i := 0; i < 30; i++ {
+				if _, err := event.Emit(store, "legacy-ws-"+strconv.Itoa(i), event.EmitParams{Type: event.KindHandoff, Area: "hooks", Body: handoffBody}); err != nil {
+					t.Fatalf("seed handoff %d: %v", i, err)
+				}
+			}
+			var ids []string
+			for i := 0; i < 3; i++ {
+				ev, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindOpenItem, Area: "sync", Body: c.openBody})
+				if err != nil {
+					t.Fatalf("seed open-item %d: %v", i, err)
+				}
+				ids = append(ids, ev.ID)
+			}
+
+			ctx := sessionStartCtx(t, hub, repo)
+
+			if utf16Units(ctx) <= injectionBudgetUnits {
+				t.Fatalf("fixture must stay over budget: %d units", utf16Units(ctx))
+			}
+			for _, id := range ids {
+				if !strings.Contains(ctx, id) {
+					t.Errorf("open-item %s dropped", id)
+				}
+			}
+			if n := strings.Count(ctx, strings.TrimSpace(handoffBody)); n != 30 {
+				t.Errorf("all 30 handoff positions must survive whole, found %d", n)
+			}
+			health := readHealth(t, hub)
+			if !strings.Contains(health, "STILL over budget") || !strings.Contains(health, "never dropped") {
+				t.Errorf("the overflow should be named loudly, got:\n%s", health)
+			}
+			if got := strings.Contains(health, "open-item headlines shortened"); got != c.wantShorten {
+				t.Errorf("last rung logged = %t, want %t:\n%s", got, c.wantShorten, health)
+			}
+		})
+	}
+}
+
+// TestProtocolCommandNamesPerFlavor: the close-out commands in the protocol
+// are authored once in Claude Code's namespace and rewritten for every other
+// flavor. A trim of the protocol text must never lose either command or leave
+// a wrong-namespace spelling behind.
+func TestProtocolCommandNamesPerFlavor(t *testing.T) {
+	cases := []struct {
+		flavor, complete, handoff string
+		forbidden                 []string
+	}{
+		{"claude", "/director:complete", "/director:handoff", []string{"$director-", "/director-"}},
+		{"", "/director:complete", "/director:handoff", []string{"$director-", "/director-"}},
+		{"codex", "$director-complete", "$director-handoff", []string{"/director:", "/director-"}},
+		{"copilot", "$director-complete", "$director-handoff", []string{"/director:", "/director-"}},
+		{"opencode", "/director-complete", "/director-handoff", []string{"/director:", "$director-"}},
+	}
+	for _, c := range cases {
+		got := commandNamesFor(emitProtocol, c.flavor)
+		for _, want := range []string{c.complete, c.handoff} {
+			if !strings.Contains(got, want) {
+				t.Errorf("flavor %q protocol missing %q:\n%s", c.flavor, want, got)
+			}
+		}
+		for _, bad := range c.forbidden {
+			if strings.Contains(got, bad) {
+				t.Errorf("flavor %q protocol carries a wrong-namespace %q:\n%s", c.flavor, bad, got)
+			}
+		}
 	}
 }
 

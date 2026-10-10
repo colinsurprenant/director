@@ -211,7 +211,7 @@ func TestDigestLineCaps(t *testing.T) {
 	}
 }
 
-// TestDigestCollapsed locks the LAST degradation rung: identical to the full
+// TestDigestCollapsed locks the SECOND degradation rung: identical to the full
 // digest except every decision collapses to one count-plus-pointer line, and the
 // actionable sections (open-items, handoffs) are untouched.
 func TestDigestCollapsed(t *testing.T) {
@@ -239,6 +239,104 @@ func TestDigestCollapsed(t *testing.T) {
 	empty := Fold(nil)
 	if DigestCollapsed(empty, "widget") != Digest(empty, "widget") {
 		t.Errorf("collapsed of a decision-less projection should equal the full digest")
+	}
+}
+
+// TestDigestCollapsedShort locks the LAST degradation rung: DigestCollapsed
+// with every open-item headline capped at openItemCompactRunes. Nothing is
+// dropped (every open-item keeps its ULID, date tag and escalate tag), a body
+// already under the compact cap renders byte-identically, and the handoff
+// lines and the decisions section are exactly DigestCollapsed's.
+func TestDigestCollapsedShort(t *testing.T) {
+	longOpen := strings.Repeat("open loop ", 29)  // 290 chars: under openItemBodyRunes, over openItemCompactRunes
+	handoffBody := strings.Repeat("handoff ", 50) // 400 chars: between the compact cap and handoffBodyRunes
+	longID, shortID, escID := mint(t), mint(t), mint(t)
+	proj := Fold([]event.Event{
+		{ID: longID, SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Body: longOpen},
+		{ID: shortID, SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Body: "short loop"},
+		{ID: escID, SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Risk: event.RiskEscalate, Body: longOpen},
+		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindHandoff, Workstream: "ws1", Body: handoffBody},
+		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Area: "hooks", Body: "decision body"},
+	})
+	collapsed := DigestCollapsed(proj, "widget")
+	short := DigestCollapsedShort(proj, "widget")
+
+	lineOf := func(d, id string) string {
+		for _, l := range strings.Split(d, "\n") {
+			if strings.HasPrefix(l, "- "+id) {
+				return l
+			}
+		}
+		t.Fatalf("digest lost %s:\n%s", id, d)
+		return ""
+	}
+	for _, id := range []string{longID, escID} {
+		l, base := lineOf(short, id), lineOf(collapsed, id)
+		if !strings.HasSuffix(l, "…") {
+			t.Errorf("over-compact-cap open-item must end with the cut marker:\n%s", l)
+		}
+		// The line is the collapsed line with only the headline text shortened:
+		// everything up to the headline (ULID, date tag, escalate tag) matches.
+		prefix := strings.TrimSuffix(base, strings.TrimSpace(longOpen))
+		if !strings.HasPrefix(l, prefix) {
+			t.Errorf("ULID/date/escalate prefix changed:\n got %s\nwant prefix %q", l, prefix)
+		}
+		if got, want := len([]rune(l)), len([]rune(prefix))+openItemCompactRunes+1; got > want {
+			t.Errorf("open-item line exceeds the compact cap: %d runes > %d:\n%s", got, want, l)
+		}
+	}
+	if !strings.Contains(lineOf(short, escID), "[risk:escalate]") {
+		t.Errorf("escalate tag lost on the compact rung:\n%s", short)
+	}
+	if lineOf(short, shortID) != lineOf(collapsed, shortID) {
+		t.Errorf("a body under the compact cap must render byte-identically:\n%s", short)
+	}
+
+	// Everything outside the open-item section is DigestCollapsed's, byte for byte.
+	tail := func(d string) string { return d[strings.Index(d, "\n## handoffs"):] }
+	if tail(short) != tail(collapsed) {
+		t.Errorf("handoffs and decisions must be untouched by the compact rung:\n--- collapsed ---\n%s\n--- short ---\n%s", collapsed, short)
+	}
+	if !strings.Contains(short, strings.TrimSpace(handoffBody)) {
+		t.Errorf("handoff body must survive whole (its cap is handoffBodyRunes):\n%s", short)
+	}
+
+	// Exact cut: space-free filler measures the cap precisely.
+	filler := strings.Repeat("x", 1200)
+	capped := DigestCollapsedShort(Fold([]event.Event{
+		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Body: filler},
+	}), "widget")
+	for _, l := range strings.Split(capped, "\n") {
+		if !strings.HasPrefix(l, "- ") {
+			continue
+		}
+		if !strings.HasSuffix(l, strings.Repeat("x", openItemCompactRunes)+"…") || strings.HasSuffix(l, "x"+strings.Repeat("x", openItemCompactRunes)+"…") {
+			t.Errorf("open-item line not cut at exactly openItemCompactRunes:\n%s", l)
+		}
+	}
+
+	// No open-items → nothing to shorten.
+	if DigestCollapsedShort(Fold(nil), "widget") != DigestCollapsed(Fold(nil), "widget") {
+		t.Errorf("compact rung of an open-item-less projection should equal DigestCollapsed")
+	}
+}
+
+// TestUnderBudgetRungsKeepFullOpenItemHeadlines: only DigestCollapsedShort
+// shortens open-items; Digest, DigestCompact and DigestCollapsed all keep the
+// normal openItemBodyRunes headline, so the under-budget path is unchanged.
+func TestUnderBudgetRungsKeepFullOpenItemHeadlines(t *testing.T) {
+	body := strings.Repeat("open loop ", 29) // 290 chars
+	proj := Fold([]event.Event{
+		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Body: body},
+	})
+	for name, d := range map[string]string{
+		"Digest":          Digest(proj, "widget"),
+		"DigestCompact":   DigestCompact(proj, "widget", ""),
+		"DigestCollapsed": DigestCollapsed(proj, "widget"),
+	} {
+		if !strings.Contains(d, strings.TrimSpace(body)) || strings.Contains(d, "…") {
+			t.Errorf("%s must keep the full %d-rune open-item headline:\n%s", name, openItemBodyRunes, d)
+		}
 	}
 }
 
