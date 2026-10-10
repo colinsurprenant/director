@@ -252,9 +252,9 @@ func TestDigestCollapsedShort(t *testing.T) {
 	handoffBody := strings.Repeat("handoff ", 50) // 400 chars: between the compact cap and handoffBodyRunes
 	longID, shortID, escID := mint(t), mint(t), mint(t)
 	proj := Fold([]event.Event{
-		{ID: longID, SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Body: longOpen},
-		{ID: shortID, SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Body: "short loop"},
-		{ID: escID, SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Risk: event.RiskEscalate, Body: longOpen},
+		{ID: longID, SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, TS: "2026-09-30T12:00:00Z", Body: longOpen},
+		{ID: shortID, SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, TS: "2026-10-01T12:00:00Z", Body: "short loop"},
+		{ID: escID, SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Risk: event.RiskEscalate, TS: "2026-10-02T12:00:00Z", Body: longOpen},
 		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindHandoff, Workstream: "ws1", Body: handoffBody},
 		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Area: "hooks", Body: "decision body"},
 	})
@@ -287,6 +287,13 @@ func TestDigestCollapsedShort(t *testing.T) {
 	}
 	if !strings.Contains(lineOf(short, escID), "[risk:escalate]") {
 		t.Errorf("escalate tag lost on the compact rung:\n%s", short)
+	}
+	// The date tag is rendered from TS and must ride through the shortening
+	// untouched, on the shortened lines as much as the short one.
+	for id, want := range map[string]string{longID: "(2026-09-30) ", shortID: "(2026-10-01) ", escID: "(2026-10-02) [risk:escalate] "} {
+		if l := lineOf(short, id); !strings.HasPrefix(l, "- "+id+" "+want) {
+			t.Errorf("open-item %s lost or changed its date/escalate tags, want prefix %q:\n%s", id, want, l)
+		}
 	}
 	if lineOf(short, shortID) != lineOf(collapsed, shortID) {
 		t.Errorf("a body under the compact cap must render byte-identically:\n%s", short)

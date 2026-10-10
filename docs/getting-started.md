@@ -412,8 +412,8 @@ top-level `schema_version`; their nested events retain the durable event schema 
 ## 5. How the model uses Director
 
 You rarely run `emit`/`resolve` by hand; **the session does**, guided by the coordination protocol the
-SessionStart hook injects into every managed-repo session (its readable source is
-[`../skills/director/SKILL.md`](../skills/director/SKILL.md)). The protocol teaches two habits no hook can
+SessionStart hook injects into every managed-repo session (the fuller, readable version of the same guidance
+is [`../skills/director/SKILL.md`](../skills/director/SKILL.md)). The protocol teaches two habits no hook can
 perform for the model:
 
 - **Continuous boundary-flush**: emit durable state *as work happens* (a `decision` in the turn it's made,

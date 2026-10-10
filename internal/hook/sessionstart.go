@@ -50,12 +50,12 @@ const emitProtocol = "## Director protocol\n" +
 	"You coordinate with other sessions only through the LOG (digested below), written only via the `director` CLI, never by editing a log file. Emit in the turn a fact arises: state not written during a turn is lost on compaction. An emit records a fact; it commits you to nothing and needs no approval.\n" +
 	"- a decision you make: `director emit --type decision --area <area> - <<'DIRECTOR_EOF'` + what + why\n" +
 	"- a loop you defer: `director emit --type open-item --area <area> --risk <low|escalate> - <<'DIRECTOR_EOF'` + the loop\n" +
-	"- a boundary of work that will resume: `director emit --type handoff --area <area> --refs <your-resume-point-ulid[,...]> - <<'DIRECTOR_EOF'` + task · next · hypotheses · dead ends (omit `--refs` when the ground truth shows no resume point for your workstream)\n" +
+	"- each natural boundary of work that will resume (sub-task done, switching focus, wrapping up mid-workstream): `director emit --type handoff --area <area> --refs <your-resume-point-ulid[,...]> - <<'DIRECTOR_EOF'` + task · next · hypotheses · dead ends (omit `--refs` when the ground truth shows no resume point for your workstream). Starting a task needs no event.\n" +
 	"- an open-item you finished: `director resolve <ulid>` (there is no reopen)\n" +
-	"The body is one terse line, headline plus pointer (ULID, path, PR), on stdin between the heredoc markers: never a double-quoted argument, never inside $( ), never drafted in a file first. Run an emit beside your next tool call rather than in a message of its own; when no call is left, emit anyway as the turn's last call, since an extra message beats a lost fact. Never run it beside a call that removes the checkout or ends the session.\n" +
-	"`--refs` has side effects. On a decision it supersedes the named decisions: ref the one you replace, amend or withdraw. On a handoff it supersedes the named same-workstream handoffs; a handoff without refs retires every older position of its workstream, a parallel session's included. On a note it CONCLUDES the named handoff, which only `/director:complete` may do.\n" +
+	"The body is one line on stdin between the heredoc markers, never a double-quoted argument, never inside $( ), never drafted in a file first: terse, headline plus pointer (ULID, path, PR); a handoff's four parts joined with ` · `. Run an emit beside your next independent tool call rather than in a message of its own, several facts as parallel emits in one message; when no call is left, emit anyway as the turn's last call, since an extra message beats a lost fact. Never run it beside a call that removes the checkout or ends the session.\n" +
+	"`--refs` has side effects. On a decision it supersedes the named decisions, any workstream's: ref the one you replace, amend or withdraw. On a handoff it supersedes the named same-workstream handoffs; a handoff without refs retires every older position of its workstream, a parallel session's included. On a note it CONCLUDES a named handoff, which only `/director:complete` may do; a note's refs on a decision retire nothing.\n" +
 	"Entries below are capped headlines: `director show <ulid>` prints one in full. Pull an area's decisions before touching it.\n" +
-	"At a workstream boundary, suggest the close-out: done and merged → `/director:complete`, before the branch is deleted; pausing work that will resume → `/director:handoff`. Never hand off a finished workstream or a finished one-shot task (a PR review, an investigation): it plants a phantom resume point. Record the outcome as a note instead.\n"
+	"At a workstream boundary, suggest the close-out: done and merged → `/director:complete`, before the branch or worktree is deleted; pausing work that will resume (context filling up, session ending mid-task, a degraded session about to be reset) → `/director:handoff`. Never hand off a finished workstream or a finished one-shot task (a PR review, an investigation): it plants a phantom resume point. Record the outcome as a note instead.\n"
 
 // handleSessionStart derives identity, refreshes the fleet row, and writes the
 // Ground-Truth injection. It degrades gracefully at every step: a fleet write
@@ -139,11 +139,11 @@ func refreshFleet(hub string, ws identity.Workstream, uuid, cwd string) error {
 // the degraded preview path. Budgeting at the measured cap makes the normal
 // case an inline delivery. The cap is still an undocumented, driftable harness
 // behavior, so it must never be load-bearing: over budget, the digest degrades
-// deterministically (DigestCompact: decisions collapse to a count+pointer line;
-// on the last rung open-item headlines shorten — no open loop or resume
-// position is ever dropped) and the overflow is health-logged so growth is
-// loud before the threshold bites. The preamble's
-// DELIVERY CHECK contract remains the backstop of last resort.
+// deterministically down the ladder documented on buildGroundTruth (decisions
+// collapse to a count+pointer line; on the last rung open-item headlines
+// shorten; no open loop or resume position is ever dropped) and the overflow
+// is health-logged so growth is loud before the threshold bites. The
+// preamble's DELIVERY CHECK contract remains the backstop of last resort.
 //
 // Measured on the DECODED payload — the string the harness counts against its
 // cap. The JSON envelope on the wire runs larger (escaping of <>, quotes, and
@@ -184,12 +184,13 @@ func utf16Units(s string) int {
 // has seen — survive), then DigestCollapsed (every decision collapses), then
 // DigestCollapsedShort (every open-item headline also shortens; open-items
 // and handoff positions are never dropped, and the full text is one
-// `director show` away). Every rung is deliberately NOT the render output — the divergence is announced
-// in the digest itself and health-logged. sessionID is only for health-logging a
-// nudge/concurrency failure (both fail-open, never blocking the injection);
-// uuid is this session's fleet-row key, used to exclude its own row from the
-// concurrent-session count. flavor switches the protocol/nudge command names to
-// the starting agent's namespace (see commandNamesFor).
+// `director show` away). Every rung is deliberately NOT the render output:
+// the divergence is announced in the digest itself and health-logged.
+// sessionID is only for health-logging a nudge/concurrency failure (both
+// fail-open, never blocking the injection); uuid is this session's fleet-row
+// key, used to exclude its own row from the concurrent-session count. flavor
+// switches the protocol/nudge command names to the starting agent's namespace
+// (see commandNamesFor).
 func buildGroundTruth(hub, repoKey, workstreamID, sessionID, uuid, flavor string) (string, error) {
 	store := event.NewStore(hub, repoKey)
 	events, err := store.ReadAll()
@@ -326,10 +327,17 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID, uuid, flavor string
 			detail = fmt.Sprintf("injection budget: full payload %d units > %d — older decisions collapsed to count+pointer, newest %d kept (now %d units); groom the log (resolve/supersede/promote)", full, injectionBudgetUnits, kept, utf16Units(ctx))
 		}
 		if kept == 0 || utf16Units(ctx) > injectionBudgetUnits {
-			// Rung 2: every decision collapses.
+			// Rung 2: every decision collapses. With zero active decisions there
+			// is nothing to collapse (the digest is byte-identical to the full
+			// one), so the detail must not claim a collapse and send the human to
+			// promote when the open-set or the resume stack is the whole problem.
 			collapsed := render.DigestCollapsed(proj, repoKey)
 			ctx = assemble(collapsed)
-			detail = fmt.Sprintf("injection budget: full payload %d units > %d — ALL decisions collapsed to count+pointer (now %d units); groom the log (resolve/supersede/promote)", full, injectionBudgetUnits, utf16Units(ctx))
+			collapseNote, groom := "ALL decisions collapsed to count+pointer", "resolve/supersede/promote"
+			if len(proj.Decisions) == 0 {
+				collapseNote, groom = "no decisions to collapse", "resolve/supersede"
+			}
+			detail = fmt.Sprintf("injection budget: full payload %d units > %d — %s (now %d units); groom the log (%s)", full, injectionBudgetUnits, collapseNote, utf16Units(ctx), groom)
 			if before := utf16Units(ctx); before > injectionBudgetUnits {
 				// Rung 3, the last: the open-set itself overflows, so shorten every
 				// open-item headline. Nothing is dropped: ULID, date and escalate
@@ -339,7 +347,7 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID, uuid, flavor string
 				// logging it would misname the rung.
 				if short := render.DigestCollapsedShort(proj, repoKey); short != collapsed {
 					ctx = assemble(short)
-					detail = fmt.Sprintf("injection budget: full payload %d units > %d — ALL decisions collapsed to count+pointer (%d units), still over: open-item headlines shortened (full text via `director show <ulid>`) (now %d units); groom the log (resolve/supersede/promote)", full, injectionBudgetUnits, before, utf16Units(ctx))
+					detail = fmt.Sprintf("injection budget: full payload %d units > %d — %s (%d units), still over: open-item headlines shortened (full text via `director show <ulid>`) (now %d units); groom the log (%s)", full, injectionBudgetUnits, collapseNote, before, utf16Units(ctx), groom)
 				}
 			}
 			if utf16Units(ctx) > injectionBudgetUnits {

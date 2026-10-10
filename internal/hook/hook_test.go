@@ -314,14 +314,33 @@ func TestSessionStartInjectsGroundTruth(t *testing.T) {
 	if !strings.Contains(ctx, "commits you to nothing and needs no approval") {
 		t.Errorf("injected protocol should clarify that emit RECORDS (not a commitment to act):\n%s", ctx)
 	}
-	for _, want := range []string{
-		"beside your next tool call rather than in a message of its own", // ride along
-		"emit anyway as the turn's last call",                            // never lose a fact to the ride-along rule
-		"never drafted in a file first",                                  // no Write turn for the body
-		"- <<'DIRECTOR_EOF'",                                             // body on stdin, nothing expands, delimiter no body line matches
+	// One phrase per incident-earned rule, so a future trim that drops a rule
+	// fails here by name instead of passing as "shorter".
+	for rule, want := range map[string]string{
+		"log written only via the CLI":                       "never by editing a log file",
+		"body on stdin, nothing expands":                     "- <<'DIRECTOR_EOF'",
+		"never a double-quoted argument":                     "never a double-quoted argument",
+		"never inside $( )":                                  "never inside $( )",
+		"never drafted in a file first":                      "never drafted in a file first",
+		"handoff body is four parts":                         "a handoff's four parts joined with ` · `",
+		"ride along with the next independent call":          "beside your next independent tool call rather than in a message of its own",
+		"several facts are parallel emits":                   "several facts as parallel emits in one message",
+		"last-call fallback":                                 "emit anyway as the turn's last call",
+		"never beside a checkout-removing call":              "Never run it beside a call that removes the checkout or ends the session",
+		"handoff at each natural boundary":                   "each natural boundary of work that will resume",
+		"starting a task needs no event":                     "Starting a task needs no event",
+		"decision refs reach any workstream":                 "supersedes the named decisions, any workstream's",
+		"handoff refs supersede same-workstream handoffs":    "supersedes the named same-workstream handoffs",
+		"ref-less handoff retires every older position":      "a handoff without refs retires every older position of its workstream",
+		"note refs conclude a handoff":                       "On a note it CONCLUDES a named handoff",
+		"note refs on a decision retire nothing":             "a note's refs on a decision retire nothing",
+		"full bodies one show away":                          "`director show <ulid>`",
+		"complete before the branch or worktree is deleted":  "before the branch or worktree is deleted",
+		"handoff when context is filling up":                 "context filling up",
+		"a finished workstream or task plants a phantom one": "phantom resume point",
 	} {
 		if !strings.Contains(ctx, want) {
-			t.Errorf("injected protocol should teach ride-along emits; missing %q:\n%s", want, ctx)
+			t.Errorf("injected protocol lost the %q rule; missing %q:\n%s", rule, want, ctx)
 		}
 	}
 	if !strings.Contains(ctx, "director resolve") {
@@ -1645,7 +1664,7 @@ func TestSessionStartBudgetCountsUnitsNotBytes(t *testing.T) {
 	store := event.NewStore(hub, ws.RepoKey)
 	// "·→é⚠ " is 5 runes / 5 units / 11 bytes. 59 repeats = 295 runes (under
 	// the 300-rune cap) ≈ 649 bytes vs 295 units per body. 12 open-items land
-	// the payload at ~12K bytes but ~8K units: over the budget in bytes, under
+	// the payload at ~11.8K bytes but ~7.5K units: over the budget in bytes, under
 	// it in units.
 	openBody := strings.Repeat("·→é⚠ ", 59)
 	for i := 0; i < 12; i++ {
@@ -1694,14 +1713,18 @@ func TestSessionStartBudgetCollapsesAllWhenKeptBandOverflows(t *testing.T) {
 	store := event.NewStore(hub, ws.RepoKey)
 	// Bulk the ACTIONABLE section close to the budget so rung 1's ~2K-unit kept
 	// band (10 × ~200-unit decision index lines) still overflows while rung 2
-	// fits: ~20
-	// open-items × ~330-unit lines ≈ 6.6K units of open-set + ~3.1K units of
+	// fits: 19
+	// open-items × ~332-unit lines ≈ 6.3K units of open-set + ~3.5K units of
 	// fixed blocks, against the 10,000-unit budget. Measured at the protocol
-	// trim (emitProtocol 4,197 → 2,038 units): rung-2 payload 9,716 units, so
-	// under 300 units of headroom; the next fixed-block sentence trips this
-	// test, which is the intended tripwire. One more open-item (21) lands on
-	// the open-item-shortening rung instead, which the test pins as absent.
-	// (The fixture is ASCII, so units == bytes here.)
+	// trim (emitProtocol 4,197 → 2,512 units): rung-2 payload 9,857 units, so
+	// 143 units of headroom; the next fixed-block sentence trips this test,
+	// which is the intended tripwire. One more open-item (20) lands at 10,189
+	// units and on the open-item-shortening rung instead, which the test pins
+	// as absent. (The fixture is ASCII, so units == bytes here.) The payload
+	// also carries the temp repo key (digest title), so it moves ~1 unit per
+	// TMPDIR character: the measurement above is for a 49-character macOS
+	// TMPDIR (/var/folders/xx/.../T/), and a TMPDIR 143+ characters longer
+	// needs the count lowered.
 	//
 	// If this test starts failing with "open-item headlines shortened" or
 	// "STILL over budget" after a fixed block (emitProtocol, preamble, banner)
@@ -1709,9 +1732,9 @@ func TestSessionStartBudgetCollapsesAllWhenKeptBandOverflows(t *testing.T) {
 	// count downward; don't suspect the ladder. (Historical windows, for
 	// reference: 16,384-BYTE budget era of 2026-08-26 took 36 open-items, rung
 	// 2 ≈ 15,970B; 2026-07-15 took 38; 2026-09-28 took 16, then 14 once the
-	// ride-along emit rule grew emitProtocol; the 2026-10 protocol trim took it to 20.)
+	// ride-along emit rule grew emitProtocol; the 2026-10 protocol trim took it to 19.)
 	openBody := strings.Repeat("open loop ", 29) // ~290 chars, under the 300-rune cap
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 19; i++ {
 		if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindOpenItem, Area: "sync", Body: openBody}); err != nil {
 			t.Fatalf("seed open-item %d: %v", i, err)
 		}
@@ -1779,10 +1802,12 @@ func TestSessionStartBudgetShortensOpenItemsOnLastRung(t *testing.T) {
 	if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindHandoff, Area: "hooks", Body: handoffBody}); err != nil {
 		t.Fatalf("seed handoff: %v", err)
 	}
-	// 24 open-items × ~330 units ≈ 8K units of open-set on top of ~3.1K of
-	// fixed blocks: over the 10,000-unit budget with every decision collapsed
-	// (11,044 measured), under it once the headlines shorten (7,948 measured).
-	// The fixture is ASCII, so units == bytes.
+	// 24 open-items × ~332 units ≈ 8K units of open-set on top of ~3.7K of
+	// fixed blocks and the handoff: over the 10,000-unit budget with every
+	// decision collapsed (12,181 measured), under it once the headlines
+	// shorten (9,085 measured, 915 units of headroom). The fixture is ASCII,
+	// so units == bytes; the payload moves ~1 unit per TMPDIR character
+	// (measured with a 49-character macOS TMPDIR).
 	openBody := strings.Repeat("open loop ", 29) // 290 chars: under the 300-rune normal cap
 	var ids []string
 	var escalateID string
@@ -1905,7 +1930,9 @@ func TestSessionStartUnderBudgetKeepsFullOpenItemHeadlines(t *testing.T) {
 // alone overflows, nothing is dropped and the overflow is named loudly. The
 // last rung is logged only when it actually shortened something: with
 // open-items already under the compact cap it would be byte-identical to the
-// previous rung, and claiming it ran would misname the diagnostic.
+// previous rung, and claiming it ran would misname the diagnostic. For the
+// same reason, with no active decisions the detail says there were none to
+// collapse (and does not point at promote) rather than claiming a collapse.
 func TestSessionStartBudgetStillOverOnActionableSections(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -1922,8 +1949,9 @@ func TestSessionStartBudgetStillOverOnActionableSections(t *testing.T) {
 			ws := mustResolve(t, repo)
 
 			store := event.NewStore(hub, ws.RepoKey)
-			// 30 sibling workstreams, one 400-char position each: ~13K units of
-			// resume stack, which no open-item cap can fix.
+			// 30 sibling workstreams, one 400-char position each: ~13.8K units of
+			// resume stack (17.3K payload with the fixed blocks), which no
+			// open-item cap can fix.
 			handoffBody := strings.Repeat("handoff ", 50)
 			for i := 0; i < 30; i++ {
 				if _, err := event.Emit(store, "legacy-ws-"+strconv.Itoa(i), event.EmitParams{Type: event.KindHandoff, Area: "hooks", Body: handoffBody}); err != nil {
@@ -1958,6 +1986,12 @@ func TestSessionStartBudgetStillOverOnActionableSections(t *testing.T) {
 			}
 			if got := strings.Contains(health, "open-item headlines shortened"); got != c.wantShorten {
 				t.Errorf("last rung logged = %t, want %t:\n%s", got, c.wantShorten, health)
+			}
+			// No active decisions: the digest is already the collapsed one, so
+			// the detail must not claim a decision collapse nor point at promote
+			// when the open-set or the resume stack is the whole problem.
+			if !strings.Contains(health, "no decisions to collapse") || strings.Contains(health, "decisions collapsed") || strings.Contains(health, "promote") {
+				t.Errorf("zero-decision overflow must not claim a decision collapse or name promote:\n%s", health)
 			}
 		})
 	}
