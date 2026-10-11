@@ -1855,6 +1855,9 @@ func TestSessionStartBudgetShortensOpenItemsBeforeCollapsingBand(t *testing.T) {
 	if !strings.Contains(health, "older decisions collapsed to count+pointer, newest 3 kept") || !strings.Contains(health, "then open-item headlines shortened") {
 		t.Errorf("rungs 1 and 2 should be health-logged by name, got:\n%s", health)
 	}
+	if !strings.Contains(health, "; groom the log (resolve/supersede/promote)") {
+		t.Errorf("a ladder that fits should still name the grooming verbs, got:\n%s", health)
+	}
 	for _, bad := range []string{"unseen decisions collapsed too", "STILL over budget"} {
 		if strings.Contains(health, bad) {
 			t.Errorf("shortening should suffice, found %q:\n%s", bad, health)
@@ -2220,6 +2223,11 @@ func TestSessionStartBudgetStillOverReportsAnOversizedCharter(t *testing.T) {
 	}
 	if digest, rest := stillOverSplit(t, health); digest+rest != utf16Units(ctx) || rest <= digest {
 		t.Errorf("split digest %d + rest %d must equal the payload %d with the rest dominant:\n%s", digest, rest, utf16Units(ctx), health)
+	}
+	// Grooming the log cannot fix a fixed-block overflow, so the remedy is
+	// conditioned on the split, never stated unconditionally.
+	if strings.Contains(health, "; groom the log (") || !strings.Contains(health, "otherwise trim the CHARTER") {
+		t.Errorf("a still-over payload must let the split pick the remedy:\n%s", health)
 	}
 }
 

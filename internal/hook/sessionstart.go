@@ -359,16 +359,18 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID, uuid, flavor string
 		if len(steps) == 0 {
 			steps = append(steps, "nothing left to collapse or shorten")
 		}
-		detail := fmt.Sprintf("injection budget: full payload %d units > %d — %s; groom the log (%s)", full, injectionBudgetUnits, strings.Join(steps, "; then "), groom)
+		detail := fmt.Sprintf("injection budget: full payload %d units > %d — %s", full, injectionBudgetUnits, strings.Join(steps, "; then "))
 		if utf16Units(ctx) > injectionBudgetUnits {
 			// Still over after every rung: never drop the actionable sections —
 			// inject as-is and make the overflow visible. The split is reported,
-			// not guessed: the digest (an ungroomed open-set, or a deep resume
-			// stack of un-consolidated parallel positions) overflows as readily
-			// as the fixed blocks (an oversized CHARTER), and misattributing it
-			// sends the human to the wrong place.
+			// not guessed, and it picks the remedy: the digest (an ungroomed
+			// open-set, or a deep resume stack of un-consolidated parallel
+			// positions) overflows as readily as the fixed blocks (an oversized
+			// CHARTER), and misattributing it sends the human to the wrong place.
 			digestUnits := utf16Units(current)
-			detail += fmt.Sprintf(" — STILL over budget after every rung: the digest (open-items, handoffs) is %d units, the rest of the payload (CHARTER, protocol, banner, resume point, nudge) %d; groom whichever dominates (open-items and handoff positions are never dropped)", digestUnits, utf16Units(ctx)-digestUnits)
+			detail += fmt.Sprintf(" — STILL over budget after every rung: the digest (open-items, handoffs) is %d units, the rest of the payload (CHARTER, protocol, banner, resume point, nudge) %d; if the digest dominates groom the log (%s), otherwise trim the CHARTER (open-items and handoff positions are never dropped)", digestUnits, utf16Units(ctx)-digestUnits, groom)
+		} else {
+			detail += fmt.Sprintf("; groom the log (%s)", groom)
 		}
 		logFailure(hub, EventSessionStart, sessionID, detail)
 	}
