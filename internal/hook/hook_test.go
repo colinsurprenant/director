@@ -333,6 +333,7 @@ func TestSessionStartInjectsGroundTruth(t *testing.T) {
 		"handoff refs supersede same-workstream handoffs":    "supersedes the named same-workstream handoffs",
 		"ref-less handoff retires every older position":      "a handoff without refs retires every older position of its workstream",
 		"note refs conclude a handoff":                       "On a note it CONCLUDES a named handoff",
+		"only complete concludes a handoff":                  "which only `/director:complete` may do",
 		"note refs on a decision retire nothing":             "a note's refs on a decision retire nothing",
 		"full bodies one show away":                          "`director show <ulid>`",
 		"complete before the branch or worktree is deleted":  "before the branch or worktree is deleted",
