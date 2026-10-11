@@ -361,13 +361,14 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID, uuid, flavor string
 		}
 		detail := fmt.Sprintf("injection budget: full payload %d units > %d — %s; groom the log (%s)", full, injectionBudgetUnits, strings.Join(steps, "; then "), groom)
 		if utf16Units(ctx) > injectionBudgetUnits {
-			// Still over on open-items + handoffs alone: never drop the
-			// actionable sections — inject as-is and make the overflow visible.
-			// Both are named because either can be the cause: a deep resume
-			// stack (un-consolidated parallel positions) overflows as readily
-			// as an ungroomed open-set, and misattributing it sends the human
-			// to the wrong list.
-			detail += " — STILL over budget on actionable sections alone; the open-set or the resume stack needs grooming (open-items and handoff positions are never dropped)"
+			// Still over after every rung: never drop the actionable sections —
+			// inject as-is and make the overflow visible. The split is reported,
+			// not guessed: the digest (an ungroomed open-set, or a deep resume
+			// stack of un-consolidated parallel positions) overflows as readily
+			// as the fixed blocks (an oversized CHARTER), and misattributing it
+			// sends the human to the wrong place.
+			digestUnits := utf16Units(current)
+			detail += fmt.Sprintf(" — STILL over budget after every rung: the digest (open-items, handoffs) is %d units, the rest of the payload (CHARTER, protocol, banner, resume point, nudge) %d; groom whichever dominates (open-items and handoff positions are never dropped)", digestUnits, utf16Units(ctx)-digestUnits)
 		}
 		logFailure(hub, EventSessionStart, sessionID, detail)
 	}

@@ -2168,7 +2168,58 @@ func TestSessionStartBudgetStillOverOnActionableSections(t *testing.T) {
 			if !strings.Contains(health, "no decisions to collapse") || strings.Contains(health, "decisions collapsed") || strings.Contains(health, "promote") {
 				t.Errorf("zero-decision overflow must not claim a decision collapse or name promote:\n%s", health)
 			}
+			// The deep resume stack lives in the digest, so the split must put
+			// the larger share there and add up to the injected payload.
+			if digest, rest := stillOverSplit(t, health); digest+rest != utf16Units(ctx) || digest <= rest {
+				t.Errorf("split digest %d + rest %d must equal the payload %d with the digest dominant:\n%s", digest, rest, utf16Units(ctx), health)
+			}
 		})
+	}
+}
+
+// stillOverSplit parses the STILL-over suffix's digest/rest split.
+func stillOverSplit(t *testing.T, health string) (digest, rest int) {
+	t.Helper()
+	m := regexp.MustCompile(`the digest \(open-items, handoffs\) is (\d+) units, the rest of the payload \([^)]*\) (\d+);`).FindStringSubmatch(health)
+	if m == nil {
+		t.Fatalf("STILL-over line carries no digest/rest split:\n%s", health)
+	}
+	digest, _ = strconv.Atoi(m[1])
+	rest, _ = strconv.Atoi(m[2])
+	return digest, rest
+}
+
+// TestSessionStartBudgetStillOverReportsAnOversizedCharter: when a fixed block
+// is the overflow (an oversized CHARTER over a near-empty log), the STILL-over
+// line reports the split, which puts the excess outside the digest, instead of
+// sending the human to groom an open-set or resume stack that is not there.
+func TestSessionStartBudgetStillOverReportsAnOversizedCharter(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+	dir := filepath.Join(hub, "projects", ws.RepoKey)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "CHARTER.md"), []byte("Goal: "+strings.Repeat("charter ", 1500)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := event.NewStore(hub, ws.RepoKey)
+	if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindOpenItem, Area: "sync", Body: "short loop"}); err != nil {
+		t.Fatalf("seed open-item: %v", err)
+	}
+
+	ctx := sessionStartCtx(t, hub, repo)
+
+	if utf16Units(ctx) <= injectionBudgetUnits {
+		t.Fatalf("fixture must stay over budget: %d units", utf16Units(ctx))
+	}
+	health := readHealth(t, hub)
+	if !strings.Contains(health, "STILL over budget") {
+		t.Fatalf("the overflow should be named loudly, got:\n%s", health)
+	}
+	if digest, rest := stillOverSplit(t, health); digest+rest != utf16Units(ctx) || rest <= digest {
+		t.Errorf("split digest %d + rest %d must equal the payload %d with the rest dominant:\n%s", digest, rest, utf16Units(ctx), health)
 	}
 }
 
