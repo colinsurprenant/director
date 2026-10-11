@@ -44,7 +44,7 @@ func Digest(proj Projection, repoKey string) string {
 	return digest(proj, repoKey, len(proj.Decisions), openItemBodyRunes)
 }
 
-// DigestCompact is the hook's FIRST deterministic degradation step: identical
+// DigestCompact is the hook's FIRST deterministic degradation rung: identical
 // to Digest except only the NEWEST decisions survive individually — those whose
 // id is above sinceID (this workstream's resume point — its OLDEST surviving
 // position when parallel sessions left several: anything decided after the
@@ -56,7 +56,9 @@ func Digest(proj Projection, repoKey string) string {
 // it — incident note 01KWW146C7), so they are the last decision content to go.
 // sinceID == "" (a workstream with no handoff yet) keeps the newest
 // recentDecisionsKept outright. Decisions are ULID-ascending, so "above sinceID"
-// is always a trailing suffix and the kept set is always "the newest N".
+// is always a trailing suffix and the kept set is always "the newest N". With
+// nothing unseen (KeptDecisions == 0) every decision collapses to the
+// count-plus-pointer line, which is the all-collapsed digest.
 func DigestCompact(proj Projection, repoKey, sinceID string) string {
 	return digest(proj, repoKey, KeptDecisions(proj, sinceID), openItemBodyRunes)
 }
@@ -64,8 +66,8 @@ func DigestCompact(proj Projection, repoKey, sinceID string) string {
 // KeptDecisions reports how many decisions DigestCompact would keep for
 // sinceID — the count-and-cap in one place, so a caller choosing between
 // degradation rungs (the SessionStart hook) sees exactly what the compact
-// digest will do: 0 means DigestCompact degenerates to DigestCollapsed, and
-// the caller should take (and log) that rung directly.
+// digest will do: 0 means DigestCompact collapses every decision, and the
+// last rung (DigestCollapsedShort) then has no band left to collapse.
 func KeptDecisions(proj Projection, sinceID string) int {
 	kept := 0
 	for _, d := range proj.Decisions {
@@ -79,22 +81,26 @@ func KeptDecisions(proj Projection, sinceID string) int {
 	return kept
 }
 
-// DigestCollapsed is the SECOND degradation step: every decision collapses to
-// the count-plus-pointer line. It exists for the case where even DigestCompact's
-// kept-newest band pushes the SessionStart injection over its byte budget —
-// decisions are the one section whose set is deferrable (rationale, not open
-// loops or the resume stack), and the collapsed line itself tells the model
-// where the elided content lives, so the elision is never silent.
-func DigestCollapsed(proj Projection, repoKey string) string {
-	return digest(proj, repoKey, 0, openItemBodyRunes)
+// DigestCompactShort is the SECOND degradation rung: DigestCompact (same
+// kept-newest band, older decisions collapsed) with every open-item headline
+// additionally capped at openItemCompactRunes. It sits before the band
+// collapses because the unseen decisions are the content a rehydrating
+// session is most likely to be missing, while a shortened open-item headline
+// keeps its ULID, date and escalate tags and its full text is one
+// `director show` away. No open-item is dropped and the handoff lines are not
+// touched. For bodies already within the cap it is byte-identical to
+// DigestCompact, which the hook uses to skip the rung.
+func DigestCompactShort(proj Projection, repoKey, sinceID string) string {
+	return digest(proj, repoKey, KeptDecisions(proj, sinceID), openItemCompactRunes)
 }
 
-// DigestCollapsedShort is the LAST degradation step: DigestCollapsed with every
-// open-item headline additionally capped at openItemCompactRunes. It exists for
-// the case where the open-set itself is what overflows once every decision has
-// collapsed. No open-item is dropped (ULID, date tag and escalate tag are
-// untouched) and the handoff lines are not touched at all; only the open-item
-// headline text shortens, its full body one `director show` away.
+// DigestCollapsedShort is the LAST degradation rung: every decision collapses
+// to the count-plus-pointer line (the unseen band too) and every open-item
+// headline is capped at openItemCompactRunes. It exists for the case where
+// even DigestCompactShort leaves the SessionStart injection over its budget.
+// Decisions are the one section whose set is deferrable (rationale, not open
+// loops or the resume stack), and the collapsed line itself tells the model
+// where the elided content lives, so the elision is never silent.
 func DigestCollapsedShort(proj Projection, repoKey string) string {
 	return digest(proj, repoKey, 0, openItemCompactRunes)
 }
@@ -102,9 +108,10 @@ func DigestCollapsedShort(proj Projection, repoKey string) string {
 // digest renders the sections, keeping the newest keepDecisions decisions as
 // individual index lines and collapsing any older remainder to the
 // count-plus-pointer elision line. Digest passes the full count (no elision);
-// DigestCollapsed passes 0 (everything elided); DigestCompact passes the
+// DigestCollapsedShort passes 0 (everything elided); DigestCompact passes the
 // recency-anchored band between them. openRunes caps each open-item headline:
-// every rung but the last passes openItemBodyRunes.
+// Digest and DigestCompact pass openItemBodyRunes, the two Short rungs pass
+// openItemCompactRunes.
 func digest(proj Projection, repoKey string, keepDecisions, openRunes int) string {
 	var b strings.Builder
 
@@ -304,11 +311,12 @@ func oneLine(s string) string {
 //     rationale lives one hop away in `director show`, and its durable home is
 //     the living docs anyway (CHARTER/ADRs), not the log body
 //   - an open-item must carry enough of the loop to act on without a pull;
-//     openItemBodyRunes is the normal cap, openItemCompactRunes the LAST
-//     degradation rung's (DigestCollapsedShort), taken only when the open-set
-//     itself overflows the injection budget. Open-items are never DROPPED on
-//     any rung: the headline shortens and the full text stays one
-//     `director show` away
+//     openItemBodyRunes is the normal cap, openItemCompactRunes the cap of
+//     the two Short degradation rungs (DigestCompactShort,
+//     DigestCollapsedShort), taken only when the payload is still over the
+//     injection budget after the older decisions collapse. Open-items are
+//     never DROPPED on any rung: the headline shortens and the full text
+//     stays one `director show` away
 //   - the handoff is the resume point; cutting it defeats its purpose — and
 //     that holds for EVERY line of a multi-position stack, since the resuming
 //     session must take their union. No rung touches this cap
@@ -324,8 +332,8 @@ const (
 // RUNES — supplementary-plane runes count two units each, so the hard bound is
 // nearer 2× that for emoji-dense bodies). The band therefore re-adds ~2K units
 // typical, ~4K worst case, to an over-budget payload — affordable against the
-// 10,000-unit injection budget because the hook still has DigestCollapsed as
-// the next rung when even that overflows.
+// 10,000-unit injection budget because the hook still has the Short rungs
+// (open-item headlines, then the band itself) when even that overflows.
 const recentDecisionsKept = 10
 
 // headline collapses a body to one line and caps it at max runes, marking a cut

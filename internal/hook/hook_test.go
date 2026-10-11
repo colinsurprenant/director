@@ -1511,10 +1511,11 @@ func sessionEndInput(cwd, reason string) string {
 // TestSessionStartBudgetDegradesDeterministically locks the §15.5 self-measure:
 // a log whose line-capped digest pushes the payload over the injection budget
 // degrades down the ladder's FIRST rung — older decisions collapse to a
-// count+pointer line, the newest survive as index lines, open-items and
-// handoffs survive untouched — and the overflow lands in health/ as a grooming
-// signal. The harness's own demotion threshold must never be the first thing
-// that notices growth.
+// count+pointer line, the newest survive as index lines, open-items (at their
+// full headline length: the shortening rungs must NOT fire when the band
+// fits) and handoffs survive untouched — and the overflow lands in health/ as
+// a grooming signal. The harness's own demotion threshold must never be the
+// first thing that notices growth.
 func TestSessionStartBudgetDegradesDeterministically(t *testing.T) {
 	hub := t.TempDir()
 	repo := gitRepo(t, "widget", "main")
@@ -1536,7 +1537,8 @@ func TestSessionStartBudgetDegradesDeterministically(t *testing.T) {
 	if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindDecision, Area: "hooks", Body: "the sibling course correction must survive"}); err != nil {
 		t.Fatalf("seed post-handoff decision: %v", err)
 	}
-	if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindOpenItem, Area: "sync", Body: "the open loop must survive degradation"}); err != nil {
+	openBody := "the open loop must survive degradation: " + strings.Repeat("keep ", 40) // 240 chars: whole at the normal cap, cut at the compact one
+	if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindOpenItem, Area: "sync", Body: openBody}); err != nil {
 		t.Fatalf("seed open-item: %v", err)
 	}
 
@@ -1556,8 +1558,8 @@ func TestSessionStartBudgetDegradesDeterministically(t *testing.T) {
 	if strings.Contains(ctx, "rationale rationale") {
 		t.Errorf("elided injection must not carry pre-handoff decision bodies")
 	}
-	if !strings.Contains(ctx, "the open loop must survive degradation") {
-		t.Errorf("degradation must never eat the open-set:\n%.2000s", ctx)
+	if !strings.Contains(ctx, strings.TrimSpace(openBody)) {
+		t.Errorf("rung 1 must keep the open-set at its full headline length:\n%.2000s", ctx)
 	}
 	if utf16Units(ctx) > injectionBudgetUnits {
 		t.Errorf("degraded payload still over budget: %d units > %d", utf16Units(ctx), injectionBudgetUnits)
@@ -1566,20 +1568,23 @@ func TestSessionStartBudgetDegradesDeterministically(t *testing.T) {
 	if !strings.Contains(health, "older decisions collapsed to count+pointer, newest 1 kept") {
 		t.Errorf("budget overflow should be health-logged naming the first rung with its kept count, got:\n%s", health)
 	}
-	// Pin WHICH rung ran: the kept-newest band must suffice here — rung 2 (ALL
-	// collapsed) or the last-resort "actionable sections alone are over"
-	// sentinel firing would mean the fixture (or the ladder) is not what this
-	// test believes.
-	if strings.Contains(health, "ALL decisions collapsed") || strings.Contains(health, "STILL over budget") {
-		t.Errorf("fixture should land on the first rung only:\n%s", health)
+	// Pin WHICH rung ran: the kept-newest band must suffice here — the
+	// open-item shortening, the unseen-band collapse or the last-resort
+	// "actionable sections alone are over" sentinel firing would mean the
+	// fixture (or the ladder) is not what this test believes.
+	for _, bad := range []string{"ALL decisions collapsed", "open-item headlines shortened", "unseen decisions collapsed too", "STILL over budget"} {
+		if strings.Contains(health, bad) {
+			t.Errorf("fixture should land on the first rung only, found %q:\n%s", bad, health)
+		}
 	}
 }
 
 // TestSessionStartBudgetSkipsEmptyKeptBand: when the workstream's latest
 // handoff postdates every decision (the common shape — the handoff comes last),
-// rung 1 would keep nothing and degenerate byte-for-byte to the full collapse.
-// The hook must take (and health-log) rung 2 directly — never claim a kept
-// band that is empty (Copilot review on PR #21).
+// rung 1 would keep nothing and degenerate byte-for-byte to the all-collapsed
+// digest. The hook must health-log it as the all-collapse — never claim a kept
+// band that is empty (Copilot review on PR #21) — and, with no open-items to
+// shorten, take no further rung.
 func TestSessionStartBudgetSkipsEmptyKeptBand(t *testing.T) {
 	hub := t.TempDir()
 	repo := gitRepo(t, "widget", "main")
@@ -1613,10 +1618,16 @@ func TestSessionStartBudgetSkipsEmptyKeptBand(t *testing.T) {
 	}
 	health := readHealth(t, hub)
 	if !strings.Contains(health, "ALL decisions collapsed to count+pointer") {
-		t.Errorf("empty kept band should be health-logged as rung 2, got:\n%s", health)
+		t.Errorf("empty kept band should be health-logged as the all-collapse, got:\n%s", health)
 	}
 	if strings.Contains(health, "kept") {
 		t.Errorf("health must not claim a kept band when nothing was kept:\n%s", health)
+	}
+	// No open-item to shorten and no band left to collapse: nothing further runs.
+	for _, bad := range []string{"open-item headlines shortened", "unseen decisions collapsed too", "STILL over budget"} {
+		if strings.Contains(health, bad) {
+			t.Errorf("the all-collapse alone fits here, found %q:\n%s", bad, health)
+		}
 	}
 }
 
@@ -1700,144 +1711,53 @@ func TestSessionStartBudgetCountsUnitsNotBytes(t *testing.T) {
 	}
 }
 
-// TestSessionStartBudgetCollapsesAllWhenKeptBandOverflows locks the ladder's
-// SECOND rung: when even the kept-newest band leaves the payload over budget,
-// every decision collapses to the count+pointer line, the open-items keep
-// their full headlines (the last rung must NOT fire while this one fits), and
-// the actionable sections are still never dropped.
-func TestSessionStartBudgetCollapsesAllWhenKeptBandOverflows(t *testing.T) {
-	hub := t.TempDir()
-	repo := gitRepo(t, "widget", "main")
-	ws := mustResolve(t, repo)
-
-	store := event.NewStore(hub, ws.RepoKey)
-	// Bulk the ACTIONABLE section close to the budget so rung 1's ~2K-unit kept
-	// band (10 × ~200-unit decision index lines) still overflows while rung 2
-	// fits: 19
-	// open-items × ~332-unit lines ≈ 6.3K units of open-set + ~3.5K units of
-	// fixed blocks, against the 10,000-unit budget. Measured at the protocol
-	// trim (emitProtocol 4,197 → 2,512 units): rung-2 payload 9,857 units, so
-	// 143 units of headroom; the next fixed-block sentence trips this test,
-	// which is the intended tripwire. One more open-item (20) lands at 10,189
-	// units and on the open-item-shortening rung instead, which the test pins
-	// as absent. (The fixture is ASCII, so units == bytes here.) The payload
-	// also carries the temp repo key (digest title), so it moves ~1 unit per
-	// TMPDIR character: the measurement above is for a 49-character macOS
-	// TMPDIR (/var/folders/xx/.../T/), and a TMPDIR 143+ characters longer
-	// needs the count lowered.
-	//
-	// If this test starts failing with "open-item headlines shortened" or
-	// "STILL over budget" after a fixed block (emitProtocol, preamble, banner)
-	// grows, the FIXTURE has drifted out of its window — re-tune the open-item
-	// count downward; don't suspect the ladder. (Historical windows, for
-	// reference: 16,384-BYTE budget era of 2026-08-26 took 36 open-items, rung
-	// 2 ≈ 15,970B; 2026-07-15 took 38; 2026-09-28 took 16, then 14 once the
-	// ride-along emit rule grew emitProtocol; the 2026-10 protocol trim took it to 19.)
-	openBody := strings.Repeat("open loop ", 29) // ~290 chars, under the 300-rune cap
-	for i := 0; i < 19; i++ {
-		if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindOpenItem, Area: "sync", Body: openBody}); err != nil {
-			t.Fatalf("seed open-item %d: %v", i, err)
-		}
-	}
-	body := strings.Repeat("rationale ", 30)
-	for i := 0; i < 25; i++ { // all newer than any handoff → all candidates for the kept band
-		if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindDecision, Area: "hooks", Body: body}); err != nil {
-			t.Fatalf("seed decision %d: %v", i, err)
-		}
-	}
-
-	in := `{"session_id":"s-real","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
-	var out bytes.Buffer
-	if code := Dispatch(EventSessionStart, strings.NewReader(in), &out, hub); code != 0 {
-		t.Fatalf("exit code = %d, want 0", code)
-	}
-	ctx := injectedContext(t, out.String())
-
-	if !strings.Contains(ctx, "25 active decisions elided for size") {
-		t.Errorf("rung 2 should collapse ALL decisions with the count:\n%.2000s", ctx)
-	}
-	if strings.Contains(ctx, "rationale rationale") {
-		t.Errorf("rung 2 must not carry any decision bodies")
-	}
-	if !strings.Contains(ctx, "open loop open loop") {
-		t.Errorf("degradation must never eat the open-set:\n%.2000s", ctx)
-	}
-	if utf16Units(ctx) > injectionBudgetUnits {
-		t.Errorf("rung-2 payload still over budget: %d units > %d", utf16Units(ctx), injectionBudgetUnits)
-	}
-	health := readHealth(t, hub)
-	if !strings.Contains(health, "ALL decisions collapsed to count+pointer") {
-		t.Errorf("rung 2 should be health-logged by name, got:\n%s", health)
-	}
-	if strings.Contains(health, "STILL over budget") || strings.Contains(health, "open-item headlines shortened") {
-		t.Errorf("fixture should fit once all decisions collapse, before any open-item shortens:\n%s", health)
-	}
-}
-
-// sessionStartCtx dispatches a startup SessionStart for repo and returns the
-// injected context.
-func sessionStartCtx(t *testing.T, hub, repo string) string {
+// healthUnitSteps pulls the unit accounting out of an over-budget health
+// line: the full payload size and each rung's "(before → after units)".
+func healthUnitSteps(t *testing.T, health string) (full int, steps [][2]int) {
 	t.Helper()
-	in := `{"session_id":"s-real","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
-	var out bytes.Buffer
-	if code := Dispatch(EventSessionStart, strings.NewReader(in), &out, hub); code != 0 {
-		t.Fatalf("exit code = %d, want 0", code)
+	m := regexp.MustCompile(`full payload (\d+) units`).FindStringSubmatch(health)
+	if m == nil {
+		t.Fatalf("health line carries no full payload size:\n%s", health)
 	}
-	return injectedContext(t, out.String())
+	full, _ = strconv.Atoi(m[1])
+	for _, sm := range regexp.MustCompile(`\((\d+) → (\d+) units\)`).FindAllStringSubmatch(health, -1) {
+		b, _ := strconv.Atoi(sm[1])
+		a, _ := strconv.Atoi(sm[2])
+		steps = append(steps, [2]int{b, a})
+	}
+	return full, steps
 }
 
-// TestSessionStartBudgetShortensOpenItemsOnLastRung locks the ladder's LAST
-// rung: when the payload is still over budget after every decision collapses,
-// the open-set itself is what overflows, so every open-item headline shortens
-// to openItemCompactRunes (160) plus the cut marker. Nothing is dropped: every
-// ULID, the date tag and the escalate tag survive, the handoff keeps its full
-// headline, and the rung is health-logged by name with the before/after units.
-func TestSessionStartBudgetShortensOpenItemsOnLastRung(t *testing.T) {
-	hub := t.TempDir()
-	repo := gitRepo(t, "widget", "main")
-	ws := mustResolve(t, repo)
+// checkUnitChain asserts the health accounting is truthful: the first rung
+// starts at the full payload, each rung starts where the previous one ended,
+// every rung but the last ended still over budget (else the ladder would have
+// stopped), and the last ended at the payload actually injected.
+func checkUnitChain(t *testing.T, health, ctx string, wantRungs int) {
+	t.Helper()
+	full, steps := healthUnitSteps(t, health)
+	if len(steps) != wantRungs {
+		t.Fatalf("health names %d rungs with units, want %d:\n%s", len(steps), wantRungs, health)
+	}
+	prev := full
+	for i, st := range steps {
+		if st[0] != prev {
+			t.Errorf("rung %d starts at %d units, want the previous rung's %d:\n%s", i+1, st[0], prev, health)
+		}
+		if i < len(steps)-1 && st[1] <= injectionBudgetUnits {
+			t.Errorf("rung %d ended at %d units, within budget, yet another rung ran:\n%s", i+1, st[1], health)
+		}
+		prev = st[1]
+	}
+	if got := utf16Units(ctx); prev != got {
+		t.Errorf("last rung ends at %d units but the payload is %d units:\n%s", prev, got, health)
+	}
+}
 
-	store := event.NewStore(hub, ws.RepoKey)
-	handoffBody := strings.Repeat("handoff ", 50) // 400 chars: under handoffBodyRunes, over the open-item compact cap
-	if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindHandoff, Area: "hooks", Body: handoffBody}); err != nil {
-		t.Fatalf("seed handoff: %v", err)
-	}
-	// 24 open-items × ~332 units ≈ 8K units of open-set on top of ~3.7K of
-	// fixed blocks and the handoff: over the 10,000-unit budget with every
-	// decision collapsed (12,181 measured), under it once the headlines
-	// shorten (9,085 measured, 915 units of headroom). The fixture is ASCII,
-	// so units == bytes; the payload moves ~1 unit per TMPDIR character
-	// (measured with a 49-character macOS TMPDIR).
-	openBody := strings.Repeat("open loop ", 29) // 290 chars: under the 300-rune normal cap
-	var ids []string
-	var escalateID string
-	for i := 0; i < 24; i++ {
-		p := event.EmitParams{Type: event.KindOpenItem, Area: "sync", Body: openBody}
-		if i == 5 {
-			p.Risk = event.RiskEscalate
-		}
-		ev, err := event.Emit(store, ws.ID, p)
-		if err != nil {
-			t.Fatalf("seed open-item %d: %v", i, err)
-		}
-		ids = append(ids, ev.ID)
-		if i == 5 {
-			escalateID = ev.ID
-		}
-	}
-	// Decisions newer than the handoff make rung 1 non-empty, so the ladder
-	// really walks 1 → 2 → 3.
-	for i := 0; i < 25; i++ {
-		if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindDecision, Area: "hooks", Body: strings.Repeat("rationale ", 30)}); err != nil {
-			t.Fatalf("seed decision %d: %v", i, err)
-		}
-	}
-
-	ctx := sessionStartCtx(t, hub, repo)
-
-	if u := utf16Units(ctx); u > injectionBudgetUnits {
-		t.Errorf("last-rung payload still over budget: %d units > %d", u, injectionBudgetUnits)
-	}
+// checkOpenItemsShortened asserts every id is still listed in ctx with its
+// date tag, its headline cut to at most 160 runes plus the cut marker, and the
+// escalate tag exactly where it belongs.
+func checkOpenItemsShortened(t *testing.T, ctx string, ids []string, escalateID string) {
+	t.Helper()
 	lines := strings.Split(ctx, "\n")
 	tagRE := regexp.MustCompile(`^\(\d{4}-\d{2}-\d{2}\) (\[risk:escalate\] )?`)
 	for _, id := range ids {
@@ -1848,7 +1768,7 @@ func TestSessionStartBudgetShortensOpenItemsOnLastRung(t *testing.T) {
 			}
 		}
 		if line == "" {
-			t.Errorf("open-item %s dropped from the last-rung payload", id)
+			t.Errorf("open-item %s dropped from the payload", id)
 			continue
 		}
 		tags := tagRE.FindStringSubmatch(strings.TrimPrefix(line, "- "+id+" "))
@@ -1867,30 +1787,275 @@ func TestSessionStartBudgetShortensOpenItemsOnLastRung(t *testing.T) {
 			t.Errorf("open-item %s escalate tag = %t, want %t:\n%s", id, tags[1] != "", wantEsc, line)
 		}
 	}
-	if !strings.Contains(ctx, strings.TrimSpace(handoffBody)) {
-		t.Errorf("handoff headline must be untouched by the last rung:\n%.2000s", ctx)
+}
+
+// TestSessionStartBudgetShortensOpenItemsBeforeCollapsingBand locks the
+// ladder's SECOND rung, and with it the order of sacrifice: when collapsing
+// the older decisions leaves the payload over budget, open-item headlines
+// shorten to 160 runes while the band of decisions the session has not seen
+// STAYS visible. Collapsing the unseen band (rung 3) must not run while a
+// shortening is enough.
+func TestSessionStartBudgetShortensOpenItemsBeforeCollapsingBand(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+
+	store := event.NewStore(hub, ws.RepoKey)
+	// 21 open-items × ~332 units ≈ 7K units of open-set on top of ~3.5K of
+	// fixed blocks and the 3-line unseen band: over the 10,000-unit budget at
+	// rung 1 (11,097 measured), under it once the headlines shorten at rung 2
+	// (8,388 measured, 1,612 units of headroom). The fixture is ASCII, so
+	// units == bytes; the payload moves ~1 unit per TMPDIR character (measured
+	// with a 49-character macOS TMPDIR).
+	openBody := strings.Repeat("open loop ", 29) // 290 chars: whole at the normal cap, cut at the compact one
+	var ids []string
+	for i := 0; i < 21; i++ {
+		ev, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindOpenItem, Area: "sync", Body: openBody})
+		if err != nil {
+			t.Fatalf("seed open-item %d: %v", i, err)
+		}
+		ids = append(ids, ev.ID)
 	}
-	if !strings.Contains(ctx, "25 active decisions elided for size") {
-		t.Errorf("the last rung keeps every decision collapsed:\n%.2000s", ctx)
+	for i := 0; i < 20; i++ { // older than the handoff: collapse at rung 1
+		if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindDecision, Area: "hooks", Body: strings.Repeat("rationale ", 30)}); err != nil {
+			t.Fatalf("seed older decision %d: %v", i, err)
+		}
+	}
+	if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindHandoff, Area: "hooks", Body: "resume point"}); err != nil {
+		t.Fatalf("seed handoff: %v", err)
+	}
+	unseen := []string{
+		"unseen decision one: a sibling reversed the splash deferral",
+		"unseen decision two: the store keeps NDJSON append-only",
+		"unseen decision three: promote waits for the human",
+	}
+	for _, body := range unseen { // newer than the handoff: the band a rehydrating session is missing
+		if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindDecision, Area: "hooks", Body: body}); err != nil {
+			t.Fatalf("seed unseen decision: %v", err)
+		}
+	}
+
+	ctx := sessionStartCtx(t, hub, repo)
+
+	if u := utf16Units(ctx); u > injectionBudgetUnits {
+		t.Errorf("payload still over budget after rung 2: %d units > %d", u, injectionBudgetUnits)
+	}
+	if !strings.Contains(ctx, "(20 older decision(s) elided for size — the newest 3 follow") {
+		t.Errorf("only the 20 older decisions should collapse:\n%.2500s", ctx)
+	}
+	for _, body := range unseen {
+		if !strings.Contains(ctx, body) {
+			t.Errorf("unseen decision headline must stay visible while shortening suffices: %q\n%.2500s", body, ctx)
+		}
+	}
+	checkOpenItemsShortened(t, ctx, ids, "")
+
+	health := readHealth(t, hub)
+	if !strings.Contains(health, "older decisions collapsed to count+pointer, newest 3 kept") || !strings.Contains(health, "then open-item headlines shortened") {
+		t.Errorf("rungs 1 and 2 should be health-logged by name, got:\n%s", health)
+	}
+	for _, bad := range []string{"unseen decisions collapsed too", "STILL over budget"} {
+		if strings.Contains(health, bad) {
+			t.Errorf("shortening should suffice, found %q:\n%s", bad, health)
+		}
+	}
+	checkUnitChain(t, health, ctx, 2)
+}
+
+// sessionStartCtx dispatches a startup SessionStart for repo and returns the
+// injected context.
+func sessionStartCtx(t *testing.T, hub, repo string) string {
+	t.Helper()
+	in := `{"session_id":"s-real","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
+	var out bytes.Buffer
+	if code := Dispatch(EventSessionStart, strings.NewReader(in), &out, hub); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	return injectedContext(t, out.String())
+}
+
+// TestSessionStartBudgetCollapsesUnseenBandOnLastRung locks the ladder's LAST
+// rung: when the band is still shown and the open-items are already shortened
+// but the payload is over budget, the unseen band collapses too. The whole
+// ladder runs in order and is health-logged rung by rung with truthful
+// before/after units. Nothing is dropped: every ULID, the date and escalate
+// tags and the handoff headline survive, and only the decisions disappear
+// into the count+pointer line.
+func TestSessionStartBudgetCollapsesUnseenBandOnLastRung(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+
+	store := event.NewStore(hub, ws.RepoKey)
+	handoffBody := strings.Repeat("handoff ", 50) // 400 chars: under handoffBodyRunes, over the open-item compact cap
+	if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindHandoff, Area: "hooks", Body: handoffBody}); err != nil {
+		t.Fatalf("seed handoff: %v", err)
+	}
+	// 24 open-items × ~332 units ≈ 8K units of open-set on top of ~3.7K of
+	// fixed blocks and the handoff, plus the 10-line unseen band (~2K): over
+	// the 10,000-unit budget at rung 1 (14,191 measured) and still at rung 2
+	// (11,095 measured, headlines shortened, band shown), under it once the
+	// band collapses too at rung 3 (9,087 measured, 913 units of headroom).
+	// The fixture is ASCII, so units == bytes; the payload moves ~1 unit per
+	// TMPDIR character (measured with a 49-character macOS TMPDIR).
+	openBody := strings.Repeat("open loop ", 29) // 290 chars: under the 300-rune normal cap
+	var ids []string
+	var escalateID string
+	for i := 0; i < 24; i++ {
+		p := event.EmitParams{Type: event.KindOpenItem, Area: "sync", Body: openBody}
+		if i == 5 {
+			p.Risk = event.RiskEscalate
+		}
+		ev, err := event.Emit(store, ws.ID, p)
+		if err != nil {
+			t.Fatalf("seed open-item %d: %v", i, err)
+		}
+		ids = append(ids, ev.ID)
+		if i == 5 {
+			escalateID = ev.ID
+		}
+	}
+	// 25 decisions newer than the handoff: the band is full (10 kept), so the
+	// ladder really walks 1 → 2 → 3.
+	for i := 0; i < 25; i++ {
+		if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindDecision, Area: "hooks", Body: strings.Repeat("rationale ", 30)}); err != nil {
+			t.Fatalf("seed decision %d: %v", i, err)
+		}
+	}
+
+	ctx := sessionStartCtx(t, hub, repo)
+
+	if u := utf16Units(ctx); u > injectionBudgetUnits {
+		t.Errorf("last-rung payload still over budget: %d units > %d", u, injectionBudgetUnits)
+	}
+	checkOpenItemsShortened(t, ctx, ids, escalateID)
+	if !strings.Contains(ctx, strings.TrimSpace(handoffBody)) {
+		t.Errorf("handoff headline must be untouched by every rung:\n%.2000s", ctx)
+	}
+	if !strings.Contains(ctx, "25 active decisions elided for size") || strings.Contains(ctx, "rationale rationale") {
+		t.Errorf("the last rung collapses every decision, the unseen band included:\n%.2000s", ctx)
 	}
 
 	health := readHealth(t, hub)
-	m := regexp.MustCompile(`collapsed to count\+pointer \((\d+) units\), still over: open-item headlines shortened.*\(now (\d+) units\)`).FindStringSubmatch(health)
-	if m == nil {
-		t.Fatalf("last rung should be health-logged by name with before/after units, got:\n%s", health)
-	}
-	before, _ := strconv.Atoi(m[1])
-	after, _ := strconv.Atoi(m[2])
-	if before <= injectionBudgetUnits || after > injectionBudgetUnits || after != utf16Units(ctx) {
-		t.Errorf("health units before=%d after=%d inconsistent with budget %d and the payload (%d units)", before, after, injectionBudgetUnits, utf16Units(ctx))
+	i1 := strings.Index(health, "older decisions collapsed to count+pointer, newest 10 kept")
+	i2 := strings.Index(health, "then open-item headlines shortened")
+	i3 := strings.Index(health, "then unseen decisions collapsed too")
+	if i1 < 0 || i2 < i1 || i3 < i2 {
+		t.Fatalf("all three rungs should be health-logged by name, in order, got:\n%s", health)
 	}
 	if strings.Contains(health, "STILL over budget") {
-		t.Errorf("fixture should fit once the headlines shorten:\n%s", health)
+		t.Errorf("fixture should fit once the band collapses:\n%s", health)
 	}
+	checkUnitChain(t, health, ctx, 3)
 }
 
-// TestSessionStartUnderBudgetKeepsFullOpenItemHeadlines: the last rung must
-// not leak into the normal path. An under-budget payload carries the digest
+// TestSessionStartBudgetSkipsShorteningWhenOpenItemsAlreadyShort: the
+// shortening rung is skipped when it would change nothing. With every
+// open-item already under the compact cap, a payload still over budget after
+// rung 1 goes straight to collapsing the unseen band, and the health line
+// never names a shortening that did not happen.
+func TestSessionStartBudgetSkipsShorteningWhenOpenItemsAlreadyShort(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+
+	store := event.NewStore(hub, ws.RepoKey)
+	if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindHandoff, Area: "hooks", Body: "resume point"}); err != nil {
+		t.Fatalf("seed handoff: %v", err)
+	}
+	// 100 short open-items × ~53 units ≈ 5.3K units of open-set on top of
+	// ~3.5K of fixed blocks and the 10-line unseen band (~2K): over the
+	// 10,000-unit budget at rung 1 (11,132 measured), under it once the band
+	// collapses at rung 3 (9,124 measured, 876 units of headroom). The fixture
+	// is ASCII, so units == bytes; the payload moves ~1 unit per TMPDIR
+	// character (measured with a 49-character macOS TMPDIR).
+	for i := 0; i < 100; i++ {
+		if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindOpenItem, Area: "sync", Body: "short loop"}); err != nil {
+			t.Fatalf("seed open-item %d: %v", i, err)
+		}
+	}
+	for i := 0; i < 25; i++ {
+		if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindDecision, Area: "hooks", Body: strings.Repeat("rationale ", 30)}); err != nil {
+			t.Fatalf("seed decision %d: %v", i, err)
+		}
+	}
+
+	ctx := sessionStartCtx(t, hub, repo)
+
+	if u := utf16Units(ctx); u > injectionBudgetUnits {
+		t.Errorf("payload still over budget: %d units > %d", u, injectionBudgetUnits)
+	}
+	if !strings.Contains(ctx, "25 active decisions elided for size") {
+		t.Errorf("the unseen band should have collapsed:\n%.2000s", ctx)
+	}
+	if n := strings.Count(ctx, "short loop"); n != 100 {
+		t.Errorf("all 100 open-items must survive untouched, found %d", n)
+	}
+	health := readHealth(t, hub)
+	if !strings.Contains(health, "older decisions collapsed to count+pointer, newest 10 kept") || !strings.Contains(health, "then unseen decisions collapsed too") {
+		t.Errorf("rungs 1 and 3 should be health-logged by name, got:\n%s", health)
+	}
+	for _, bad := range []string{"open-item headlines shortened", "STILL over budget"} {
+		if strings.Contains(health, bad) {
+			t.Errorf("rung 2 changes nothing here and must not be named; found %q:\n%s", bad, health)
+		}
+	}
+	checkUnitChain(t, health, ctx, 2)
+}
+
+// TestSessionStartBudgetSkipsCollapseWhenEveryDecisionIsUnseen: with no
+// handoff to anchor on and fewer decisions than the kept-band cap, every
+// decision is "unseen" and rung 1 would change nothing. It must be skipped
+// (not logged as "older decisions collapsed"), and the shortening rung takes
+// the overflow with every decision headline still visible.
+func TestSessionStartBudgetSkipsCollapseWhenEveryDecisionIsUnseen(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+
+	store := event.NewStore(hub, ws.RepoKey)
+	var ids []string
+	for i := 0; i < 21; i++ { // ~11.5K units with the 5 decisions: over budget until the headlines shorten
+		ev, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindOpenItem, Area: "sync", Body: strings.Repeat("open loop ", 29)})
+		if err != nil {
+			t.Fatalf("seed open-item %d: %v", i, err)
+		}
+		ids = append(ids, ev.ID)
+	}
+	for i := 0; i < 5; i++ {
+		if _, err := event.Emit(store, ws.ID, event.EmitParams{Type: event.KindDecision, Area: "hooks", Body: "unseen decision " + strconv.Itoa(i)}); err != nil {
+			t.Fatalf("seed decision %d: %v", i, err)
+		}
+	}
+
+	ctx := sessionStartCtx(t, hub, repo)
+
+	if u := utf16Units(ctx); u > injectionBudgetUnits {
+		t.Errorf("payload still over budget: %d units > %d", u, injectionBudgetUnits)
+	}
+	for i := 0; i < 5; i++ {
+		if !strings.Contains(ctx, "unseen decision "+strconv.Itoa(i)) {
+			t.Errorf("decision %d must stay visible:\n%.2000s", i, ctx)
+		}
+	}
+	if strings.Contains(ctx, "elided for size") {
+		t.Errorf("no decision should have collapsed:\n%.2000s", ctx)
+	}
+	checkOpenItemsShortened(t, ctx, ids, "")
+	health := readHealth(t, hub)
+	if !strings.Contains(health, "open-item headlines shortened") {
+		t.Errorf("the shortening rung should be health-logged, got:\n%s", health)
+	}
+	for _, bad := range []string{"decisions collapsed", "STILL over budget"} {
+		if strings.Contains(health, bad) {
+			t.Errorf("rung 1 changes nothing here and must not be named; found %q:\n%s", bad, health)
+		}
+	}
+	checkUnitChain(t, health, ctx, 1)
+}
+
+// TestSessionStartUnderBudgetKeepsFullOpenItemHeadlines: the shortening
+// rungs must not leak into the normal path. An under-budget payload carries the digest
 // byte-for-byte (open-item headlines at the normal 300-rune cap) and logs no
 // budget rung.
 func TestSessionStartUnderBudgetKeepsFullOpenItemHeadlines(t *testing.T) {
@@ -1927,12 +2092,13 @@ func TestSessionStartUnderBudgetKeepsFullOpenItemHeadlines(t *testing.T) {
 }
 
 // TestSessionStartBudgetStillOverOnActionableSections: when the resume stack
-// alone overflows, nothing is dropped and the overflow is named loudly. The
-// last rung is logged only when it actually shortened something: with
-// open-items already under the compact cap it would be byte-identical to the
-// previous rung, and claiming it ran would misname the diagnostic. For the
-// same reason, with no active decisions the detail says there were none to
-// collapse (and does not point at promote) rather than claiming a collapse.
+// alone overflows, nothing is dropped and the overflow is named loudly. With
+// no active decisions the only rung that can change the digest is the
+// open-item shortening, and it is logged only when it actually shortened
+// something: with open-items already under the compact cap it would be
+// byte-identical to the unshortened digest, and claiming it ran would misname
+// the diagnostic. For the same reason the detail says there were no decisions
+// to collapse (and does not point at promote) rather than claiming a collapse.
 func TestSessionStartBudgetStillOverOnActionableSections(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -1940,7 +2106,7 @@ func TestSessionStartBudgetStillOverOnActionableSections(t *testing.T) {
 		wantShorten bool
 	}{
 		{"long open-items shorten, still over", strings.Repeat("open loop ", 29), true},
-		{"short open-items: rung skipped, still over", "short loop", false},
+		{"short open-items: shortening skipped, still over", "short loop", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1985,8 +2151,16 @@ func TestSessionStartBudgetStillOverOnActionableSections(t *testing.T) {
 				t.Errorf("the overflow should be named loudly, got:\n%s", health)
 			}
 			if got := strings.Contains(health, "open-item headlines shortened"); got != c.wantShorten {
-				t.Errorf("last rung logged = %t, want %t:\n%s", got, c.wantShorten, health)
+				t.Errorf("shortening rung logged = %t, want %t:\n%s", got, c.wantShorten, health)
 			}
+			if strings.Contains(health, "unseen decisions collapsed too") {
+				t.Errorf("with no decisions the band rung has nothing to collapse:\n%s", health)
+			}
+			wantRungs := 0
+			if c.wantShorten {
+				wantRungs = 1
+			}
+			checkUnitChain(t, health, ctx, wantRungs)
 			// No active decisions: the digest is already the collapsed one, so
 			// the detail must not claim a decision collapse nor point at promote
 			// when the open-set or the resume stack is the whole problem.
@@ -2156,7 +2330,7 @@ func TestSessionStartBudgetAnchorsOnOldestPosition(t *testing.T) {
 
 	// Anchored on the OLDEST position, the between-positions decision is
 	// post-anchor news and survives rung 1. Anchored on the newest, the kept
-	// band would be empty and the hook would drop to rung 2 instead.
+	// band would be empty and rung 1 would be the all-collapse instead.
 	if !strings.Contains(ctx, "decision between the two positions must survive") {
 		t.Errorf("rung 1 must anchor on the OLDEST un-consolidated position:\n%.2000s", ctx)
 	}
@@ -2171,7 +2345,7 @@ func TestSessionStartBudgetAnchorsOnOldestPosition(t *testing.T) {
 		t.Errorf("budget overflow should be health-logged naming the first rung with its kept count, got:\n%s", health)
 	}
 	if strings.Contains(health, "ALL decisions collapsed") {
-		t.Errorf("anchoring on the newest position (empty kept band) would land on rung 2:\n%s", health)
+		t.Errorf("anchoring on the newest position (empty kept band) would log the all-collapse:\n%s", health)
 	}
 }
 

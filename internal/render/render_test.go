@@ -211,15 +211,27 @@ func TestDigestLineCaps(t *testing.T) {
 	}
 }
 
-// TestDigestCollapsed locks the SECOND degradation rung: identical to the full
-// digest except every decision collapses to one count-plus-pointer line, and the
-// actionable sections (open-items, handoffs) are untouched.
-func TestDigestCollapsed(t *testing.T) {
+// allCollapsed is the full-length all-collapsed digest: every decision elided,
+// open-item headlines at the normal cap. The hook reaches it through
+// DigestCompact when no decision is unseen, so it has no public entry point of
+// its own; tests use it as the reference rendering the Short rungs derive from.
+func allCollapsed(proj Projection, repoKey string) string {
+	return digest(proj, repoKey, 0, openItemBodyRunes)
+}
+
+// TestDigestCompactWithNothingUnseenCollapsesAll: an anchor above every
+// decision keeps nothing, so DigestCompact is the all-collapsed digest: every
+// decision becomes one count-plus-pointer line and the actionable sections
+// (open-items, handoffs) are untouched.
+func TestDigestCompactWithNothingUnseenCollapsesAll(t *testing.T) {
 	events, _ := richSet(t)
 	proj := Fold(events)
 	full := Digest(proj, "widget")
-	collapsed := DigestCollapsed(proj, "widget")
+	collapsed := DigestCompact(proj, "widget", mint(t))
 
+	if collapsed != allCollapsed(proj, "widget") {
+		t.Errorf("compact with nothing unseen should be the all-collapsed digest:\n%s", collapsed)
+	}
 	if !strings.Contains(collapsed, "2 active decisions elided for size") {
 		t.Errorf("collapsed digest should announce the elision with the count:\n%s", collapsed)
 	}
@@ -235,18 +247,18 @@ func TestDigestCollapsed(t *testing.T) {
 		t.Errorf("collapsed digest must be byte-identical to the full digest above the decisions section:\n--- full ---\n%s\n--- collapsed ---\n%s", full, collapsed)
 	}
 
-	// No active decisions → nothing to collapse; collapsed == full.
+	// No active decisions → nothing to collapse; compact == full.
 	empty := Fold(nil)
-	if DigestCollapsed(empty, "widget") != Digest(empty, "widget") {
-		t.Errorf("collapsed of a decision-less projection should equal the full digest")
+	if DigestCompact(empty, "widget", mint(t)) != Digest(empty, "widget") {
+		t.Errorf("compact of a decision-less projection should equal the full digest")
 	}
 }
 
-// TestDigestCollapsedShort locks the LAST degradation rung: DigestCollapsed
-// with every open-item headline capped at openItemCompactRunes. Nothing is
-// dropped (every open-item keeps its ULID, date tag and escalate tag), a body
-// already under the compact cap renders byte-identically, and the handoff
-// lines and the decisions section are exactly DigestCollapsed's.
+// TestDigestCollapsedShort locks the LAST degradation rung: the all-collapsed
+// digest with every open-item headline capped at openItemCompactRunes. Nothing
+// is dropped (every open-item keeps its ULID, date tag and escalate tag), a
+// body already under the compact cap renders byte-identically, and the handoff
+// lines and the decisions section are exactly the all-collapsed digest's.
 func TestDigestCollapsedShort(t *testing.T) {
 	longOpen := strings.Repeat("open loop ", 29)  // 290 chars: under openItemBodyRunes, over openItemCompactRunes
 	handoffBody := strings.Repeat("handoff ", 50) // 400 chars: between the compact cap and handoffBodyRunes
@@ -258,7 +270,7 @@ func TestDigestCollapsedShort(t *testing.T) {
 		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindHandoff, Workstream: "ws1", Body: handoffBody},
 		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Area: "hooks", Body: "decision body"},
 	})
-	collapsed := DigestCollapsed(proj, "widget")
+	collapsed := allCollapsed(proj, "widget")
 	short := DigestCollapsedShort(proj, "widget")
 
 	lineOf := func(d, id string) string {
@@ -299,7 +311,7 @@ func TestDigestCollapsedShort(t *testing.T) {
 		t.Errorf("a body under the compact cap must render byte-identically:\n%s", short)
 	}
 
-	// Everything outside the open-item section is DigestCollapsed's, byte for byte.
+	// Everything outside the open-item section is the all-collapsed digest's, byte for byte.
 	tail := func(d string) string { return d[strings.Index(d, "\n## handoffs"):] }
 	if tail(short) != tail(collapsed) {
 		t.Errorf("handoffs and decisions must be untouched by the compact rung:\n--- collapsed ---\n%s\n--- short ---\n%s", collapsed, short)
@@ -323,23 +335,77 @@ func TestDigestCollapsedShort(t *testing.T) {
 	}
 
 	// No open-items → nothing to shorten.
-	if DigestCollapsedShort(Fold(nil), "widget") != DigestCollapsed(Fold(nil), "widget") {
-		t.Errorf("compact rung of an open-item-less projection should equal DigestCollapsed")
+	if DigestCollapsedShort(Fold(nil), "widget") != allCollapsed(Fold(nil), "widget") {
+		t.Errorf("last rung of an open-item-less projection should equal the all-collapsed digest")
 	}
 }
 
-// TestUnderBudgetRungsKeepFullOpenItemHeadlines: only DigestCollapsedShort
-// shortens open-items; Digest, DigestCompact and DigestCollapsed all keep the
-// normal openItemBodyRunes headline, so the under-budget path is unchanged.
+// TestDigestCompactShort locks the MIDDLE degradation rung: DigestCompact's
+// kept-newest band, unchanged, with only the open-item headlines capped at
+// openItemCompactRunes. The unseen decisions stay visible, the handoffs are
+// untouched, a body already under the cap makes the rung a no-op (the hook
+// skips it on that byte-identity), and with nothing unseen it is the last
+// rung's digest.
+func TestDigestCompactShort(t *testing.T) {
+	longOpen := strings.Repeat("open loop ", 29) // 290 chars: over openItemCompactRunes
+	oldID, anchor, newID := mint(t), mint(t), mint(t)
+	events := []event.Event{
+		{ID: oldID, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Area: "hooks", Body: "decision before the anchor"},
+		{ID: anchor, SchemaVersion: event.SchemaVersion, Type: event.KindHandoff, Workstream: "ws1", Body: "ws1 position"},
+		{ID: newID, SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Area: "hooks", Body: "decision after the anchor"},
+		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, TS: "2026-09-30T12:00:00Z", Body: longOpen},
+	}
+	proj := Fold(events)
+	compact := DigestCompact(proj, "widget", anchor)
+	short := DigestCompactShort(proj, "widget", anchor)
+
+	if !strings.Contains(short, "decision after the anchor") || strings.Contains(short, "decision before the anchor") {
+		t.Errorf("the unseen band must stay exactly as DigestCompact renders it:\n%s", short)
+	}
+	if !strings.Contains(short, "(1 older decision(s) elided for size — the newest 1 follow") {
+		t.Errorf("the band's elision line must be unchanged:\n%s", short)
+	}
+	if want := strings.TrimSpace(strings.Repeat("open loop ", 16)) + "…"; strings.Contains(short, strings.TrimSpace(longOpen)) || !strings.Contains(short, want) {
+		t.Errorf("open-item headline should be cut at the compact cap:\n%s", short)
+	}
+	if !strings.Contains(short, "(2026-09-30) ") {
+		t.Errorf("date tag lost:\n%s", short)
+	}
+	// Outside the open-items section the two digests are byte-identical.
+	sections := func(d string) string { return d[strings.Index(d, "\n## handoffs"):] }
+	if sections(short) != sections(compact) {
+		t.Errorf("handoffs and decisions must match DigestCompact:\n--- compact ---\n%s\n--- short ---\n%s", compact, short)
+	}
+
+	// Nothing over the cap → the rung changes nothing.
+	shortOnly := Fold([]event.Event{
+		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Body: "short loop"},
+		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindDecision, Workstream: "ws1", Body: "a decision"},
+	})
+	if DigestCompactShort(shortOnly, "widget", "") != DigestCompact(shortOnly, "widget", "") {
+		t.Errorf("with every open-item under the cap the rung must be byte-identical to DigestCompact")
+	}
+
+	// Nothing unseen → the band is empty, which is the last rung's digest.
+	above := mint(t)
+	if DigestCompactShort(proj, "widget", above) != DigestCollapsedShort(proj, "widget") {
+		t.Errorf("with nothing unseen the middle rung should equal the last rung")
+	}
+}
+
+// TestUnderBudgetRungsKeepFullOpenItemHeadlines: only the two Short rungs
+// shorten open-items; Digest and DigestCompact (with or without an unseen
+// band) keep the normal openItemBodyRunes headline, so the under-budget path
+// and the first degradation rung are unchanged.
 func TestUnderBudgetRungsKeepFullOpenItemHeadlines(t *testing.T) {
 	body := strings.Repeat("open loop ", 29) // 290 chars
 	proj := Fold([]event.Event{
 		{ID: mint(t), SchemaVersion: event.SchemaVersion, Type: event.KindOpenItem, Workstream: "ws1", Status: event.StatusOpen, Body: body},
 	})
 	for name, d := range map[string]string{
-		"Digest":          Digest(proj, "widget"),
-		"DigestCompact":   DigestCompact(proj, "widget", ""),
-		"DigestCollapsed": DigestCollapsed(proj, "widget"),
+		"Digest":                     Digest(proj, "widget"),
+		"DigestCompact":              DigestCompact(proj, "widget", ""),
+		"DigestCompact, none unseen": DigestCompact(proj, "widget", mint(t)),
 	} {
 		if !strings.Contains(d, strings.TrimSpace(body)) || strings.Contains(d, "…") {
 			t.Errorf("%s must keep the full %d-rune open-item headline:\n%s", name, openItemBodyRunes, d)
@@ -383,14 +449,14 @@ func TestDigestCompactKeepsNewestSinceAnchor(t *testing.T) {
 	// An anchor newer than every decision keeps nothing — identical to the
 	// full collapse.
 	newest := mint(t)
-	if DigestCompact(proj, "widget", newest) != DigestCollapsed(proj, "widget") {
+	if DigestCompact(proj, "widget", newest) != allCollapsed(proj, "widget") {
 		t.Errorf("an anchor above every decision should degrade to the full collapse")
 	}
 
 	// The boundary is STRICT: an anchor exactly equal to the newest decision's
 	// own id keeps nothing — "newer" means after the anchor, never at it. A
 	// regression to >= would slip past every other case in this suite.
-	if DigestCompact(proj, "widget", ids.supersedeA) != DigestCollapsed(proj, "widget") {
+	if DigestCompact(proj, "widget", ids.supersedeA) != allCollapsed(proj, "widget") {
 		t.Errorf("an anchor equal to the newest decision id must not keep that decision")
 	}
 

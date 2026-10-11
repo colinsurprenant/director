@@ -139,11 +139,12 @@ func refreshFleet(hub string, ws identity.Workstream, uuid, cwd string) error {
 // the degraded preview path. Budgeting at the measured cap makes the normal
 // case an inline delivery. The cap is still an undocumented, driftable harness
 // behavior, so it must never be load-bearing: over budget, the digest degrades
-// deterministically down the ladder documented on buildGroundTruth (decisions
-// collapse to a count+pointer line; on the last rung open-item headlines
-// shorten; no open loop or resume position is ever dropped) and the overflow
-// is health-logged so growth is loud before the threshold bites. The
-// preamble's DELIVERY CHECK contract remains the backstop of last resort.
+// deterministically down the ladder documented on buildGroundTruth (older
+// decisions collapse to a count+pointer line, then open-item headlines
+// shorten, then the unseen decisions collapse too; no open loop or resume
+// position is ever dropped) and the overflow is health-logged so growth is
+// loud before the threshold bites. The preamble's DELIVERY CHECK contract
+// remains the backstop of last resort.
 //
 // Measured on the DECODED payload — the string the harness counts against its
 // cap. The JSON envelope on the wire runs larger (escaping of <>, quotes, and
@@ -181,16 +182,17 @@ func utf16Units(s string) int {
 // degrades down a deterministic ladder: first DigestCompact (older decisions
 // collapse to a count+pointer line, the newest — anchored to this workstream's
 // OLDEST surviving position, i.e. the ones no prior session of this workstream
-// has seen — survive), then DigestCollapsed (every decision collapses), then
-// DigestCollapsedShort (every open-item headline also shortens; open-items
-// and handoff positions are never dropped, and the full text is one
-// `director show` away). Every rung is deliberately NOT the render output:
-// the divergence is announced in the digest itself and health-logged.
-// sessionID is only for health-logging a nudge/concurrency failure (both
-// fail-open, never blocking the injection); uuid is this session's fleet-row
-// key, used to exclude its own row from the concurrent-session count. flavor
-// switches the protocol/nudge command names to the starting agent's namespace
-// (see commandNamesFor).
+// has seen — survive), then DigestCompactShort (every open-item headline also
+// shortens, the same band still shown), then DigestCollapsedShort (the unseen
+// band collapses too). A rung that would not change the digest is skipped.
+// Open-items and handoff positions are never dropped, and a shortened
+// open-item's full text is one `director show` away. Every rung is
+// deliberately NOT the render output: the divergence is announced in the
+// digest itself and health-logged. sessionID is only for health-logging a
+// nudge/concurrency failure (both fail-open, never blocking the injection);
+// uuid is this session's fleet-row key, used to exclude its own row from the
+// concurrent-session count. flavor switches the protocol/nudge command names
+// to the starting agent's namespace (see commandNamesFor).
 func buildGroundTruth(hub, repoKey, workstreamID, sessionID, uuid, flavor string) (string, error) {
 	store := event.NewStore(hub, repoKey)
 	events, err := store.ReadAll()
@@ -300,11 +302,14 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID, uuid, flavor string
 	if utf16Units(ctx) > injectionBudgetUnits {
 		// Deterministic degradation ladder, loud in health/ at every rung —
 		// over-budget growth is a grooming signal (§15.5 / L2 promotion), not a
-		// silent state. Rung 1 collapses only the OLDER decisions — the ones a
-		// rehydrating session has not seen are the last decision content
-		// sacrificed (a sibling's course correction lives there). Open-items and
-		// handoff positions are never dropped on any rung; the last rung only
-		// shortens open-item headlines.
+		// silent state. The order is the order of sacrifice, cheapest first:
+		//   1. older decisions collapse; the band a rehydrating session has not
+		//      seen stays (a sibling's course correction lives there)
+		//   2. open-item headlines shorten, the same band still shown
+		//   3. only then does the unseen band collapse too
+		// Open-items and handoff positions are never dropped on any rung; the
+		// open-item headline text is the only actionable content that shrinks,
+		// and its full text is one `director show` away.
 		full := utf16Units(ctx)
 		anchor := ""
 		// The OLDEST surviving position anchors the band: with parallel
@@ -315,50 +320,54 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID, uuid, flavor string
 		if stack := proj.ResumeHandoffs[workstreamID]; len(stack) > 0 {
 			anchor = stack[0].ID
 		}
-		// Rung 1 only exists when it keeps something: with 0 post-anchor
-		// decisions DigestCompact degenerates to DigestCollapsed byte-for-byte,
-		// and logging it as "newest kept" would misname the rung on the very
-		// diagnostic surface the tests pin — skip straight to rung 2 instead of
-		// assembling the same digest twice.
-		var detail string
-		kept := render.KeptDecisions(proj, anchor)
-		if kept > 0 {
-			ctx = assemble(render.DigestCompact(proj, repoKey, anchor))
-			detail = fmt.Sprintf("injection budget: full payload %d units > %d — older decisions collapsed to count+pointer, newest %d kept (now %d units); groom the log (resolve/supersede/promote)", full, injectionBudgetUnits, kept, utf16Units(ctx))
+		// With no unseen band (kept == 0) DigestCompact is byte-identical to
+		// the all-collapsed digest, so rung 1 is then the all-collapse and
+		// rung 3 has nothing left to do.
+		groom, steps := "resolve/supersede/promote", []string(nil)
+		if len(proj.Decisions) == 0 {
+			// Nothing to collapse: the full digest already is the collapsed one,
+			// so never claim a collapse or send the human to promote when the
+			// open-set or the resume stack is the whole problem.
+			groom, steps = "resolve/supersede", append(steps, "no decisions to collapse")
 		}
-		if kept == 0 || utf16Units(ctx) > injectionBudgetUnits {
-			// Rung 2: every decision collapses. With zero active decisions there
-			// is nothing to collapse (the digest is byte-identical to the full
-			// one), so the detail must not claim a collapse and send the human to
-			// promote when the open-set or the resume stack is the whole problem.
-			collapsed := render.DigestCollapsed(proj, repoKey)
-			ctx = assemble(collapsed)
-			collapseNote, groom := "ALL decisions collapsed to count+pointer", "resolve/supersede/promote"
-			if len(proj.Decisions) == 0 {
-				collapseNote, groom = "no decisions to collapse", "resolve/supersede"
+		band := "ALL decisions collapsed to count+pointer"
+		if kept := render.KeptDecisions(proj, anchor); kept > 0 {
+			band = fmt.Sprintf("older decisions collapsed to count+pointer, newest %d kept", kept)
+		}
+		current := render.Digest(proj, repoKey)
+		for _, r := range []struct {
+			step   string
+			digest func() string
+		}{
+			{band, func() string { return render.DigestCompact(proj, repoKey, anchor) }},
+			{"open-item headlines shortened (full text via `director show <ulid>`)", func() string { return render.DigestCompactShort(proj, repoKey, anchor) }},
+			{"unseen decisions collapsed too", func() string { return render.DigestCollapsedShort(proj, repoKey) }},
+		} {
+			if utf16Units(ctx) <= injectionBudgetUnits {
+				break
 			}
-			detail = fmt.Sprintf("injection budget: full payload %d units > %d — %s (now %d units); groom the log (%s)", full, injectionBudgetUnits, collapseNote, utf16Units(ctx), groom)
-			if before := utf16Units(ctx); before > injectionBudgetUnits {
-				// Rung 3, the last: the open-set itself overflows, so shorten every
-				// open-item headline. Nothing is dropped: ULID, date and escalate
-				// tags stay, and the full text is one `director show` away. Handoff
-				// positions are not touched. Skipped when no headline is long enough
-				// to shorten: the digest would be byte-identical to rung 2, and
-				// logging it would misname the rung.
-				if short := render.DigestCollapsedShort(proj, repoKey); short != collapsed {
-					ctx = assemble(short)
-					detail = fmt.Sprintf("injection budget: full payload %d units > %d — %s (%d units), still over: open-item headlines shortened (full text via `director show <ulid>`) (now %d units); groom the log (%s)", full, injectionBudgetUnits, collapseNote, before, utf16Units(ctx), groom)
-				}
+			// A rung that would not change the digest is skipped, so the health
+			// line never names a rung that did nothing.
+			d := r.digest()
+			if d == current {
+				continue
 			}
-			if utf16Units(ctx) > injectionBudgetUnits {
-				// Still over on open-items + handoffs alone: never drop the
-				// actionable sections — inject as-is and make the overflow visible.
-				// Both are named because either can be the cause: a deep resume
-				// stack (un-consolidated parallel positions) overflows as readily
-				// as an ungroomed open-set, and misattributing it sends the human
-				// to the wrong list.
-				detail += " — STILL over budget on actionable sections alone; the open-set or the resume stack needs grooming (open-items and handoff positions are never dropped)"
-			}
+			before := utf16Units(ctx)
+			ctx, current = assemble(d), d
+			steps = append(steps, fmt.Sprintf("%s (%d → %d units)", r.step, before, utf16Units(ctx)))
+		}
+		if len(steps) == 0 {
+			steps = append(steps, "nothing left to collapse or shorten")
+		}
+		detail := fmt.Sprintf("injection budget: full payload %d units > %d — %s; groom the log (%s)", full, injectionBudgetUnits, strings.Join(steps, "; then "), groom)
+		if utf16Units(ctx) > injectionBudgetUnits {
+			// Still over on open-items + handoffs alone: never drop the
+			// actionable sections — inject as-is and make the overflow visible.
+			// Both are named because either can be the cause: a deep resume
+			// stack (un-consolidated parallel positions) overflows as readily
+			// as an ungroomed open-set, and misattributing it sends the human
+			// to the wrong list.
+			detail += " — STILL over budget on actionable sections alone; the open-set or the resume stack needs grooming (open-items and handoff positions are never dropped)"
 		}
 		logFailure(hub, EventSessionStart, sessionID, detail)
 	}
