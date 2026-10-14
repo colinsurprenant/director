@@ -10,7 +10,7 @@ You are checkpointing THIS session into Director (the coordination LOG) so a fre
    - `gh pr view --json state,headRefOid,number` reports state `MERGED` for the current branch;
    - `git rev-parse HEAD` equals that `headRefOid`.
 
-   If all four hold: say so in one line (branch, PR number, merged, tree clean), write NO handoff, and run the `/director:complete` close-out for this workstream now. Invoke it as you would any Director command; if your harness cannot invoke it, ask me to run it. Complete confirms with me before it resolves anything. If any check fails or errors (`gh` missing, offline or unauthenticated; no PR for this branch; a detached HEAD), carry on with steps 2–4 silently: no extra question, no triage nudge.
+   If all four hold: say so in one line (branch, PR number, merged, tree clean), do step 2 first (this session's decisions and open loops still go to the LOG), then write NO handoff and run the `/director:complete` close-out for this workstream now. Invoke it as you would any Director command; if your harness cannot invoke it, ask me to run it. Complete confirms with me before it resolves anything. If any check fails or errors (`gh` missing, offline or unauthenticated; no PR for this branch; a detached HEAD), carry on with steps 2–4 silently: no extra question, no triage nudge.
 
 2. **Flush this session's durable items** — emit each as its own event, capturing everything not already in the LOG (do not assume earlier turns emitted them):
    - every decision made → `director emit --type decision --area <area> -` with `<what + the why>` on stdin
