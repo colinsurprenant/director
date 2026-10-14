@@ -5,8 +5,8 @@ description: Checkpoint this session into Director — flush pending decisions/o
 You are checkpointing THIS session into Director (the coordination LOG) so a fresh session — you after a compaction, or a peer — can pick up exactly where you left off. The next session rehydrates from Director's injected Ground Truth (CHARTER + open-items + this workstream's resume point(s) + a decision index); anything not in the LOG is lost. This is the one command to run at any workstream boundary: step 1 checks whether this workstream is actually FINISHED and merged, and if so it runs `/director:complete` instead of writing a handoff — a done workstream needs a close-out, not a resume point. This checkpoint is also the right move when THIS session has degraded (the human is repeating a correction, or the context has visibly rotted): hand off first, then let the human `/clear` — a fresh session resuming from distilled state beats pushing a rotten context forward. Regenerate, don't recover. Do this now, in order:
 
 1. **Route first, quietly.** Before anything else, check whether this workstream is already finished. All four must hold:
-   - this session is in a LINKED worktree: `git rev-parse --git-dir` and `git rev-parse --git-common-dir` resolve to different directories (compare them as absolute paths). The main checkout's workstream never dies, so this never routes there;
-   - `git status --porcelain` prints nothing;
+   - this session is in a LINKED worktree: `git rev-parse --path-format=absolute --git-dir --git-common-dir` prints two different paths. The main checkout's workstream never dies, so this never routes there;
+   - `git status --porcelain --untracked-files=all` prints nothing except entries under `.director/` (Director's own state);
    - `gh pr view --json state,headRefOid,number` reports state `MERGED` for the current branch;
    - `git rev-parse HEAD` equals that `headRefOid`.
 

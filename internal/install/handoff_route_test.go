@@ -68,10 +68,10 @@ func TestHandoffSelfRouteSurvivesEveryHarness(t *testing.T) {
 			got := string(b)
 
 			for rule, want := range map[string]string{
-				"linked-worktree check":            "git rev-parse --git-common-dir",
-				"clean-tree check":                 "git status --porcelain",
-				"merged-PR check":                  "gh pr view --json state,headRefOid,number",
-				"HEAD-equals-merged-head check":    "headRefOid",
+				"linked-worktree check":            "`git rev-parse --path-format=absolute --git-dir --git-common-dir` prints two different paths",
+				"clean-tree check":                 "`git status --porcelain --untracked-files=all` prints nothing except entries under `.director/`",
+				"merged-PR check":                  "`gh pr view --json state,headRefOid,number` reports state `MERGED`",
+				"HEAD-equals-merged-head check":    "`git rev-parse HEAD` equals that `headRefOid`",
 				"no handoff on the routed path":    "write NO handoff",
 				"flush still runs when routed":     "do step 2 first",
 				"complete close-out runs":          fmt.Sprintf("run the `%s` close-out for this workstream now", tc.complete),
