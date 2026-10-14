@@ -1,16 +1,16 @@
 ---
-description: Close out a finished, merged workstream — resolve what it completed, hand genuine follow-ups to the repo backlog, and archive its fleet row(s). Targets this workstream by default, or a named dead sibling (branch gone). Use when the task is DONE and the branch is merged/gone; to pause work you will resume, use /director:handoff instead.
+description: Close out a finished, merged workstream — resolve what it completed, hand genuine follow-ups to the repo backlog, and archive its fleet row(s). Targets this workstream by default, or a named dead sibling whose work shipped. /director:handoff runs this for you in a merged, clean worktree; run it directly for a dead sibling or when you want the close-out by name. To pause work you will resume, use /director:handoff instead.
 ---
 
-You are running the TERMINAL close-out for a workstream: its task is finished and its branch is merged (or gone). This is not a pause — a finished workstream has no next action, so you must NOT write a handoff (that would leave a phantom resume point that keeps showing the workstream as resumable). Work through these steps in order.
+You are running the TERMINAL close-out for a workstream: its task is finished and its branch is merged (or gone). I ran this directly, or `/director:handoff` recognised a merged, clean worktree and routed here. Either way this is not a pause — a finished workstream has no next action, so you must NOT write a handoff (that would leave a phantom resume point that keeps showing the workstream as resumable). Work through these steps in order.
 
-**When this applies.** One task = one worktree = one workstream = one PR: when that PR MERGES, run this close-out for that workstream, before its worktree/branch is deleted. Two exceptions: work done in the MAIN checkout is not a separate workstream — `director resolve` its finished open-items, there is nothing to complete; and NEVER close out the main hub workstream itself (e.g. `<repo>-main`) — it is the persistent coordination stream, not a task.
+**When this applies.** One task = one worktree = one workstream = one PR: when that PR MERGES, run this close-out for that workstream (`/director:handoff` runs it for you in a merged, clean worktree), before its worktree/branch is deleted. Two exceptions: work done in the MAIN checkout is not a separate workstream — `director resolve` its finished open-items, there is nothing to complete; and NEVER close out the main hub workstream itself (e.g. `<repo>-main`) — it is the persistent coordination stream, not a task.
 
 **Target.** The default target is THIS workstream. If I named a workstream id (or a session-start "Close-out pending" nudge named one), that SIBLING is the target instead: its session is gone, so you close it out from here. Every step below says how the sibling case differs; run all `director` commands from inside this repo either way.
 
 1. **Sanity-check that the target is actually done.**
-   - This workstream: confirm the work is complete and the branch is merged or gone. If you are only pausing and will resume, STOP and run `/director:handoff` instead — that is the continuation checkpoint; this is the terminal close-out.
-   - A named sibling: confirm it reads `gone` in `director status`. If it still shows active/idle/dormant, its branch exists — it may just be parked between blocks. STOP and check with me before closing out a workstream that is not gone.
+   - This workstream: confirm the work is complete and the branch is merged or gone. If you are only pausing and will resume, STOP: `/director:handoff` is the continuation checkpoint, this is the terminal close-out. (On a merged, clean worktree `/director:handoff` routes back here, so if I tell you I still intend to keep working, ask me what I want rather than bouncing between the two.)
+   - A named sibling: first confirm the id EXACTLY matches either a `[<workstream>]` label in the `## handoffs` section of `director render`, or a workstream for which `director open-items --workstream <id>` lists at least one item. If neither matches, STOP and ask me: it is a typo, or there is nothing left to close. Then confirm its work shipped and its worktree is gone (`git worktree list`). If I keep other clones of this repo, ask me rather than assume. STOP and check with me if its worktree still exists: it may just be parked between blocks. Do not rely on `director status` showing it as `gone`: Stop archives a session's fleet row every turn and heartbeats recreate it without branch info, so a dead sibling rarely reads `gone` (#30).
 
 2. **List the target's open loops.** Run:
    `director open-items`   (for a sibling: `director open-items --workstream <id>`)
@@ -30,6 +30,7 @@ You are running the TERMINAL close-out for a workstream: its task is finished an
 
 6. **Archive the fleet row(s):**
    `director done`   (for a sibling: `director done --workstream <id>` — archives every row it left behind)
+   For a sibling whose id step 1 confirmed, exit 2 from `director done --workstream` (no live rows) is expected, since the Stop hook already archived its rows: move on. The exception: if `director status` reports unreadable fleet row(s), tell me instead.
    If bare `director done` reports no row found, that is NOT a failure of this close-out: the session's row is archived by the Stop hook at turn end (and on Codex the CLI cannot see this session's id at all) — everything durable was already written in steps 4–5. Move on.
 
 7. **Confirm to me plainly:** which items you resolved, which stay open (now inherited by `main`), and the note's ULID. Do NOT emit a handoff event.

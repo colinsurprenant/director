@@ -61,13 +61,18 @@ treat an emit as a tool call, not a turn.
   compaction, or a peer) reads to pick up where you left off.
   Dead ends go in the body ("tried X, failed because Y") — negative results are what stop the next
   session from re-walking a path this one already burned.
+  `/director:handoff` is the one command a person runs at any workstream boundary: in a worktree
+  whose PR is already merged and whose tree is clean, it recognises the finished workstream and
+  runs the `/director:complete` close-out instead of writing a handoff. Running
+  `/director:complete` directly stays valid.
 - A deferred loop is its **own `open-item` event** — do **not** pack it into the handoff body.
   The handoff carries *position*; open-items carry *carried-forward loops*. `brief`/`render`
   join the two. Packing them together duplicates state, and duplication goes stale.
 - A finished **self-contained task** (a PR review, a one-shot investigation) records its
   **outcome as a `note`** — a handoff is only for work that *resumes*, and starting a task needs
   no event at all. A task-lifecycle handoff on a shared workstream shadows the coordination
-  session's real resume point. (This is the finished-workstream rule, applied to finished tasks.)
+  session's real resume point. (The main checkout's workstream never dies, so a task finished
+  there is never a close-out: its outcome is a note.)
 
 Prefer **flush-often, then start fresh at a boundary** over riding a session up into the
 degradation zone (a reliable degradation signal: the human giving you the same correction twice). Because you flush continuously, a fresh start is already covered — there is no

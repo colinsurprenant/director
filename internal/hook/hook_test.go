@@ -336,9 +336,13 @@ func TestSessionStartInjectsGroundTruth(t *testing.T) {
 		"only complete concludes a handoff":                  "which only `/director:complete` may do",
 		"note refs on a decision retire nothing":             "a note's refs on a decision retire nothing",
 		"full bodies one show away":                          "`director show <ulid>`",
-		"complete before the branch or worktree is deleted":  "before the branch or worktree is deleted",
+		"handoff is the boundary suggestion":                 "suggest `/director:handoff`",
 		"handoff when context is filling up":                 "context filling up",
-		"a finished workstream or task plants a phantom one": "phantom resume point",
+		"handoff self-routes to complete when merged":        "on a merged, clean worktree branch it runs `/director:complete` itself",
+		"complete stays valid to run directly":               "also valid to run directly",
+		"close-out before the branch or worktree is deleted": "before the branch or worktree is deleted",
+		"a one-shot task takes a note, never a handoff":      "takes a note, never a handoff",
+		"a handed-off one-shot task plants a phantom one":    "phantom resume point",
 	} {
 		if !strings.Contains(ctx, want) {
 			t.Errorf("injected protocol lost the %q rule; missing %q:\n%s", rule, want, ctx)
@@ -350,8 +354,11 @@ func TestSessionStartInjectsGroundTruth(t *testing.T) {
 	if !strings.Contains(ctx, "/director:complete") || !strings.Contains(ctx, "/director:handoff") {
 		t.Errorf("injected protocol should name BOTH close-out commands at the workstream-boundary triggers:\n%s", ctx)
 	}
-	if !strings.Contains(ctx, "Never hand off a finished workstream") {
-		t.Errorf("injected protocol should warn that done+merged takes /director:complete, not a handoff:\n%s", ctx)
+	// handoff is the only boundary verb now: the old "never hand off a finished
+	// workstream" rule must not come back, or a model would refuse the very
+	// handoff that self-routes to the close-out on a merged worktree.
+	if strings.Contains(ctx, "Never hand off a finished workstream") {
+		t.Errorf("injected protocol still carries the retired never-hand-off-a-finished-workstream rule:\n%s", ctx)
 	}
 	if !strings.Contains(got, `"hookEventName":"SessionStart"`) {
 		t.Errorf("injection missing SessionStart control envelope:\n%s", got)
