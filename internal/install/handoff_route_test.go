@@ -75,6 +75,7 @@ func TestHandoffSelfRouteSurvivesEveryHarness(t *testing.T) {
 				"no handoff on the routed path":     "write NO handoff",
 				"flush still runs when routed":      "do step 2 first",
 				"found positions read in full":      "read it in full with `director show <ulid>`",
+				"unreadable position stops emit":    "if you cannot read one in full, STOP and tell me before emitting anything",
 				"re-read live positions first":      "a parallel session may have handed off since",
 				"omit refs only when nothing found": "If NEITHER the ground truth NOR your re-read shows any resume point",
 				"complete close-out runs":           fmt.Sprintf("run the `%s` close-out for this workstream now", tc.complete),
