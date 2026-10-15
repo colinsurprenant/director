@@ -474,12 +474,13 @@ handoff `--refs` each one, which retires exactly those and leaves the workstream
 point again. `director emit` also prints a warning on stderr whenever a handoff would retire positions
 implicitly (no `--refs` at all, or refs that name no position of that workstream). Those positions stay
 retired even if a later handoff names them, so the remedy is to read each one with `director show` and
-fold it into a corrected handoff.
+fold it into a corrected handoff whose `--refs` names the implicit one (otherwise both stay stacked).
 
 Since v1.20, `/director:handoff` also re-reads the workstream's current positions just before writing
 (the session-start snapshot cannot show a handoff a parallel session wrote mid-session), reads each one
-in full, and names it in `--refs`, so a running session folds in a sibling's late handoff instead of
-leaving two positions that contradict each other.
+in full, and names it in `--refs`, so a running session folds in a sibling's handoff that landed before
+the re-read. One that lands between the re-read and the emit still stacks beside the new position until
+the next boundary consolidates both.
 
 ---
 
