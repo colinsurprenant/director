@@ -74,6 +74,7 @@ func TestHandoffSelfRouteSurvivesEveryHarness(t *testing.T) {
 				"HEAD-equals-merged-head check":    "`git rev-parse HEAD` equals that `headRefOid`",
 				"no handoff on the routed path":    "write NO handoff",
 				"flush still runs when routed":     "do step 2 first",
+				"re-read live positions first":     "a parallel session may have handed off since",
 				"complete close-out runs":          fmt.Sprintf("run the `%s` close-out for this workstream now", tc.complete),
 				"harness-agnostic invocation":      "if your harness cannot invoke it, ask me to run it",
 				"complete confirms with the human": "Complete confirms with me before it resolves anything",
