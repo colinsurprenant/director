@@ -21,7 +21,7 @@ You don't operate Director; your agents do. It installs into Claude Code, Codex,
 - Sessions **emit** typed events as they work, using exactly four kinds (`decision`, `open-item`, `handoff`, `note`), and **resolve** open-items when they are truly closed.
 - The log collapses deterministically (no LLM in the loop) into three views: `render` (the machine digest), `brief` (the human re-orientation view), and `status` (the one-line-per-workstream cockpit with a *Needs-you* band).
 - A SessionStart hook **injects** the project CHARTER plus the digest into every new session as authoritative ground truth. Push, not pull: a protocol the model must remember to invoke is a protocol that never fires.
-- Boundary commands mark workstream lifecycle: `/director:handoff` when pausing (records the resume point), `/director:complete` when a workstream is done and merged (human-confirmed close-out of its open loops).
+- `/director:handoff` is the one command to run at a workstream boundary: when pausing it records the resume point, and in a worktree whose PR is already merged it runs `/director:complete` instead (human-confirmed close-out of its open loops).
 
 The log is NDJSON: plain, greppable, git-trackable text. If Director disappeared tomorrow, your coordination history would still be readable, no tooling required.
 

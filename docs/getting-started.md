@@ -111,8 +111,9 @@ installed Director hooks into /Users/you/.claude/settings.json (set DIRECTOR_SET
 - It merges four hooks into `~/.claude/settings.json` (`SessionStart`, `PostToolUse`, `Stop`, `SessionEnd`), each tagged
   `"_managedBy":"director"` so they coexist with GSD and any hand-rolled hooks. Re-running changes nothing.
 - It materializes the three slash commands: `/director:adopt` (informed adoption, see section 3),
-  `/director:handoff` (pause a workstream, record the resume point) and `/director:complete` (close out a finished,
-  merged workstream). More on the boundary pair in section 5.
+  `/director:handoff` (the boundary command: pause a workstream and record the resume point, or, in a merged, clean
+  worktree, run the close-out) and `/director:complete` (close out a finished, merged workstream; handoff runs it for
+  you). More on the boundary pair in section 5.
 - It grants the hub write access in `sandbox.filesystem.allowWrite`. A sandboxed session may write only its
   working directory and session tmp, so without this the first write into `~/.director` (or your `DIRECTOR_HUB`)
   stops on a permission prompt: from a hook, that reads as Director silently doing nothing. Your own
@@ -437,20 +438,27 @@ no ordering check). A handoff carrying no such refs falls back to retiring
 every older position of its workstream. Your job is to **review**: read `status`/`brief`,
 answer the escalations, edit CHARTERs to steer, not to relay.
 
-At block boundaries, two slash commands (installed by `director install`) mark workstream lifecycle:
+At block boundaries, `/director:handoff` is the one slash command you need (installed by `director install`, with
+`/director:complete` as the close-out it can hand off to):
 
-- **`/director:handoff`** when pausing work you will resume. It flushes pending decisions and open items
+- **`/director:handoff`** at any workstream boundary. When pausing work you will resume, it flushes pending decisions and open items
   and emits a self-sufficient handoff: a checkpoint written to your future self, so the next block (even
   weeks later) rehydrates from the parked handoff instead of re-deriving state. It is also the right first
   move when a session has degraded (you keep repeating the same correction): hand off the distilled state,
   then `/clear` — a fresh session resuming from the checkpoint beats pushing a rotten context forward.
-- **`/director:complete`** when a workstream is done and merged. It closes out the workstream's open loops
+  In a worktree whose PR is already merged and whose tree is clean, it recognises the finished workstream and runs
+  the `/director:complete` close-out instead of writing a handoff (it checks for a linked worktree, an empty
+  `git status`, and `gh pr view` reporting MERGED at your HEAD; if any check fails, or `gh` is unavailable, you
+  get the normal handoff). The main checkout's workstream never dies, so it never routes there. A finished
+  one-shot task, such as a PR review or an investigation, takes a `note`, never a handoff.
+- **`/director:complete`** is the close-out itself, and running it directly stays valid. It closes out the workstream's open loops
   with your confirmation, concludes its newest handoff (so the digest stops offering a dead resume point),
   and archives its fleet row. Nothing auto-resolves; close-out is human-confirmed.
   It also takes a workstream id (`/director:complete <id>`) to close out a *dead sibling*: a worktree
-  that merged and was deleted before anyone ran the close-out. Its branch reads `gone` in `status`, and
-  if it still owns open items, the next session you start on that repo will surface a "close-out pending"
-  nudge naming it; you don't have to hunt for corpses yourself.
+  that merged and was deleted before anyone ran the close-out. That is a manual step, best done right after
+  its PR merges: fleet rows usually lose their branch info after a session's first turn (#30), so a dead
+  sibling rarely reads `gone` in `status` and the "close-out pending" session-start nudge built on that
+  state rarely fires today.
 
 A workstream parked between blocks is not a problem to clean up. Dormant is a first-class state: the parked handoff is
 what `brief` shows and what the next session starts from.
@@ -485,7 +493,7 @@ would not fire; it also warns on a `DIRECTOR_DISABLE` left set. The table covers
 | **A hook seems broken** | Hooks are fail-safe by design: a failure never blocks a session, it logs. Read `$DIRECTOR_HUB/health/hook.log` (one line per outcome, `ok=false` marks failures). |
 | **`director _hook ...`** | Internal: invoked by the shims, never run by hand. |
 | **A row reads `idle` or `dormant` though the session is active** | Liveness is derived from heartbeat age. `PostToolUse` refreshes it on every tool call, so a session making no tool calls can age to `idle` (after 4h) then `dormant` (after 2d). Dormant is the normal between-blocks state, not an error. |
-| **A row reads `gone` despite a fresh heartbeat** | Liveness also checks that the workstream's branch still exists. A branch that no longer exists reads `gone` by design (merged away and deleted, or the whole worktree directory is gone: any failed branch check counts), meaning the workstream looks complete: close it out with `/director:complete <workstream-id>` from any session on the repo. `status` shows its open-item count, and new sessions on the repo are nudged about it at start while it still owns open items. Rows without branch/dir info fail open and age out by TTL only. |
+| **A row reads `gone` despite a fresh heartbeat** | Liveness also checks that the workstream's branch still exists. A branch that no longer exists reads `gone` by design (merged away and deleted, or the whole worktree directory is gone: any failed branch check counts), meaning the workstream looks complete: close it out with `/director:complete <workstream-id>` from any session on the repo. `status` shows its open-item count, and new sessions on the repo are nudged about it at start while it still owns open items. In practice this rarely fires today: rows usually lose their branch/dir info after a session's first turn (#30), and rows without it fail open and age out by TTL only. So closing out a dead sibling is a manual `/director:complete <workstream-id>`, best run right after its PR merges. |
 | **`status` shows "N unreadable fleet row(s) skipped"** | One or more row files under `$DIRECTOR_HUB/fleet/` are corrupt; the cockpit skips them rather than failing. Inspect/remove the bad files there. |
 | **`adopt` imported nothing** | By design: the CLI registers only (identity + CHARTER stub + fleet row). The import path is `/director:adopt` in an agent session: it triages the repo's real open loops and imports only what you confirm. |
 | **`install` refused** | Your `~/.claude/settings.json` has a malformed (non-object) `hooks` value. Director won't overwrite data it doesn't understand: fix the file, then re-run. |
