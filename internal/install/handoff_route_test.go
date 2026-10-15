@@ -75,6 +75,8 @@ func TestHandoffSelfRouteSurvivesEveryHarness(t *testing.T) {
 				"no handoff on the routed path":     "write NO handoff",
 				"flush still runs when routed":      "do step 2 first",
 				"found positions read in full":      "Read EVERY position you will name in `--refs` in full with `director show <ulid>`",
+				"failed re-read stops emit":         "if it is missing or render prints an error, the re-read failed, so STOP",
+				"emit race warning surfaced":        "positions you did not consolidate just left the digest",
 				"unreadable position stops emit":    "if you cannot read one in full, STOP and tell me before emitting anything",
 				"re-read live positions first":      "a parallel session may have handed off since",
 				"omit refs only when nothing found": "If NEITHER the ground truth NOR your re-read shows any resume point",
