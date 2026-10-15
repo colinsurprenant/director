@@ -68,19 +68,20 @@ func TestHandoffSelfRouteSurvivesEveryHarness(t *testing.T) {
 			got := string(b)
 
 			for rule, want := range map[string]string{
-				"linked-worktree check":            "`git rev-parse --path-format=absolute --git-dir --git-common-dir` prints two different paths",
-				"clean-tree check":                 "`git status --porcelain --untracked-files=all` prints nothing except entries under `.director/`",
-				"merged-PR check":                  "`gh pr view --json state,headRefOid,number` reports state `MERGED`",
-				"HEAD-equals-merged-head check":    "`git rev-parse HEAD` equals that `headRefOid`",
-				"no handoff on the routed path":    "write NO handoff",
-				"flush still runs when routed":     "do step 2 first",
-				"re-read live positions first":     "a parallel session may have handed off since",
-				"complete close-out runs":          fmt.Sprintf("run the `%s` close-out for this workstream now", tc.complete),
-				"harness-agnostic invocation":      "if your harness cannot invoke it, ask me to run it",
-				"complete confirms with the human": "Complete confirms with me before it resolves anything",
-				"failed checks fall through":       "carry on with steps 2–4 silently",
-				"no extra question or nudge":       "no extra question, no triage nudge",
-				"main checkout never routes":       "The main checkout's workstream never dies",
+				"linked-worktree check":             "`git rev-parse --path-format=absolute --git-dir --git-common-dir` prints two different paths",
+				"clean-tree check":                  "`git status --porcelain --untracked-files=all` prints nothing except entries under `.director/`",
+				"merged-PR check":                   "`gh pr view --json state,headRefOid,number` reports state `MERGED`",
+				"HEAD-equals-merged-head check":     "`git rev-parse HEAD` equals that `headRefOid`",
+				"no handoff on the routed path":     "write NO handoff",
+				"flush still runs when routed":      "do step 2 first",
+				"re-read live positions first":      "a parallel session may have handed off since",
+				"omit refs only when nothing found": "If NEITHER the ground truth NOR your re-read shows any resume point",
+				"complete close-out runs":           fmt.Sprintf("run the `%s` close-out for this workstream now", tc.complete),
+				"harness-agnostic invocation":       "if your harness cannot invoke it, ask me to run it",
+				"complete confirms with the human":  "Complete confirms with me before it resolves anything",
+				"failed checks fall through":        "carry on with steps 2–4 silently",
+				"no extra question or nudge":        "no extra question, no triage nudge",
+				"main checkout never routes":        "The main checkout's workstream never dies",
 			} {
 				if !strings.Contains(got, want) {
 					t.Errorf("installed handoff lost the %q rule; missing %q:\n%s", rule, want, got)
