@@ -472,8 +472,16 @@ rather than letting the later one silently overwrite the earlier. The stack coll
 boundary: the next session reads all of them, treats their union as its starting position, and its own
 handoff `--refs` each one, which retires exactly those and leaves the workstream on a single resume
 point again. `director emit` also prints a warning on stderr whenever a handoff would retire positions
-implicitly (no `--refs` at all, or refs that name no position of that workstream), while the session
-can still re-emit with the right ULIDs.
+implicitly (no `--refs` at all, or refs that name no earlier handoff of that workstream). Those positions
+stay retired even if a later handoff names them, so the remedy is to read each one with `director show`
+and fold it into a corrected handoff whose `--refs` names the implicit one, which retires it.
+
+Since v1.20, `/director:handoff` also re-reads the workstream's current positions just before writing
+(the session-start snapshot cannot show a handoff a parallel session wrote mid-session), reads each one
+in full, and names it in `--refs`, so a running session folds in a sibling's handoff that landed before
+the re-read. One that lands between the re-read and the emit is not seen: it stacks beside the new
+position when the new handoff names any earlier handoff of the workstream, and is retired, with `emit`'s warning, when the
+new handoff carries no `--refs` (a workstream's first).
 
 ---
 
