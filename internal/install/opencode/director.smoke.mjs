@@ -56,6 +56,9 @@ if (i >= 0) {
   }
   let payload = null
   try { payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) } catch {}
+  // A killed child never gets to answer or to log: a delayed one that does is one
+  // nothing stopped.
+  if (process.env.FAKE_DIRECTOR_DELAY_MS) sleep(Number(process.env.FAKE_DIRECTOR_DELAY_MS))
   fs.appendFileSync(process.env.FAKE_DIRECTOR_LOG, JSON.stringify({ event, payload }) + "\\n")
   const text = { sessionstart: "GROUND-TRUTH", posttooluse: "NUDGE" }[event]
   const out = text ? JSON.stringify({ hookSpecificOutput: { additionalContext: text } }) : ""
@@ -420,8 +423,33 @@ test("setup stands down once server has run, and server once setup has wired", a
   assert.deepEqual(await plugin.server({ directory: HERE, client: { session: { get: async () => ({}) } } }), {})
   // A second location's setup() in the same process still wires: only server()'s presence stops it.
   const second = fakeCtx({}, {}, join(work, "other-location"))
-  assert.equal(typeof (await plugin.setup(second.ctx)), "function")
+  const secondCleanup = await plugin.setup(second.ctx)
+  assert.equal(typeof secondCleanup, "function")
   assert.equal(second.state.subscribed, 1)
+  cleanup()
+  cleanup() // unloading twice must not release the latch twice
+  assert.deepEqual(await plugin.server({ directory: HERE, client: { session: { get: async () => ({}) } } }), {}, "one instance is still wired")
+  secondCleanup()
+  const hooks = await plugin.server({ directory: HERE, client: { session: { get: async () => ({}) } } })
+  assert.ok(Object.keys(hooks).length > 0, "with every instance unloaded the v1 half may wire")
+})
+
+test("server() called while setup() awaits its registrations stands down", async () => {
+  const { default: plugin } = await load(pluginPath, "latch-await")
+  let release
+  const gate = new Promise((r) => (release = r))
+  const { ctx } = fakeCtx()
+  const registerHook = ctx.session.hook
+  ctx.session.hook = async (name, cb) => {
+    await gate
+    return registerHook(name, cb)
+  }
+  const pending = plugin.setup(ctx)
+  await new Promise((r) => setTimeout(r, 50))
+  assert.deepEqual(await plugin.server({ directory: HERE, client: { session: { get: async () => ({}) } } }), {})
+  release()
+  const cleanup = await pending
+  assert.equal(typeof cleanup, "function")
   cleanup()
 })
 
@@ -643,6 +671,124 @@ testSpawn("the OpenCode 1 half injects on the first message, nudges, re-grounds 
   const stops = seen.filter((c) => c.event === "stop")
   assert.equal(stops.length, 1, "Stop for the top-level session only")
   assert.equal(stops[0].payload.session_id, "ses_a")
+})
+
+testSpawn("a hook whose lookup and spawn together outlive the deadline starts nothing late", async () => {
+  nodeOptions("ok")
+  process.env.FAKE_DIRECTOR_DELAY_MS = "250"
+  try {
+    const before = calls().length
+    const { default: plugin } = await load(fastPath, "combined")
+    const { ctx, state } = fakeCtx({ ses_top: top("ses_top") })
+    state.hold = new Promise((r) => setTimeout(r, 300)) // the lookup takes 300 of the 400ms deadline
+    const cleanup = await plugin.setup(ctx)
+    const event = { sessionID: "ses_top", system: [] }
+    const started = Date.now()
+    await state.hooks["session.context"](event)
+    assert.ok(Date.now() - started < 700, "the hook must return at its deadline")
+    assert.deepEqual(event.system, [])
+    // The spawn began around 300ms and would answer at ~600ms, after the hook returned
+    // but inside the per-candidate timeout: only the hook's own deadline can stop it.
+    await new Promise((r) => setTimeout(r, 900))
+    assert.equal(
+      calls().slice(before).filter((c) => c.event === "sessionstart").length,
+      0,
+      "the child must be killed at the deadline, not left to land after the turn has moved on",
+    )
+    cleanup()
+  } finally {
+    delete process.env.FAKE_DIRECTOR_DELAY_MS
+  }
+})
+
+testSpawn("unloading during a lookup leaves nothing behind", async () => {
+  nodeOptions("ok")
+  const before = calls().length
+  const { default: plugin } = await load(pluginPath, "unload")
+  const { ctx, state } = fakeCtx({ ses_top: top("ses_top") })
+  let release
+  state.hold = new Promise((r) => (release = r))
+  const cleanup = await plugin.setup(ctx)
+  const event = { sessionID: "ses_top", system: [] }
+  const pending = state.hooks["session.context"](event)
+  await new Promise((r) => setTimeout(r, 100)) // parked inside classify
+  cleanup()
+  // An unload releases the hook at once, without waiting for the lookup.
+  const settled = await Promise.race([pending.then(() => "released"), new Promise((r) => setTimeout(() => r("stuck"), 2000))])
+  assert.equal(settled, "released")
+  state.hold = null
+  release()
+  await new Promise((r) => setTimeout(r, 300))
+  assert.deepEqual(event.system, [])
+  assert.equal(calls().slice(before).filter((c) => c.event === "sessionstart").length, 0, "nothing may spawn after the unload")
+  const late = { sessionID: "ses_top", system: [] }
+  await state.hooks["session.context"](late)
+  assert.deepEqual(late.system, [], "a hook that arrives after the unload does nothing")
+  assert.equal(calls().slice(before).filter((c) => c.event === "sessionstart").length, 0)
+})
+
+testSpawn("a re-subscribed stream starts from a clean slate", async () => {
+  nodeOptions("ok")
+  const before = calls().length
+  const { default: plugin } = await load(pluginPath, "gap")
+  const sessions = { ses_mv: top("ses_mv") }
+  let subscribes = 0
+  let fail = null
+  let second = null
+  const { ctx, state } = fakeCtx(
+    sessions,
+    {
+      event: {
+        subscribe: ({ signal }) => {
+          subscribes++
+          if (subscribes === 1) {
+            return { [Symbol.asyncIterator]: () => ({ next: () => new Promise((_, reject) => { fail = () => reject(new Error("overflow")) }) }) }
+          }
+          second = channel(signal)
+          return second.iterable
+        },
+      },
+    },
+  )
+  const cleanup = await plugin.setup(ctx)
+  assert.equal(typeof fail, "function")
+  await state.hooks["session.context"]({ sessionID: "ses_mv", system: [] }) // classified and grounded as ours
+  sessions.ses_mv = foreign("ses_mv") // moved away while the stream was down: the event is lost
+  fail()
+  await waitFor(() => subscribes === 2, "the re-subscription", 4000)
+  second.push({ type: "session.execution.succeeded", data: { sessionID: "ses_mv" } })
+  await new Promise((r) => setTimeout(r, 400))
+  const stops = calls().slice(before).filter((c) => c.event === "stop" && c.payload.session_id === "ses_mv")
+  assert.equal(stops.length, 0, "no Stop from the instance the session left while the stream was down")
+  cleanup()
+})
+
+testSpawn("re-ground marks of sessions that never return are capped", async () => {
+  process.env.DIRECTOR_BIN = join(work, "no-such-director") // grounding is just a cached "" here
+  delete process.env.NODE_OPTIONS
+  const { default: plugin } = await load(pluginPath, "regcap")
+  const id = (i) => "ses_" + String(i).padStart(4, "0")
+  const sessions = {}
+  for (let i = 0; i < 256; i++) sessions[id(i)] = top(id(i))
+  const { ctx, state } = fakeCtx(sessions)
+  const cleanup = await plugin.setup(ctx)
+  const compacted = async (from, to) => {
+    for (let i = from; i < to; i++) await state.hooks["session.context"]({ sessionID: id(i), system: [] })
+    for (let i = from; i < to; i++) state.channel.push({ type: "session.compaction.ended", data: { sessionID: id(i) } })
+    await new Promise((r) => setTimeout(r, 300))
+  }
+  await compacted(0, 128)
+  await compacted(128, 256) // 256 marks asked for, none of them ever read
+  nodeOptions("ok")
+  const before = calls().length
+  await state.hooks["session.context"]({ sessionID: id(0), system: [] })
+  await state.hooks["session.context"]({ sessionID: id(255), system: [] })
+  const sources = Object.fromEntries(
+    calls().slice(before).filter((c) => c.event === "sessionstart").map((c) => [c.payload.session_id, c.payload.source]),
+  )
+  assert.equal(sources[id(255)], "compact", "the newest mark survives")
+  assert.equal(sources[id(0)], "startup", "the oldest mark was evicted by the cap")
+  cleanup()
 })
 
 testSpawn("a slow binary is cut off at the deadline without rejecting", async () => {

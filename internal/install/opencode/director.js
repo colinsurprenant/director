@@ -17,7 +17,7 @@
 // (no session, tool, event or location; verified live on 1.17.20, 1.18.3 and
 // 1.19.3; 1.16.0 and earlier call only server()), so the v2 half acts only on a
 // context carrying the whole surface it needs (hasV2Surface) and the two halves
-// latch each other out (v1Active, v2Active): a host that handed both a full
+// latch each other out (v1Active, v2Instances): a host that handed both a full
 // context would otherwise wire Director twice.
 //
 // Event mapping, OpenCode 1 (server):
@@ -120,8 +120,10 @@ function disabled() {
 // degrades to a no-op. The bound is PER CANDIDATE: a non-executable PATH entry
 // that dies fast then a hanging fallback can stack to ~2x this before the
 // degrade — still bounded, and only on a machine whose director install is
-// already broken. The v2 half additionally caps a whole hook at this same
-// figure (guard), so that stacking cannot reach a model request.
+// already broken. The v2 half additionally gives a whole hook ONE deadline of
+// this same figure (guard): an AbortSignal that flows through its lookups and its
+// spawns and kills the active child on expiry, so the stacking above cannot
+// reach a model request and nothing outlives the hook that started it.
 const hookTimeoutMs = 10_000
 
 // runHook pipes a CC-shaped payload to `director _hook <event>` and returns the
@@ -129,23 +131,26 @@ const hookTimeoutMs = 10_000
 // timeout, non-JSON output). Resolution order mirrors the bash shims:
 // DIRECTOR_BIN → `director` on PATH → the templated install symlink.
 // detached spawns the child outside the server's process group, for the one hook
-// that can race the server's teardown (see the v2 half's stop).
-function runHook(event, payload, { detached = false } = {}) {
+// that can race the server's teardown (see the v2 half's stop). signal, when
+// given, is the caller's deadline: no child is spawned once it has aborted, and
+// an abort kills the one running (v1 callers pass none and are unchanged).
+function runHook(event, payload, { detached = false, signal } = {}) {
   const candidates = process.env.DIRECTOR_BIN
     ? [process.env.DIRECTOR_BIN]
     : ["director", fallbackBin()].filter(Boolean)
-  return tryCandidates(candidates, event, payload, detached)
+  return tryCandidates(candidates, event, payload, detached, signal)
 }
 
-async function tryCandidates(candidates, event, payload, detached) {
+async function tryCandidates(candidates, event, payload, detached, signal) {
   for (const bin of candidates) {
-    const result = await runOne(bin, event, payload, detached)
+    if (signal?.aborted) return null
+    const result = await runOne(bin, event, payload, detached, signal)
     if (result.spawned) return result.control
   }
   return null
 }
 
-function runOne(bin, event, payload, detached) {
+function runOne(bin, event, payload, detached, signal) {
   return new Promise((resolve) => {
     let child
     try {
@@ -163,16 +168,22 @@ function runOne(bin, event, payload, detached) {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      signal?.removeEventListener("abort", onAbort)
       resolve({ spawned, control })
     }
-    const timer = setTimeout(() => {
+    const kill = () => {
       try {
         child.kill("SIGKILL")
       } catch {}
-      // The process existed long enough to time out: report spawned so the
-      // caller does not retry the payload against the fallback binary.
+      // The process existed long enough to time out (or the caller gave up on
+      // it): report spawned so the caller does not retry the payload against
+      // the fallback binary.
       finish(true, null)
-    }, hookTimeoutMs)
+    }
+    const timer = setTimeout(kill, hookTimeoutMs)
+    const onAbort = kill
+    signal?.addEventListener("abort", onAbort, { once: true })
+    if (signal?.aborted) kill()
     child.on("error", (err) => {
       // ENOENT/EACCES mean "try the next candidate" — the bash shims' `command
       // -v` tier only matches executables, so a missing or non-executable PATH
@@ -229,22 +240,21 @@ function additionalContext(control) {
   return typeof ctx === "string" ? ctx : ""
 }
 
-// v1Active latches once OpenCode 1 has called server(), and v2Active once a
-// setup() has wired its hooks, so a host that handed both entry points a usable
-// context could not wire Director twice: whichever half runs first wins and the
-// other stands down. OpenCode 2 never calls server() and OpenCode 1 hands setup()
-// only a partial context, so neither latch trips in practice; they are module
-// level on purpose, because one process runs one setup() per location and only
-// the v1 half's presence should stop those.
+// v1Active latches once OpenCode 1 has called server(), and v2Instances (below)
+// counts the setup() instances that are wiring or wired, so a host that handed both
+// entry points a usable context could not wire Director twice: whichever half runs
+// first wins and the other stands down. OpenCode 2 never calls server() and
+// OpenCode 1 hands setup() only a partial context, so neither latch trips in
+// practice; they are module level on purpose, because one process runs one setup()
+// per location and only the v1 half's presence should stop those.
 let v1Active = false
-let v2Active = false
 
 // ---------------------------------------------------------------------------
 // OpenCode 1 half
 // ---------------------------------------------------------------------------
 
 async function server({ directory, client }) {
-  if (v2Active) return {}
+  if (v2Instances > 0) return {}
   v1Active = true
   if (disabled()) return {}
 
@@ -427,36 +437,52 @@ function hasV2Surface(ctx) {
   )
 }
 
-// bounded resolves with work's result, or undefined when it rejects or outlives
-// hookTimeoutMs. It never rejects, and its timer is cleared as soon as work
-// settles.
-function bounded(work) {
+// bounded resolves with work's result, or undefined when it rejects, outlives
+// hookTimeoutMs, or the caller's signal aborts. It never rejects, and its timer
+// and listener are released as soon as it settles. It abandons work without
+// stopping it: whatever work spawns must watch the same signal.
+function bounded(work, signal) {
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, hookTimeoutMs, undefined)
-    Promise.resolve(work).then(
-      (value) => {
-        clearTimeout(timer)
-        resolve(value)
-      },
-      () => {
-        clearTimeout(timer)
-        resolve(undefined)
-      },
-    )
+    let timer
+    const finish = (value) => {
+      clearTimeout(timer)
+      signal?.removeEventListener("abort", onAbort)
+      resolve(value)
+    }
+    const onAbort = () => finish(undefined)
+    timer = setTimeout(finish, hookTimeoutMs, undefined)
+    signal?.addEventListener("abort", onAbort, { once: true })
+    if (signal?.aborted) return finish(undefined)
+    Promise.resolve(work).then(finish, () => finish(undefined))
   })
 }
 
-// guard turns a v2 hook body into one that cannot reject and cannot run past the
+// guard turns a v2 hook body into one that cannot reject and cannot run past ONE
 // deadline: OpenCode 2 awaits hooks inline on the model-request and tool paths
 // (and a prompt hook rejection can refuse the prompt), so an error or a hang
-// here would degrade the user's session instead of just Director. A body that
-// outlives the deadline is abandoned, and anything it mutates afterwards lands
-// on an event the host has already consumed.
-function guard(body) {
+// here would degrade the user's session instead of just Director. The deadline is
+// an AbortSignal handed to the body, which threads it through its lookups and its
+// spawns and checks it after each await and before it spawns or mutates the
+// event: abandoning the body is not enough, because work left running would
+// outlive the hook that started it (a late SessionStart re-creating the fleet row
+// the turn's Stop had just archived). The signal also fires when the plugin
+// instance unloads (instance), and when the body is done, which stops anything
+// the body left behind.
+function guard(body, instance) {
   return async (event) => {
+    if (instance.aborted) return
+    const call = new AbortController()
+    const expire = () => call.abort()
+    const timer = setTimeout(expire, hookTimeoutMs)
+    instance.addEventListener("abort", expire, { once: true })
     try {
-      await bounded(body(event))
-    } catch {}
+      await bounded(body(event, call.signal), call.signal)
+    } catch {
+    } finally {
+      clearTimeout(timer)
+      instance.removeEventListener("abort", expire)
+      call.abort()
+    }
   }
 }
 
@@ -531,15 +557,26 @@ function sleep(ms, signal) {
 // weeks. kinds holds one short entry per session of ANY project (the bus is
 // shared), so its cap is generous; texts holds a digest of up to ~10 KB per
 // top-level session of this location, so a few dozen live sessions fit well
-// inside its cap. Both are LRU (see setCapped), so an evicted session is a stale
-// one, and an eviction costs little: one session.get, or one hook spawn on that
-// session's next request.
+// inside its cap, and regrounding (a mark per compacted session, never read for
+// an idle one) shares texts' cap. All three are LRU (see setCapped), so an
+// evicted entry is a stale one, and an eviction costs little: one session.get, one
+// hook spawn on that session's next request, or a startup fetch where a compact
+// one was due.
 const kindsCap = 4096
 const textsCap = 128
 
+// v2Instances counts the OpenCode 2 plugin instances (one per location) that are
+// wiring or wired in this process; server() stands down while it is non-zero.
+let v2Instances = 0
+
 async function setup(ctx) {
+  let counted = false
   try {
     if (disabled() || v1Active || !hasV2Surface(ctx)) return
+    // Claimed before the first await: server() running while setup() awaits its
+    // registrations must not wire the v1 half on top.
+    v2Instances++
+    counted = true
     const here = ctx.location.directory
     const abort = new AbortController()
 
@@ -554,7 +591,7 @@ async function setup(ctx) {
     // while one is awaited can disown its answer (see classify).
     const kinds = new Map()
     const texts = new Map()
-    const regrounding = new Set()
+    const regrounding = new Map()
     const lookups = new Map()
 
     const payload = (event, sessionID) => basePayload(event, sessionID, here)
@@ -563,6 +600,12 @@ async function setup(ctx) {
       const kind = !sameDir(location?.directory, here) ? "foreign" : parentID ? "child" : "top"
       setCapped(kinds, sid, kind, kindsCap)
       return kind
+    }
+
+    // disown marks every session.get in flight for sid (or for all sessions) stale,
+    // so the answer is dropped when it lands.
+    const disown = (sid) => {
+      for (const lookup of lookups.get(sid) ?? []) lookup.stale = true
     }
 
     // forget drops everything known about a session. Used when the session is
@@ -574,7 +617,18 @@ async function setup(ctx) {
       kinds.delete(sid)
       texts.delete(sid)
       regrounding.delete(sid)
-      for (const lookup of lookups.get(sid) ?? []) lookup.stale = true
+      disown(sid)
+    }
+
+    // forgetAll is forget for every session: when the event stream is re-subscribed
+    // (the events of the gap are lost) and when the instance unloads (nothing may
+    // repopulate a dead instance).
+    const forgetAll = () => {
+      for (const sid of lookups.keys()) disown(sid)
+      lookups.clear()
+      kinds.clear()
+      texts.clear()
+      regrounding.clear()
     }
 
     // classify resolves a session to "top" | "child" | "foreign" | "unknown".
@@ -583,8 +637,9 @@ async function setup(ctx) {
     // another project reaches this instance too: the location check is what keeps
     // Director from heartbeating, archiving or injecting into it. As on OpenCode
     // 1, a failed lookup is "unknown", never a guess, and every consumer skips on
-    // it; nothing is cached on failure.
-    const classify = async (sid) => {
+    // it; nothing is cached on failure, nor once signal (the caller's deadline, or
+    // the instance's unload) has aborted.
+    const classify = async (sid, signal) => {
       const known = kinds.get(sid)
       if (known) {
         setCapped(kinds, sid, known, kindsCap)
@@ -596,10 +651,10 @@ async function setup(ctx) {
       lookups.set(sid, pending)
       // The async wrapper turns a synchronous throw from get into a rejection
       // bounded absorbs, so the bookkeeping below always runs.
-      const res = await bounded((async () => ctx.session.get({ sessionID: sid }))())
+      const res = await bounded((async () => ctx.session.get({ sessionID: sid }))(), signal)
       pending.delete(lookup)
-      if (pending.size === 0) lookups.delete(sid)
-      if (lookup.stale) return "unknown"
+      if (pending.size === 0 && lookups.get(sid) === pending) lookups.delete(sid)
+      if (lookup.stale || signal?.aborted) return "unknown"
       const info = res?.data ?? res
       if (info && typeof info === "object" && info.location?.directory) {
         return classified(sid, info.location, info.parentID)
@@ -611,19 +666,26 @@ async function setup(ctx) {
     // session (and again after a compaction). An empty or failed fetch is cached
     // as "": null cannot tell "hook failed" from "nothing to inject" (a non-git
     // dir), and retrying the latter would spawn a process on every model request.
-    const groundTruth = async (sid) => {
+    // A fetch cut short by signal is the exception: it caches nothing, and gives a
+    // compact re-ground its mark back, so the next request tries again.
+    const groundTruth = async (sid, signal) => {
       const cached = texts.get(sid)
       if (cached !== undefined) {
         setCapped(texts, sid, cached, textsCap)
         return cached
       }
-      if ((await classify(sid)) !== "top") return ""
+      if ((await classify(sid, signal)) !== "top" || signal.aborted) return ""
       // classify may have suspended, so a concurrent request for this session may
       // have started the fetch in the meantime.
       const raced = texts.get(sid)
       if (raced !== undefined) return raced
       const source = regrounding.delete(sid) ? "compact" : "startup"
-      const fetched = runHook("sessionstart", { ...payload("SessionStart", sid), source }).then(additionalContext)
+      const fetched = runHook("sessionstart", { ...payload("SessionStart", sid), source }, { signal }).then((control) => {
+        if (!signal.aborted) return additionalContext(control)
+        if (texts.get(sid) === fetched) texts.delete(sid)
+        if (source === "compact" && !abort.signal.aborted) setCapped(regrounding, sid, true, textsCap)
+        return ""
+      })
       setCapped(texts, sid, fetched, textsCap)
       return fetched
     }
@@ -634,9 +696,11 @@ async function setup(ctx) {
     // by that server's teardown, which takes its whole process group down, and a
     // director child still inside the group dies before it can archive the row.
     // Every other hook fires mid-session, with the server alive for its duration.
+    // For the same reason the spawned child is deliberately NOT tied to the
+    // instance's signal (unload is that teardown); only the decision to spawn is.
     const stop = async (sid) => {
       try {
-        if ((await classify(sid)) !== "top") return
+        if ((await classify(sid, abort.signal)) !== "top" || abort.signal.aborted) return
         await runHook("stop", { ...payload("Stop", sid), stop_hook_active: false }, { detached: true })
       } catch {}
     }
@@ -666,7 +730,7 @@ async function setup(ctx) {
         case "session.compaction.ended":
           // Only a session already grounded needs it again; one that never was
           // (post-restart) takes the startup path on its next request anyway.
-          if (texts.delete(sid)) regrounding.add(sid)
+          if (texts.delete(sid)) setCapped(regrounding, sid, true, textsCap)
           return
         case "session.execution.succeeded":
         case "session.execution.failed":
@@ -680,10 +744,14 @@ async function setup(ctx) {
     // consume drains the event stream until cleanup aborts it. A stream that ends
     // or fails (the host drops slow consumers) is re-subscribed with backoff: a
     // permanently dead subscription would silently stop every Stop and compaction
-    // re-ground, while a missed event only costs one beat.
+    // re-ground. The host's re-subscription has no replay cursor, so the events of
+    // the gap are LOST (a move, a delete, a compaction): everything cached before
+    // it may be stale, and is dropped before the new subscription starts.
     const consume = async () => {
       let delay = 500
+      let resubscribing = false
       while (!abort.signal.aborted) {
+        if (resubscribing) forgetAll()
         try {
           for await (const event of ctx.event.subscribe({ signal: abort.signal })) {
             delay = 500
@@ -694,44 +762,49 @@ async function setup(ctx) {
         } catch {}
         await sleep(delay, abort.signal)
         delay = Math.min(delay * 2, 30_000)
+        resubscribing = true
       }
     }
 
     await ctx.session.hook(
       "context",
-      guard(async (event) => {
+      guard(async (event, signal) => {
         const sid = event?.sessionID
         if (!sid || !Array.isArray(event.system)) return
-        const text = await groundTruth(sid)
-        if (text) event.system.push({ type: "text", text })
-      }),
+        const text = await groundTruth(sid, signal)
+        if (text && !signal.aborted) event.system.push({ type: "text", text })
+      }, abort.signal),
     )
 
     await ctx.tool.hook(
       "execute.after",
-      guard(async (event) => {
+      guard(async (event, signal) => {
         const sid = event?.sessionID
-        if (!sid || (await classify(sid)) !== "top") return
-        const control = await runHook("posttooluse", { ...payload("PostToolUse", sid), tool_name: event.tool })
+        if (!sid || (await classify(sid, signal)) !== "top" || signal.aborted) return
+        const control = await runHook("posttooluse", { ...payload("PostToolUse", sid), tool_name: event.tool }, { signal })
         const text = additionalContext(control)
         // The heartbeat is the point of the call, so it runs for a failed tool
         // too; a nudge has nowhere to ride on one and is dropped.
-        if (!text || event.status !== "completed" || !event.result) return
+        if (!text || signal.aborted || event.status !== "completed" || !event.result) return
         appendToResult(event.result, text)
-      }),
+      }, abort.signal),
     )
 
-    v2Active = true
     void consume()
 
+    // Unloading: stop everything in flight (hooks watch the instance's signal
+    // through guard) and drop all state, disowning pending lookups so none of
+    // them can repopulate it or spawn afterwards.
+    let unloaded = false
     return () => {
       abort.abort()
-      kinds.clear()
-      texts.clear()
-      regrounding.clear()
-      lookups.clear()
+      forgetAll()
+      if (!unloaded) v2Instances--
+      unloaded = true
     }
-  } catch {}
+  } catch {
+    if (counted) v2Instances--
+  }
 }
 
 export default {
