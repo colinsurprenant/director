@@ -590,6 +590,35 @@ func TestRunEmitNoteConclusionConfirms(t *testing.T) {
 		}
 	})
 
+	// The fold sets the conclusion mark on ANY referenced handoff, retired or not,
+	// and the mark retires every older live position. So a note naming an
+	// already-retired handoff can still conclude a live one, and the line says so.
+	t.Run("a note naming a retired handoff still concludes an older live position", func(t *testing.T) {
+		emitRepo(t)
+		r, _ := emitCapture(t, "--type", "handoff", "--area", "x", "R, the shared starting position")
+		a, _ := emitCapture(t, "--type", "handoff", "--area", "x", "--refs", r, "A, session A position")
+		b, _ := emitCapture(t, "--type", "handoff", "--area", "x", "--refs", r, "B, session B position")
+		c, _ := emitCapture(t, "--type", "handoff", "--area", "x", "--refs", b, "C, consolidates B")
+		_, ws := foldStacks(t)
+		if got := resumeStack(t); !reflect.DeepEqual(got, []string{a, c}) {
+			t.Fatalf("setup: stack = %v, want [%s %s] (A and C live, B retired)", got, a, c)
+		}
+
+		_, stderr := emitCapture(t, "--type", "note", "--area", "x", "--refs", b, "names B, which C already retired")
+		got := concludedLines(stderr)
+		if len(got) != 1 || !strings.Contains(got[0], "of "+ws+": "+a+";") {
+			t.Fatalf("confirmation lines = %q, want one line naming workstream %s and the live position %s", got, ws, a)
+		}
+		for _, other := range []string{b, c, r} {
+			if strings.Contains(got[0], other) {
+				t.Errorf("the line lists %s, which was not a live position this note retired: %q", other, got[0])
+			}
+		}
+		if got := resumeStack(t); !reflect.DeepEqual(got, []string{c}) {
+			t.Errorf("after the note the stack = %v, want only [%s]", got, c)
+		}
+	})
+
 	t.Run("a refless note and non-note kinds never print", func(t *testing.T) {
 		emitRepo(t)
 		h, _ := emitCapture(t, "--type", "handoff", "--area", "x", "position")

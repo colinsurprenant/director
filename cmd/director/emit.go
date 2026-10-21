@@ -235,8 +235,17 @@ func warnHandoffRefs(store *event.Store, ev event.Event, refList []string) {
 // positions live in the log minus this note and gone from the log with it are
 // exactly what the note concluded. Both folds read the same snapshot, so a
 // concurrent writer cannot be mistaken for this note's doing. A note that
-// concludes nothing (refs naming open-items, decisions, notes, or handoffs that
-// were already retired) prints nothing, since notes cross-link constantly.
+// retires no live position (refs naming open-items, decisions, notes, or
+// handoffs at or below a conclusion mark that already stands) prints nothing,
+// since notes cross-link constantly.
+//
+// The line names whatever the fold retired, which can include an older LIVE
+// position even when the handoff the note named was itself already retired: the
+// fold sets the conclusion mark on ANY referenced handoff, retired or not
+// (fold.go:287-296), and the mark retires every older live position of its
+// workstream (fold.go:373). With R < A < B < C, A and B ref R, and C ref B, A and
+// C are live and B is retired; a note naming B still concludes A, and the line
+// says so (the retired-ref subtest of TestRunEmitNoteConclusionConfirms).
 //
 // It is a confirmation, not an alarm, because the close-out case is legitimate;
 // the write stays a pure append and is never rejected. The recovery clause is

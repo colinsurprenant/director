@@ -477,9 +477,11 @@ rather than letting the later one silently overwrite the earlier. The stack coll
 boundary: the next session reads all of them, treats their union as its starting position, and its own
 handoff `--refs` each one, which retires exactly those and leaves the workstream on a single resume
 point again. `director emit` also prints a warning on stderr whenever a handoff would retire positions
-implicitly (no `--refs` at all, or refs that name no earlier handoff of that workstream), listing the ULID of
-each position it retired and the implicit handoff's own ULID. Those positions
-stay retired even if a later handoff names them, so the remedy is to read each one with `director show`
+implicitly (no `--refs` at all, or refs that name no earlier handoff of that workstream). When it can read
+the log, the warning lists the ULID of each position it retired and the implicit handoff's own ULID. When it
+cannot, only the no-refs shape warns (the mis-copied-refs shape needs the log to detect), and it lists no
+positions: once the log reads again, `director show` on an earlier handoff names the handoff that retired it.
+Those positions stay retired even if a later handoff names them, so the remedy is to read each one with `director show`
 and fold it into a corrected handoff whose `--refs` names the implicit one (the ULID the warning gives),
 which retires it and puts a live resume point in its place (a handoff a parallel session wrote at or
 after the implicit one still stacks beside it).
