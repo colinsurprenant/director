@@ -496,7 +496,7 @@ new handoff carries no `--refs` (a workstream's first).
 ## 6. Troubleshooting
 
 Start with **`director doctor`**: it checks the whole install chain (binary resolution, Claude Code,
-Codex, OpenCode, and Copilot CLI hooks, shims present, the hub's sandbox write grant, hub writable) and names the broken link, exiting non-zero when coordination
+Codex, OpenCode (including whether an OpenCode 2 host can load the plugin), and Copilot CLI hooks, shims present, the hub's sandbox write grant, hub writable) and names the broken link, exiting non-zero when coordination
 would not fire; it also warns on a `DIRECTOR_DISABLE` left set. The table covers the specifics.
 
 | Symptom | Cause & fix |
@@ -514,6 +514,7 @@ would not fire; it also warns on a `DIRECTOR_DISABLE` left set. The table covers
 | **`adopt` imported nothing** | By design: the CLI registers only (identity + CHARTER stub + fleet row). The import path is `/director:adopt` in an agent session: it triages the repo's real open loops and imports only what you confirm. |
 | **`install` refused** | Your `~/.claude/settings.json` has a malformed (non-object) `hooks` value. Director won't overwrite data it doesn't understand: fix the file, then re-run. |
 | **`install --copilot` or `uninstall --copilot` refused** | `~/.copilot/hooks/director.json` exists and is not fully Director's: either it is a file you wrote, or you added a command of your own (or a `powershell` field) to one of ours. Both verbs rewrite or delete that file whole, so Director refuses rather than destroy your work. Move your commands into another `*.json` in the same directory (Copilot loads them all), or point Director elsewhere with `DIRECTOR_COPILOT_HOOKS_PATH`, then re-run. `director doctor` names the events involved. |
+| **`director doctor` fails `opencode hooks` on OpenCode 2** | OpenCode 2 refuses any plugin that lacks a default export (`export default { id, setup }`), and the plugin Director installs today is the OpenCode 1 shape, so on OpenCode 2 the plugin never loads and Director does not fire in OpenCode sessions (#89). `doctor` runs `opencode --version` to tell, and fails only when it reports a major version of 2 or more and the installed plugin has no default export. OpenCode 1 is unaffected. Upgrade Director to a release with OpenCode 2 support, then re-run `director install --opencode`; re-installing the current version does not change the plugin's shape. |
 
 ---
 
