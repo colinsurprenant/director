@@ -607,6 +607,13 @@ function sleep(ms, signal) {
 // spawn on that session's next request.
 const epochCap = 1024
 
+// stopsCap bounds the table of in-flight Stops. A Stop lives for the milliseconds
+// its subprocess takes, so this is many times the sessions of one location that
+// can end a turn at once; evicting an entry only forgets the ordering for that
+// one session. (It is separate from epochCap because the epochs of the sessions
+// parked here are evicted, and their lookups ended, long before 1024 entries.)
+const stopsCap = 256
+
 // v2Instances counts the OpenCode 2 plugin instances (one per location) that are
 // wiring or wired in this process; server() stands down while it is non-zero.
 let v2Instances = 0
@@ -706,8 +713,14 @@ async function setup(ctx) {
     const groundTruth = async (sid, epoch, call) => {
       if (epoch.text === undefined) {
         if ((await classify(sid, epoch, call)) !== "top" || !live(epoch) || call.aborted) return ""
-        // classify may have suspended, so a concurrent request for this session may
-        // have started the fetch in the meantime.
+        // Only a request that has to SPAWN waits for the session's pending Stop (a
+        // cached text needs no spawn, and the context hook does not wait): the
+        // SessionStart would refresh a row that Stop is about to archive. The wait
+        // can suspend, so the checks that follow it run again.
+        if (epoch.text === undefined && !(await afterStop(sid, epoch, call))) return ""
+        if (!live(epoch) || call.aborted) return ""
+        // classify and afterStop may have suspended, so a concurrent request for
+        // this session may have started the fetch in the meantime.
         if (epoch.text === undefined) {
           const source = epoch.regrounding ? "compact" : "startup"
           epoch.regrounding = false
@@ -737,6 +750,13 @@ async function setup(ctx) {
       return epoch.text
     }
 
+    // stops holds each session's newest in-flight Stop, as a promise that never
+    // rejects. It lives OUTSIDE the epoch table on purpose: an epoch can end (the
+    // session moved, was evicted) while its Stop is still running, and the ordering
+    // below must outlive it. Entries leave when their Stop settles, and the map is
+    // capped (see stopsCap).
+    const stops = new Map()
+
     // stop is fleet bookkeeping only, as on OpenCode 1: the control output is
     // ignored. It is the one hook spawned detached: the final execution event of a
     // private server (`opencode run --standalone`) is followed within milliseconds
@@ -746,12 +766,52 @@ async function setup(ctx) {
     // For the same reason the spawned child is deliberately NOT tied to any
     // signal (unload is that teardown); only the DECISION to spawn is gated, on
     // the classification and the epoch as they stand at the moment of spawning.
-    const stop = async (sid) => {
+    //
+    // Callers do not wait for it (the event consumer must not block), so it
+    // sequences itself: a Stop for a session runs after the session's previous
+    // Stop has settled, and afterStop makes every spawn that WRITES the session's
+    // fleet row (the heartbeat, SessionStart's refresh) wait for the pending Stop.
+    // On a shared server the session can take its next prompt while the Stop's
+    // subprocess is still running, and an older Stop's archive (fleet.Done) landing
+    // after the next turn's heartbeat would remove the row that turn just refreshed.
+    const stop = (sid) => {
+      const previous = stops.get(sid)
+      const run = (async () => {
+        try {
+          if (previous) await previous // two Stops for one session never interleave
+          const epoch = epochOf(sid)
+          if ((await classify(sid, epoch, abort.signal)) !== "top" || !live(epoch) || abort.signal.aborted) return
+          await runHook("stop", { ...payload("Stop", sid), stop_hook_active: false }, { detached: true })
+        } catch {}
+      })()
+      stops.delete(sid)
+      stops.set(sid, run)
+      while (stops.size > stopsCap) stops.delete(stops.keys().next().value)
+      void run.then(() => {
+        if (stops.get(sid) === run) stops.delete(sid)
+      })
+    }
+
+    // afterStop resolves true once the session has no Stop in flight, waiting for
+    // each one (a newer Stop may queue while an older one is awaited) under the
+    // caller's deadline and the epoch; false means the deadline or the epoch ended
+    // first, and the caller must not spawn: a lost heartbeat or injection is
+    // harmless, a reordered fleet write is not.
+    const afterStop = async (sid, epoch, call) => {
+      const wait = link(call, epoch.ctl.signal)
       try {
-        const epoch = epochOf(sid)
-        if ((await classify(sid, epoch, abort.signal)) !== "top" || !live(epoch) || abort.signal.aborted) return
-        await runHook("stop", { ...payload("Stop", sid), stop_hook_active: false }, { detached: true })
-      } catch {}
+        for (;;) {
+          const pending = stops.get(sid)
+          if (!pending) return true
+          if ((await bounded(pending.then(() => true), wait.signal)) !== true) return false
+          // Settled. If it is still the newest entry there is nothing newer to wait
+          // for (and looping on it would spin without ever yielding to a timer);
+          // otherwise a newer Stop queued meanwhile, and that one is awaited next.
+          if (stops.get(sid) === pending) return true
+        }
+      } finally {
+        wait.release()
+      }
     }
 
     const onEvent = (event) => {
@@ -849,6 +909,9 @@ async function setup(ctx) {
         if (!sid) return
         const epoch = epochOf(sid)
         if ((await classify(sid, epoch, call)) !== "top" || !live(epoch) || call.aborted) return
+        // The heartbeat writes the session's fleet row: never before its pending
+        // Stop has settled, or that Stop would archive the row it just refreshed.
+        if (!(await afterStop(sid, epoch, call)) || !live(epoch) || call.aborted) return
         const beat = link(call, epoch.ctl.signal)
         let control
         try {
@@ -872,6 +935,7 @@ async function setup(ctx) {
     return () => {
       abort.abort()
       forgetAll()
+      stops.clear()
       if (!unloaded) v2Instances--
       unloaded = true
     }

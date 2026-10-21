@@ -57,9 +57,13 @@ if (i >= 0) {
   }
   let payload = null
   try { payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) } catch {}
+  // FAKE_DIRECTOR_LOG_START records "<event>.start" before the delay, so a case can see
+  // whether two hooks overlapped, not just how they ended.
+  if (process.env.FAKE_DIRECTOR_LOG_START) fs.appendFileSync(process.env.FAKE_DIRECTOR_LOG, JSON.stringify({ event: event + ".start", payload }) + "\\n")
   // A killed child never gets to answer or to log: a delayed one that does is one
-  // nothing stopped.
-  if (process.env.FAKE_DIRECTOR_DELAY_MS) sleep(Number(process.env.FAKE_DIRECTOR_DELAY_MS))
+  // nothing stopped. Stops can be slowed apart from the other events.
+  const delay = event === "stop" && process.env.FAKE_DIRECTOR_DELAY_STOP_MS ? process.env.FAKE_DIRECTOR_DELAY_STOP_MS : process.env.FAKE_DIRECTOR_DELAY_MS
+  if (delay) sleep(Number(delay))
   fs.appendFileSync(process.env.FAKE_DIRECTOR_LOG, JSON.stringify({ event, payload }) + "\\n")
   const text = { sessionstart: "GROUND-TRUTH", posttooluse: "NUDGE" }[event]
   const out = text ? JSON.stringify({ hookSpecificOutput: { additionalContext: text } }) : ""
@@ -128,6 +132,20 @@ function recordControllers() {
   }
   return { made, restore: () => (globalThis.AbortController = Real) }
 }
+// recordMaps makes every Map created while it is active observable: the plugin's
+// table of in-flight Stops is the one whose values are promises.
+function recordMaps() {
+  const Real = globalThis.Map
+  const made = []
+  globalThis.Map = class extends Real {
+    constructor(...args) {
+      super(...args)
+      made.push(this)
+    }
+  }
+  return { made, restore: () => (globalThis.Map = Real) }
+}
+const stopTables = (made) => made.filter((m) => [...m.values()].some((v) => v instanceof Promise))
 const abortListeners = (made) => made.reduce((n, ctl) => n + getEventListeners(ctl.signal, "abort").length, 0)
 
 // A controllable event stream: push() feeds the subscriber, and aborting the
@@ -1116,6 +1134,200 @@ test("a fetch that throws counts as a failed fetch and leaves no abort listener 
     process.off("unhandledRejection", onUnhandled)
   }
   assert.deepEqual(unhandled, [])
+})
+
+const succeeded = (sid) => ({ type: "session.execution.succeeded", data: { sessionID: sid } })
+
+testSpawn("the next turn's heartbeat waits for the previous turn's Stop", async () => {
+  nodeOptions("ok")
+  process.env.FAKE_DIRECTOR_DELAY_STOP_MS = "400"
+  process.env.FAKE_DIRECTOR_LOG_START = "1"
+  try {
+    const before = calls().length
+    const { default: plugin } = await load(pluginPath, "stop-then-beat")
+    const { ctx, state } = fakeCtx({ ses_p: top("ses_p") })
+    const cleanup = await plugin.setup(ctx)
+    state.channel.push(succeeded("ses_p"))
+    await tick(150) // the Stop child is up and sleeping
+    const result = { content: "out" }
+    await state.hooks["tool.execute.after"]({ sessionID: "ses_p", tool: "shell", status: "completed", result })
+    assert.deepEqual(
+      calls().slice(before).map((c) => c.event),
+      ["stop.start", "stop", "posttooluse.start", "posttooluse"],
+      "the heartbeat may only start once the Stop has finished: an older archive landing after it would remove the refreshed row",
+    )
+    assert.equal(result.content, "out\n\nNUDGE", "the heartbeat still ran, and still nudged")
+    cleanup()
+  } finally {
+    delete process.env.FAKE_DIRECTOR_DELAY_STOP_MS
+    delete process.env.FAKE_DIRECTOR_LOG_START
+  }
+})
+
+testSpawn("a Stop that outlives the next call's deadline skips the heartbeat instead of running it early", async () => {
+  nodeOptions("ok")
+  process.env.FAKE_DIRECTOR_DELAY_STOP_MS = "300" // inside the 400 ms child timeout, so each Stop completes...
+  process.env.FAKE_DIRECTOR_LOG_START = "1"
+  try {
+    const before = calls().length
+    const { default: plugin } = await load(fastPath, "stop-outlives")
+    const { ctx, state } = fakeCtx({ ses_p: top("ses_p") })
+    const cleanup = await plugin.setup(ctx)
+    state.channel.push(succeeded("ses_p"))
+    state.channel.push(succeeded("ses_p")) // ...but two in a row outlast the hook's 400 ms deadline
+    await tick(100)
+    const result = { content: "out" }
+    const started = Date.now()
+    await state.hooks["tool.execute.after"]({ sessionID: "ses_p", tool: "shell", status: "completed", result })
+    assert.ok(Date.now() - started < 700, "the hook returns at its deadline")
+    assert.equal(result.content, "out")
+    await tick(1000)
+    const events = calls().slice(before).map((c) => c.event)
+    assert.ok(!events.some((e) => e.startsWith("posttooluse")), "no heartbeat at all: skipped, not run early or late")
+    assert.equal(events.filter((e) => e === "stop").length, 2, "both Stops completed")
+    cleanup()
+  } finally {
+    delete process.env.FAKE_DIRECTOR_DELAY_STOP_MS
+    delete process.env.FAKE_DIRECTOR_LOG_START
+  }
+})
+
+testSpawn("two Stops for one session never interleave", async () => {
+  nodeOptions("ok")
+  process.env.FAKE_DIRECTOR_DELAY_STOP_MS = "250"
+  process.env.FAKE_DIRECTOR_LOG_START = "1"
+  try {
+    const before = calls().length
+    const { default: plugin } = await load(pluginPath, "stop-serial")
+    const { ctx, state } = fakeCtx({ ses_p: top("ses_p") })
+    const cleanup = await plugin.setup(ctx)
+    state.channel.push(succeeded("ses_p"))
+    state.channel.push({ type: "session.execution.failed", data: { sessionID: "ses_p", error: {} } })
+    await waitFor(() => calls().slice(before).filter((c) => c.event === "stop").length === 2, "both Stops", 5000)
+    assert.deepEqual(calls().slice(before).map((c) => c.event), ["stop.start", "stop", "stop.start", "stop"])
+    cleanup()
+  } finally {
+    delete process.env.FAKE_DIRECTOR_DELAY_STOP_MS
+    delete process.env.FAKE_DIRECTOR_LOG_START
+  }
+})
+
+testSpawn("a heartbeat arriving between two queued Stops waits for the newer one", async () => {
+  nodeOptions("ok")
+  process.env.FAKE_DIRECTOR_DELAY_STOP_MS = "300"
+  process.env.FAKE_DIRECTOR_LOG_START = "1"
+  try {
+    const before = calls().length
+    const { default: plugin } = await load(pluginPath, "stop-between")
+    const { ctx, state } = fakeCtx({ ses_p: top("ses_p") })
+    const cleanup = await plugin.setup(ctx)
+    state.channel.push(succeeded("ses_p"))
+    state.channel.push(succeeded("ses_p"))
+    await waitFor(() => calls().slice(before).filter((c) => c.event === "stop").length === 1, "the first Stop", 3000)
+    // The first Stop has finished and the second is running: its entry is the one that counts.
+    const result = { content: "out" }
+    await state.hooks["tool.execute.after"]({ sessionID: "ses_p", tool: "shell", status: "completed", result })
+    assert.deepEqual(
+      calls().slice(before).map((c) => c.event),
+      ["stop.start", "stop", "stop.start", "stop", "posttooluse.start", "posttooluse"],
+    )
+    cleanup()
+  } finally {
+    delete process.env.FAKE_DIRECTOR_DELAY_STOP_MS
+    delete process.env.FAKE_DIRECTOR_LOG_START
+  }
+})
+
+testSpawn("a Stop queued while the heartbeat is already waiting is waited for too", async () => {
+  nodeOptions("ok")
+  process.env.FAKE_DIRECTOR_DELAY_STOP_MS = "300"
+  process.env.FAKE_DIRECTOR_LOG_START = "1"
+  try {
+    const before = calls().length
+    const { default: plugin } = await load(pluginPath, "stop-queued-late")
+    const { ctx, state } = fakeCtx({ ses_p: top("ses_p") })
+    const cleanup = await plugin.setup(ctx)
+    state.channel.push(succeeded("ses_p"))
+    await tick(100)
+    const result = { content: "out" }
+    const beat = state.hooks["tool.execute.after"]({ sessionID: "ses_p", tool: "shell", status: "completed", result })
+    await tick(50) // the heartbeat is now parked behind the first Stop
+    state.channel.push(succeeded("ses_p")) // a second turn ends meanwhile
+    await beat
+    assert.deepEqual(
+      calls().slice(before).map((c) => c.event),
+      ["stop.start", "stop", "stop.start", "stop", "posttooluse.start", "posttooluse"],
+    )
+    cleanup()
+  } finally {
+    delete process.env.FAKE_DIRECTOR_DELAY_STOP_MS
+    delete process.env.FAKE_DIRECTOR_LOG_START
+  }
+})
+
+testSpawn("the in-flight Stop table drops a session's entry when its Stop settles, and is capped", async () => {
+  nodeOptions("ok")
+  process.env.FAKE_DIRECTOR_DELAY_STOP_MS = "300"
+  const maps = recordMaps()
+  try {
+    const { default: plugin } = await load(pluginPath, "stop-table")
+    const { ctx, state } = fakeCtx({ ses_p: top("ses_p") })
+    const cleanup = await plugin.setup(ctx)
+    state.channel.push(succeeded("ses_p"))
+    await tick(150)
+    assert.equal(stopTables(maps.made).map((m) => m.size).join(), "1", "pending: one entry")
+    await tick(700)
+    assert.equal(stopTables(maps.made).length, 0, "settled: the entry is gone")
+
+    // The cap: park every Stop at its classification so none settles, then flood.
+    let release
+    state.hold = new Promise((r) => (release = r))
+    for (let i = 0; i < 300; i++) state.channel.push(succeeded("ses_flood" + i))
+    await tick(500)
+    const sizes = stopTables(maps.made).map((m) => m.size)
+    assert.equal(sizes.length, 1)
+    assert.ok(sizes[0] <= 256 && sizes[0] >= 250, "the table is capped, not unbounded: " + sizes)
+    state.hold = null
+    release()
+    cleanup()
+  } finally {
+    maps.restore()
+    delete process.env.FAKE_DIRECTOR_DELAY_STOP_MS
+  }
+})
+
+testSpawn("only a request that must spawn waits for the pending Stop: a cached text does not, a refetch does", async () => {
+  nodeOptions("ok")
+  process.env.FAKE_DIRECTOR_DELAY_STOP_MS = "500"
+  process.env.FAKE_DIRECTOR_LOG_START = "1"
+  try {
+    const before = calls().length
+    const { default: plugin } = await load(pluginPath, "stop-then-ground")
+    const { ctx, state } = fakeCtx({ ses_p: top("ses_p") })
+    const cleanup = await plugin.setup(ctx)
+    await state.hooks["session.context"]({ sessionID: "ses_p", system: [] }) // grounded: a text is cached
+    state.channel.push(succeeded("ses_p"))
+    await tick(150) // the Stop child is up and sleeping
+    const cached = { sessionID: "ses_p", system: [] }
+    const started = Date.now()
+    await state.hooks["session.context"](cached)
+    assert.ok(Date.now() - started < 250, "a request with a cached text needs no spawn and must not wait for the Stop")
+    assert.equal(cached.system.length, 1)
+    state.channel.push({ type: "session.compaction.ended", data: { sessionID: "ses_p" } }) // the text is dropped
+    await tick(50)
+    const refetch = { sessionID: "ses_p", system: [] }
+    await state.hooks["session.context"](refetch)
+    assert.equal(refetch.system.length, 1, "the refetch still injects")
+    const events = calls().slice(before).map((c) => c.event)
+    assert.ok(
+      events.indexOf("stop") !== -1 && events.lastIndexOf("sessionstart.start") > events.indexOf("stop"),
+      "the SessionStart that refreshes the row started only after the Stop had finished: " + events,
+    )
+    cleanup()
+  } finally {
+    delete process.env.FAKE_DIRECTOR_DELAY_STOP_MS
+    delete process.env.FAKE_DIRECTOR_LOG_START
+  }
 })
 
 testSpawn("a slow binary is cut off at the deadline without rejecting", async () => {
