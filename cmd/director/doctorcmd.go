@@ -552,7 +552,8 @@ func parseOpenCodeVersion(out string) (version string, major int, ok bool) {
 // and string literals, and the baked install path is embedded in the file. The
 // plugin is Director's own managed file and the dual-shape plugin that fixes #89
 // declares `export default {`, so `export { x as default }` is deliberately not
-// accepted: a form Director never writes is not evidence the plugin loads.
+// accepted: a form Director never writes is not evidence the plugin loads. A test
+// holds the embedded plugin to this pattern, so the two cannot drift apart.
 var opencodeDefaultExport = regexp.MustCompile(`(?m)^export\s+default\b`)
 
 // opencodeVersionTimeout bounds the `opencode --version` probe. doctor is off the
@@ -582,10 +583,12 @@ func runOpenCodeVersion() string {
 // opencodePluginShapeFailure returns the failure text when the installed OpenCode
 // is major 2 or newer and Director's managed plugin lacks the default-export shape
 // it requires, and "" otherwise. OpenCode 2 refuses a plugin without
-// `export default { id, setup }`, so the v1-shaped plugin never loads there and
-// Director silently does nothing while every other check reads healthy (#89).
-// The check is the managed file's own text (a default export at the start of a
-// line, opencodeDefaultExport), not a version pin on Director, so the dual-shape plugin that fixes this keeps passing it.
+// `export default { id, setup }`, so a v1-shaped plugin (what Director installed
+// before the dual-shape one) never loads there and Director silently does nothing
+// while every other check reads healthy (#89). The check is the managed file's own
+// text (a default export at the start of a line, opencodeDefaultExport), not a
+// version pin on Director: the plugin this binary embeds carries that export, so a
+// re-install is the fix and the check passes once it has run.
 // Any inability to tell (no probe, opencode missing or unparsable, an unreadable
 // plugin) skips the check: it adds failures only on positive evidence.
 func opencodePluginShapeFailure(in doctorInputs, plugin []byte, readErr error) string {
@@ -597,7 +600,7 @@ func opencodePluginShapeFailure(in doctorInputs, plugin []byte, readErr error) s
 		return ""
 	}
 	return fmt.Sprintf(
-		"OpenCode %s cannot load Director's plugin at %s: OpenCode 2 requires a default-export plugin (`export default { id, setup }`) and this one is the v1 shape, so Director does not fire in OpenCode sessions (#89). OpenCode 1 still works; upgrade to a Director release with OpenCode 2 support (re-installing this version does not change the shape).",
+		"OpenCode %s cannot load Director's plugin at %s: OpenCode 2 requires a default-export plugin (`export default { id, setup }`) and this one is the v1 shape, so Director does not fire in OpenCode sessions (#89). OpenCode 1 still works; re-run `director install --opencode` to replace it with the plugin that loads on both OpenCode 1 and 2.",
 		version, in.opencodePlugin)
 }
 

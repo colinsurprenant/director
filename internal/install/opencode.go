@@ -7,6 +7,10 @@
 // registration — so unlike the CC settings.json merge there is NO shared config
 // file to clobber and no merge machinery at all.
 //
+// The one file serves both OpenCode majors (#89): OpenCode 1 and 2 scan the same
+// plugin dir and each rejects a plugin in the other's shape, so a second file
+// cannot coexist and the plugin's default export carries both entry points.
+//
 // The plugin's binary fallback tier probes the same install symlink the shims
 // probe, so InstallOpenCode provisions it too and the uninstall reclaim gates on
 // every other agent's install (see UninstallOpenCode).
@@ -53,7 +57,8 @@ const opencodeBinPlaceholder = "__DIRECTOR_BIN_FALLBACK__"
 
 // DefaultOpenCodePluginPath resolves the managed plugin file,
 // ~/.config/opencode/plugin/director.js — OpenCode's global drop-in plugin dir
-// (verified live: files there load with no registration, opencode 1.18.3).
+// (verified live: files there load with no registration, opencode 1.18.3,
+// 1.19.3 and 2.1.0).
 func DefaultOpenCodePluginPath() (string, error) {
 	if p := os.Getenv(opencodePluginPathEnv); p != "" {
 		return p, nil

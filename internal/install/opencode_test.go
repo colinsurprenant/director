@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -74,6 +75,46 @@ func TestInstallOpenCodeWritesTemplatedPlugin(t *testing.T) {
 	}
 	if before != string(after) {
 		t.Errorf("re-install is not idempotent")
+	}
+}
+
+// TestOpenCodePluginIsTheDualShape pins the one-file contract (#89) on the text
+// install writes: both OpenCode majors scan the same plugin dir and each rejects a
+// file in the other's shape, so the plugin must default-export one object carrying
+// BOTH entry points, and must export nothing else (OpenCode 1 would load a named
+// export a second time, next to the default's server()). The behavior behind the
+// shape is executed by TestOpenCodePluginNodeSmoke; this runs everywhere.
+func TestOpenCodePluginIsTheDualShape(t *testing.T) {
+	pluginPath, _, _ := setupOpenCode(t)
+	if err := InstallOpenCode(pluginPath); err != nil {
+		t.Fatalf("InstallOpenCode: %v", err)
+	}
+	b, err := os.ReadFile(pluginPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(b)
+
+	if first, _, _ := strings.Cut(src, "\n"); !strings.Contains(first, opencodeManagedMarker) {
+		t.Errorf("the managed marker must sit on the first line, got %q", first)
+	}
+	m := regexp.MustCompile(`(?m)^export\s+default\s*\{([^}]*)\}`).FindStringSubmatch(src)
+	if m == nil {
+		t.Fatal("plugin has no `export default { ... }` object")
+	}
+	for _, field := range []string{"id: \"director\"", "setup", "server"} {
+		if !strings.Contains(m[1], field) {
+			t.Errorf("default export lacks %q: %s", field, m[1])
+		}
+	}
+	// Every export statement in the file must be the one default export.
+	for _, line := range regexp.MustCompile(`(?m)^export\b.*$`).FindAllString(src, -1) {
+		if !strings.HasPrefix(line, "export default {") {
+			t.Errorf("unexpected export (OpenCode 1 would load a named export again): %q", line)
+		}
+	}
+	if strings.Contains(src, "export const DirectorPlugin") {
+		t.Errorf("the v1 named export must be gone: the default's server() replaces it")
 	}
 }
 
