@@ -593,6 +593,7 @@ let v2Instances = 0
 
 async function setup(ctx) {
   let counted = false
+  const abort = new AbortController() // the instance's lifetime
   try {
     if (disabled() || v1Active || !hasV2Surface(ctx)) return
     // Claimed before the first await: server() running while setup() awaits its
@@ -600,7 +601,6 @@ async function setup(ctx) {
     v2Instances++
     counted = true
     const here = ctx.location.directory
-    const abort = new AbortController() // the instance's lifetime
 
     const payload = (event, sessionID) => basePayload(event, sessionID, here)
 
@@ -839,6 +839,11 @@ async function setup(ctx) {
       unloaded = true
     }
   } catch {
+    // A setup that fails part-way (a registration rejects) leaves its earlier
+    // registrations in the host: ending the instance makes them inert, so the
+    // outcome is absent coordination, not a half-wired plugin (SessionStart with
+    // no Stop).
+    abort.abort()
     if (counted) v2Instances--
   }
 }

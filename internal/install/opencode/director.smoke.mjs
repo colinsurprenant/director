@@ -935,6 +935,25 @@ testSpawn("an old epoch's fetch cannot populate or clear the cache of the epoch 
   }
 })
 
+testSpawn("a setup that fails part-way leaves its earlier hooks inert", async () => {
+  nodeOptions("ok")
+  const before = calls().length
+  const { default: plugin } = await load(pluginPath, "half-wired")
+  const { ctx, state } = fakeCtx({ ses_top: top("ses_top") })
+  ctx.tool.hook = async () => {
+    throw new Error("registration refused")
+  }
+  assert.equal(await plugin.setup(ctx), undefined)
+  assert.equal(typeof state.hooks["session.context"], "function", "the first registration happened")
+  const event = { sessionID: "ses_top", system: [] }
+  await state.hooks["session.context"](event)
+  assert.deepEqual(event.system, [], "but it does nothing")
+  assert.equal(calls().slice(before).filter((c) => c.event === "sessionstart").length, 0)
+  assert.equal(state.subscribed, 0, "and no stream was ever opened")
+  const hooks = await plugin.server({ directory: HERE, client: { session: { get: async () => ({}) } } })
+  assert.ok(Object.keys(hooks).length > 0, "the failed instance released the latch")
+})
+
 testSpawn("a slow binary is cut off at the deadline without rejecting", async () => {
   const unhandled = []
   const onUnhandled = (e) => unhandled.push(e)
