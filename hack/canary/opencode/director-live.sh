@@ -556,18 +556,18 @@ F="$STAGE/findings.md"
   printf 'INJECTED: %s\n' "$(matched "$ACK_RE" "$OUT/enabled.out")"
   printf 'NUDGE:    %s\n' "$(matched "$NUDGE_RE" "$OUT/enabled.out")"
   printf '```\n\nEnabled turn, hub health/hook.log (one line per hook outcome):\n\n```\n'
-  cut -c1-200 "$OUT/enabled.hook.log" | redact || true
+  cut -c1-200 "$OUT/enabled.hook.log" | redact | sed -E 's/[[:space:]]+$//' || true
   printf '```\n\nArchived fleet row:\n\n```\n'
   if [ -n "$ARCHIVED" ]; then redact <"$ARCHIVED"; else printf '(none)\n'; fi
   printf '\n```\n\nOpenCode plugin load lines:\n\n```\n'
   { grep -rh 'loading plugin\|failed to load plugin' "$OC_LOG_DIR" 2>/dev/null | grep -i 'director\|failed' | head -n 3 | redact | cut -c1-260; } || true
   printf '```\n\nDisabled turn: matches of the injection and nudge detectors in the model output: %s and %s.\nHub health/hook.log (empty means no hook ran):\n\n```\n' \
     "$(count "$ACK_RE" "$OUT/disabled.out")" "$(count "$NUDGE_RE" "$OUT/disabled.out")"
-  cut -c1-200 "$OUT/disabled.hook.log" | redact || true
+  cut -c1-200 "$OUT/disabled.hook.log" | redact | sed -E 's/[[:space:]]+$//' || true
   printf '```\n\n'
   if [ "$MAJOR" -ge 2 ]; then
     printf 'Shared server, two projects, hub health/hook.log (one SessionStart and one Stop per session; sessions are the 4th column):\n\n```\n'
-    cut -c1-170 "$OUT/scope.hook.log" | redact || true
+    cut -c1-170 "$OUT/scope.hook.log" | redact | sed -E 's/[[:space:]]+$//' || true
     printf '```\n\nClient DIRECTOR_DISABLE=1 against that server, injection text matched in the model output (a match means the client variable did not reach the server):\n\n```\n'
     printf 'INJECTED: %s\n' "$(matched "$ACK_RE" "$OUT/clientenv.out")"
     printf '```\n\n'
@@ -583,9 +583,9 @@ F="$STAGE/findings.md"
   printf '# prompt: %s\n' "$PROMPT"
   printf '```\n'
 } >"$F"
-cut -c1-200 "$OUT/enabled.hook.log" | redact >"$STAGE/enabled.hook.log"
+cut -c1-200 "$OUT/enabled.hook.log" | redact | sed -E 's/[[:space:]]+$//' >"$STAGE/enabled.hook.log"
 if [ "$MAJOR" -ge 2 ] && [ -f "$OUT/scope.hook.log" ]; then
-  cut -c1-200 "$OUT/scope.hook.log" | redact >"$STAGE/scope.hook.log"
+  cut -c1-200 "$OUT/scope.hook.log" | redact | sed -E 's/[[:space:]]+$//' >"$STAGE/scope.hook.log"
 fi
 mv -- "$STAGE" "$FINAL_DIR"
 
