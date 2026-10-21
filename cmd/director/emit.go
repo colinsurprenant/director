@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/colinsurprenant/director/internal/event"
@@ -86,8 +87,13 @@ func runEmit(args []string) int {
 	// whose cwd drifted sees the misroute in its own transcript.
 	fmt.Println(ev.ID)
 	fmt.Fprintf(os.Stderr, "→ %s · %s\n", ws.RepoKey, ws.ID)
-	if event.Kind(typ) == event.KindHandoff {
+	switch event.Kind(typ) {
+	case event.KindHandoff:
 		warnHandoffRefs(store, ev, refList)
+	case event.KindNote:
+		if len(refList) > 0 {
+			confirmNoteConcluded(store, ev, ws.ID)
+		}
 	}
 	return 0
 }
@@ -217,6 +223,70 @@ func warnHandoffRefs(store *event.Store, ev event.Event, refList []string) {
 		return
 	}
 	fmt.Fprintln(os.Stderr, warnHandoffWrongRefs(ev.ID, lost))
+}
+
+// confirmNoteConcluded says which resume points a freshly-appended note just
+// retired, on stderr. A note whose --refs name a handoff CONCLUDES it, and the
+// fold's per-workstream high-water mark retires that handoff and every older one
+// of its workstream. /director:complete does that on purpose, but any other note
+// doing it silently drops live resume points, and nothing at the write says so.
+//
+// The answer is the fold's, not a re-implementation of the high-water rule: the
+// positions live in the log minus this note and gone from the log with it are
+// exactly what the note concluded. Both folds read the same snapshot, so a
+// concurrent writer cannot be mistaken for this note's doing. A note that
+// concludes nothing (refs naming open-items, decisions, notes, or handoffs that
+// were already retired) prints nothing, since notes cross-link constantly.
+//
+// It is a confirmation, not an alarm, because the close-out case is legitimate;
+// the write stays a pure append and is never rejected. The recovery clause is
+// the fold's own behavior: a handoff whose --refs name a same-workstream handoff
+// is explicit and newer than the conclusion mark, so it is the live resume
+// point again (TestRunEmitNoteConclusionRecovery runs this through the fold).
+// That handoff must be emitted FROM the affected workstream: one emitted here
+// belongs to this workstream and cannot restore another's position. A read
+// failure prints nothing: without the log a handoff ref cannot be told from a
+// cross-link.
+func confirmNoteConcluded(store *event.Store, ev event.Event, wsID string) {
+	events, err := store.ReadAll()
+	if err != nil {
+		return
+	}
+	before := make([]event.Event, 0, len(events))
+	for _, e := range events {
+		if e.ID != ev.ID {
+			before = append(before, e)
+		}
+	}
+	was := render.Fold(before).ResumeHandoffs
+	now := render.Fold(events).ResumeHandoffs
+
+	affected := make([]string, 0, len(was))
+	concluded := make(map[string][]string, len(was))
+	for ws, positions := range was {
+		live := make(map[string]bool, len(now[ws]))
+		for _, h := range now[ws] {
+			live[h.ID] = true
+		}
+		for _, h := range positions {
+			if !live[h.ID] {
+				concluded[ws] = append(concluded[ws], h.ID)
+			}
+		}
+		if len(concluded[ws]) > 0 {
+			affected = append(affected, ws)
+		}
+	}
+	sort.Strings(affected)
+	for _, ws := range affected {
+		ids := concluded[ws]
+		restore := fmt.Sprintf("restore the position with a handoff whose --refs names %s", strings.Join(ids, ","))
+		if ws != wsID {
+			restore += ", emitted from that workstream's own worktree"
+		}
+		fmt.Fprintf(os.Stderr, "→ note concluded resume point(s) of %s: %s; they no longer surface as resumable. /director:complete does this on purpose; if this note was not a close-out, %s (director show <ULID> for its body).\n",
+			ws, strings.Join(ids, ", "), restore)
+	}
 }
 
 // canonicalRefs splits a comma-separated --refs value, canonicalizes each ULID,

@@ -435,7 +435,12 @@ workstream from offering a dead resume point), a `handoff` whose refs name same-
 survives instead of being silently overwritten, and a `decision` whose refs name `decision`(s)
 **supersedes** them, dropping them from the digest's active decisions (any decision, any workstream,
 no ordering check). A handoff carrying no such refs falls back to retiring
-every older position of its workstream. Your job is to **review**: read `status`/`brief`,
+every older position of its workstream. Because a note ref concludes a handoff and every older position
+of its workstream, `director emit` confirms on stderr, per affected workstream, which resume points a note
+just concluded (`→ note concluded resume point(s) of <workstream>: <ULIDs>`). `/director:complete` does
+this on purpose; for any other note the line says how to restore the position (a handoff whose `--refs` names
+those ULIDs, emitted from that workstream), and a note that concludes nothing (or whose log cannot be read) prints nothing.
+Your job is to **review**: read `status`/`brief`,
 answer the escalations, edit CHARTERs to steer, not to relay.
 
 At block boundaries, `/director:handoff` is the one slash command you need (installed by `director install`, with

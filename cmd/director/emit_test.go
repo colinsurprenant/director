@@ -381,9 +381,9 @@ func TestRunEmitHandoffWarningNeedsALivePosition(t *testing.T) {
 	})
 }
 
-// resumeStack is the fold's answer to "which positions are live" for the
-// current workstream: the ULIDs of its resume stack, ascending.
-func resumeStack(t *testing.T) []string {
+// foldStacks is the fold's answer to "which positions are live": every
+// workstream's resume stack as ULIDs, ascending, plus the current workstream's id.
+func foldStacks(t *testing.T) (stacks map[string][]string, current string) {
 	t.Helper()
 	hub, ws, err := resolveContext()
 	if err != nil {
@@ -393,11 +393,20 @@ func resumeStack(t *testing.T) []string {
 	if err != nil {
 		t.Fatalf("read log: %v", err)
 	}
-	var stack []string
-	for _, h := range render.Fold(events).ResumeHandoffs[ws.ID] {
-		stack = append(stack, h.ID)
+	stacks = make(map[string][]string)
+	for w, hs := range render.Fold(events).ResumeHandoffs {
+		for _, h := range hs {
+			stacks[w] = append(stacks[w], h.ID)
+		}
 	}
-	return stack
+	return stacks, ws.ID
+}
+
+// resumeStack is the current workstream's live positions, ascending.
+func resumeStack(t *testing.T) []string {
+	t.Helper()
+	stacks, current := foldStacks(t)
+	return stacks[current]
 }
 
 // TestRunEmitImplicitHandoffRecovery proves the recovery the warnings spell out,
@@ -476,6 +485,266 @@ func TestRunEmitImplicitHandoffRecovery(t *testing.T) {
 			}
 		})
 	}
+}
+
+// concludedLines picks the note-conclusion confirmations out of emit's stderr
+// (the routing echo and anything else are not its business).
+func concludedLines(stderr string) []string {
+	var out []string
+	for _, l := range strings.Split(stderr, "\n") {
+		if strings.HasPrefix(l, "→ note concluded resume point(s) of ") {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// TestRunEmitNoteConclusionConfirms locks the write-side confirmation for a note
+// whose --refs name a handoff. The fold concludes such a handoff and every older
+// position of its workstream (a high-water mark), which /director:complete does
+// on purpose and any other note does silently; emit says which positions the
+// note retired, using the fold's own before/after answer. Notes that conclude
+// nothing stay silent, because notes cross-link constantly.
+func TestRunEmitNoteConclusionConfirms(t *testing.T) {
+	t.Run("a stray note concludes a live position", func(t *testing.T) {
+		emitRepo(t)
+		h, _ := emitCapture(t, "--type", "handoff", "--area", "x", "the live position")
+		_, ws := foldStacks(t)
+
+		_, stderr := emitCapture(t, "--type", "note", "--area", "x", "--refs", h, "a note that was not a close-out")
+		want := "→ note concluded resume point(s) of " + ws + ": " + h +
+			"; they no longer surface as resumable. /director:complete does this on purpose; if this note was not a close-out, restore the position with a handoff whose --refs names " + h +
+			" (director show <ULID> for its body)."
+		got := concludedLines(stderr)
+		if len(got) != 1 || got[0] != want {
+			t.Errorf("confirmation lines = %q, want exactly [%q]", got, want)
+		}
+	})
+
+	t.Run("the high-water mark lists every position it retired", func(t *testing.T) {
+		emitRepo(t)
+		start, _ := emitCapture(t, "--type", "handoff", "--area", "x", "starting position")
+		a, _ := emitCapture(t, "--type", "handoff", "--area", "x", "--refs", start, "session A position")
+		b, _ := emitCapture(t, "--type", "handoff", "--area", "x", "--refs", start, "session B position")
+		_, ws := foldStacks(t)
+
+		// Naming only the newer one still concludes the older parallel position
+		// (the mark is monotonic), so both are listed even though only b was named.
+		_, stderr := emitCapture(t, "--type", "note", "--area", "x", "--refs", b, "concludes the whole stack")
+		got := concludedLines(stderr)
+		if len(got) != 1 || !strings.Contains(got[0], "of "+ws+": "+a+", "+b+";") || !strings.Contains(got[0], "--refs names "+a+","+b+" (") {
+			t.Fatalf("confirmation lines = %q, want one line listing %s and %s", got, a, b)
+		}
+		if strings.Contains(got[0], start) {
+			t.Errorf("start %s was already superseded, it must not be listed: %q", start, got)
+		}
+	})
+
+	t.Run("naming the older of two parallel positions concludes only that one", func(t *testing.T) {
+		emitRepo(t)
+		start, _ := emitCapture(t, "--type", "handoff", "--area", "x", "starting position")
+		a, _ := emitCapture(t, "--type", "handoff", "--area", "x", "--refs", start, "session A position")
+		b, _ := emitCapture(t, "--type", "handoff", "--area", "x", "--refs", start, "session B position")
+
+		_, stderr := emitCapture(t, "--type", "note", "--area", "x", "--refs", a, "concludes A only")
+		got := concludedLines(stderr)
+		if len(got) != 1 || !strings.Contains(got[0], ": "+a+";") || strings.Contains(got[0], b) {
+			t.Errorf("confirmation lines = %q, want one line naming only %s", got, a)
+		}
+	})
+
+	t.Run("refs that conclude nothing stay silent", func(t *testing.T) {
+		emitRepo(t)
+		item, _ := emitCapture(t, "--type", "open-item", "--area", "x", "--risk", "low", "a loose end")
+		dec, _ := emitCapture(t, "--type", "decision", "--area", "x", "--risk", "low", "a decision")
+		note, _ := emitCapture(t, "--type", "note", "--area", "x", "an earlier note")
+		old, _ := emitCapture(t, "--type", "handoff", "--area", "x", "older position")
+		live, _ := emitCapture(t, "--type", "handoff", "--area", "x", "--refs", old, "newer position, supersedes the older")
+
+		for name, refs := range map[string]string{
+			"an open-item":                   item,
+			"a decision":                     dec,
+			"a note":                         note,
+			"several non-handoffs":           item + "," + dec + "," + note,
+			"a handoff the fold had retired": old,
+		} {
+			_, stderr := emitCapture(t, "--type", "note", "--area", "x", "--refs", refs, "cross-link to "+name)
+			if got := concludedLines(stderr); len(got) != 0 {
+				t.Errorf("a note naming %s concludes nothing and must be silent, got %q", name, got)
+			}
+		}
+		// The live position must have survived all of that (silence was not a
+		// side effect of the position already being gone).
+		if got := resumeStack(t); len(got) != 1 || got[0] != live {
+			t.Fatalf("setup: stack = %v, want [%s]", got, live)
+		}
+
+		// Concluding it for real prints; naming it again is then silent.
+		_, stderr := emitCapture(t, "--type", "note", "--area", "x", "--refs", live, "close-out")
+		if got := concludedLines(stderr); len(got) != 1 {
+			t.Errorf("concluding the live position must print once, got %q", got)
+		}
+		_, stderr = emitCapture(t, "--type", "note", "--area", "x", "--refs", live, "naming the concluded position again")
+		if got := concludedLines(stderr); len(got) != 0 {
+			t.Errorf("naming an already-concluded handoff retires nothing new and must be silent, got %q", got)
+		}
+	})
+
+	t.Run("a refless note and non-note kinds never print", func(t *testing.T) {
+		emitRepo(t)
+		h, _ := emitCapture(t, "--type", "handoff", "--area", "x", "position")
+		_, stderr := emitCapture(t, "--type", "note", "--area", "x", "no refs at all")
+		if got := concludedLines(stderr); len(got) != 0 {
+			t.Errorf("a ref-less note must be silent, got %q", got)
+		}
+		// An open-item naming a handoff is ordinary cross-linking: only notes conclude.
+		_, stderr = emitCapture(t, "--type", "open-item", "--area", "x", "--risk", "low", "--refs", h, "follow-up about the position")
+		if got := concludedLines(stderr); len(got) != 0 {
+			t.Errorf("an open-item naming a handoff must be silent, got %q", got)
+		}
+	})
+
+	t.Run("a note concluding a sibling workstream's position names that workstream", func(t *testing.T) {
+		repo := emitRepo(t)
+		mine, _ := emitCapture(t, "--type", "handoff", "--area", "x", "this workstream's position")
+		_, thisWS := foldStacks(t)
+
+		wtDir := filepath.Join(t.TempDir(), "proj-feature")
+		gitRun(t, repo, "worktree", "add", "-q", "-b", "feature", wtDir)
+		t.Chdir(wtDir)
+		theirs, _ := emitCapture(t, "--type", "handoff", "--area", "x", "sibling workstream position")
+		_, siblingWS := foldStacks(t)
+		t.Chdir(repo)
+		if siblingWS == thisWS {
+			t.Fatalf("setup: worktree shares workstream %s", thisWS)
+		}
+
+		_, stderr := emitCapture(t, "--type", "note", "--area", "x", "--refs", theirs, "concludes the sibling's position from here")
+		got := concludedLines(stderr)
+		if len(got) != 1 || !strings.Contains(got[0], "of "+siblingWS+": "+theirs+";") {
+			t.Fatalf("confirmation lines = %q, want one line naming workstream %s and %s", got, siblingWS, theirs)
+		}
+		if strings.Contains(got[0], thisWS) || strings.Contains(got[0], mine) {
+			t.Errorf("the line must be about the sibling only: %q", got[0])
+		}
+		if !strings.Contains(got[0], "emitted from that workstream's own worktree") {
+			t.Errorf("a sibling's position cannot be restored from here, the line must say so: %q", got[0])
+		}
+		// This workstream's own position was not touched.
+		if stacks, _ := foldStacks(t); !reflect.DeepEqual(stacks[thisWS], []string{mine}) {
+			t.Errorf("this workstream's stack = %v, want [%s]", stacks[thisWS], mine)
+		}
+	})
+
+	t.Run("one line per affected workstream", func(t *testing.T) {
+		repo := emitRepo(t)
+		mine, _ := emitCapture(t, "--type", "handoff", "--area", "x", "this workstream's position")
+		wtDir := filepath.Join(t.TempDir(), "proj-feature")
+		gitRun(t, repo, "worktree", "add", "-q", "-b", "feature", wtDir)
+		t.Chdir(wtDir)
+		theirs, _ := emitCapture(t, "--type", "handoff", "--area", "x", "sibling workstream position")
+		t.Chdir(repo)
+
+		_, stderr := emitCapture(t, "--type", "note", "--area", "x", "--refs", mine+","+theirs, "concludes both workstreams")
+		if got := concludedLines(stderr); len(got) != 2 {
+			t.Errorf("want one line per affected workstream (2), got %q", got)
+		}
+	})
+
+	// The degraded path: with the log unreadable a handoff ref cannot be told
+	// from a cross-link, so emit says nothing rather than guess.
+	t.Run("unreadable log prints nothing", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("chmod permission bits do not gate reads on Windows")
+		}
+		if os.Geteuid() == 0 {
+			t.Skip("root bypasses the permission bits this case needs")
+		}
+		emitRepo(t)
+		h, _ := emitCapture(t, "--type", "handoff", "--area", "x", "the live position")
+		hub, ws, err := resolveContext()
+		if err != nil {
+			t.Fatalf("resolveContext: %v", err)
+		}
+		logPath := event.NewStore(hub, ws.RepoKey).Path()
+		if err := os.Chmod(logPath, 0o200); err != nil {
+			t.Fatalf("chmod log: %v", err)
+		}
+		t.Cleanup(func() { os.Chmod(logPath, 0o644) })
+
+		_, stderr := emitCapture(t, "--type", "note", "--area", "x", "--refs", h, "concluding with the log unreadable")
+		if got := concludedLines(stderr); len(got) != 0 {
+			t.Errorf("an unreadable log must print nothing, got %q", got)
+		}
+	})
+}
+
+// TestRunEmitNoteConclusionRecovery proves the recovery the confirmation line
+// gives, through the fold: a note concludes live positions, and a new handoff
+// whose --refs name the concluded handoff(s) is explicit, newer than the
+// conclusion mark, and so comes back as the workstream's live resume point.
+// For a sibling workstream the same handoff has to come from that workstream.
+func TestRunEmitNoteConclusionRecovery(t *testing.T) {
+	t.Run("own workstream, one position", func(t *testing.T) {
+		emitRepo(t)
+		h, _ := emitCapture(t, "--type", "handoff", "--area", "x", "the live position")
+		emitCapture(t, "--type", "note", "--area", "x", "--refs", h, "stray conclusion")
+		if got := resumeStack(t); len(got) != 0 {
+			t.Fatalf("setup: the note should have concluded the position, stack = %v", got)
+		}
+
+		restored, stderr := emitCapture(t, "--type", "handoff", "--area", "x", "--refs", h, "restored position")
+		if strings.Contains(stderr, "⚠") {
+			t.Errorf("a handoff naming the concluded position is explicit and must not warn, got %q", stderr)
+		}
+		if got := resumeStack(t); !reflect.DeepEqual(got, []string{restored}) {
+			t.Errorf("stack after the restoring handoff = %v, want exactly [%s]", got, restored)
+		}
+	})
+
+	t.Run("own workstream, a stack of parallel positions", func(t *testing.T) {
+		emitRepo(t)
+		start, _ := emitCapture(t, "--type", "handoff", "--area", "x", "starting position")
+		a, _ := emitCapture(t, "--type", "handoff", "--area", "x", "--refs", start, "session A position")
+		b, _ := emitCapture(t, "--type", "handoff", "--area", "x", "--refs", start, "session B position")
+		_, stderr := emitCapture(t, "--type", "note", "--area", "x", "--refs", b, "stray conclusion")
+		if got := concludedLines(stderr); len(got) != 1 || !strings.Contains(got[0], "--refs names "+a+","+b+" (") {
+			t.Fatalf("setup: confirmation = %q, want it to name %s and %s", got, a, b)
+		}
+
+		// The line's advice, verbatim: a handoff whose --refs name the listed ULIDs.
+		restored, _ := emitCapture(t, "--type", "handoff", "--area", "x", "--refs", a+","+b, "restored, folding A and B")
+		if got := resumeStack(t); !reflect.DeepEqual(got, []string{restored}) {
+			t.Errorf("stack after the restoring handoff = %v, want exactly [%s]", got, restored)
+		}
+	})
+
+	t.Run("sibling workstream", func(t *testing.T) {
+		repo := emitRepo(t)
+		wtDir := filepath.Join(t.TempDir(), "proj-feature")
+		gitRun(t, repo, "worktree", "add", "-q", "-b", "feature", wtDir)
+		t.Chdir(wtDir)
+		theirs, _ := emitCapture(t, "--type", "handoff", "--area", "x", "sibling workstream position")
+		_, siblingWS := foldStacks(t)
+		t.Chdir(repo)
+		emitCapture(t, "--type", "note", "--area", "x", "--refs", theirs, "stray conclusion of the sibling")
+		if stacks, _ := foldStacks(t); len(stacks[siblingWS]) != 0 {
+			t.Fatalf("setup: the sibling's position should be concluded, stack = %v", stacks[siblingWS])
+		}
+
+		// From HERE the handoff belongs to this workstream: it cannot restore the
+		// sibling's position, which is why the line says to emit from there.
+		emitCapture(t, "--type", "handoff", "--area", "x", "--refs", theirs, "emitted from the wrong workstream")
+		if stacks, _ := foldStacks(t); len(stacks[siblingWS]) != 0 {
+			t.Errorf("a handoff from another workstream must not restore %s, stack = %v", siblingWS, stacks[siblingWS])
+		}
+
+		t.Chdir(wtDir)
+		restored, _ := emitCapture(t, "--type", "handoff", "--area", "x", "--refs", theirs, "restored from its own worktree")
+		if stacks, _ := foldStacks(t); !reflect.DeepEqual(stacks[siblingWS], []string{restored}) {
+			t.Errorf("sibling stack after restoring from its own worktree = %v, want exactly [%s]", stacks[siblingWS], restored)
+		}
+	})
 }
 
 // captureStreams runs fn with BOTH os.Stdout and os.Stderr redirected to pipes
