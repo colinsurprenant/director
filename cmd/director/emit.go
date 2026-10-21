@@ -94,12 +94,54 @@ func runEmit(args []string) int {
 
 // The two implicit-handoff shapes, worded to name the LOSS rather than describe
 // the flag: what a session must act on is that a position it never saw is being
-// retired, and that loss is invisible after the fact.
+// retired, and that loss is invisible after the fact. Each opening clause is
+// followed by the recovery that actually works (handoffRecovery), because the
+// obvious one does not: the implicit mark counts every implicit handoff, so a
+// retired position stays retired even if a later handoff names it.
 const (
-	warnHandoffNoRefs = "⚠ handoff without --refs: it supersedes ALL older handoffs of this workstream, including parallel positions you may not have seen — pass --refs <resume-point-ulid> to supersede only what you rehydrated from"
+	warnHandoffNoRefsHead = "⚠ handoff without --refs: it supersedes ALL older handoffs of this workstream, including parallel positions you may not have seen"
 
-	warnHandoffWrongRefs = "⚠ handoff --refs names no handoff of this workstream (a note, a sibling workstream's position, or an unknown id — a ULID mis-copied from another line in the digest is the usual cause): the fold reads it as ref-less, so it supersedes ALL older handoffs of this workstream, including parallel positions you may not have seen — re-emit with the resume-point ULID(s) from your ground truth"
+	warnHandoffWrongRefsHead = "⚠ handoff --refs names no handoff of this workstream (a note, a sibling workstream's position, or an unknown id — a ULID mis-copied from another line in the digest is the usual cause): the fold reads it as ref-less, so it supersedes ALL older handoffs of this workstream, including parallel positions you may not have seen"
 )
+
+// warnHandoffNoRefs and warnHandoffWrongRefs build the two warnings for the
+// implicit handoff self, which retired the positions in lost (nil when the log
+// could not be read, so they are unknown). The no-refs shape also keeps the
+// next-time advice, since an omitted flag is the one a session can still fix at
+// the source.
+func warnHandoffNoRefs(self string, lost []string) string {
+	return warnHandoffNoRefsHead + handoffRecovery(self, lost) +
+		". Next time, pass --refs <resume-point-ulid> to supersede only what you rehydrated from"
+}
+
+func warnHandoffWrongRefs(self string, lost []string) string {
+	return warnHandoffWrongRefsHead + handoffRecovery(self, lost)
+}
+
+// handoffRecovery is the shared tail: which positions were retired, and the one
+// recovery the fold supports. Naming a retired position in a new handoff does
+// nothing (the implicit mark sits at self and retires everything strictly older),
+// so the recovery names self instead: a handoff whose --refs names an earlier
+// handoff of the workstream is explicit, retires exactly that one, and is newer
+// than the implicit mark, so it is a live position (TestRunEmitImplicitHandoffRecovery
+// runs this through the fold). It is not promised to be the ONLY one: a handoff
+// at or above the implicit one, from a concurrent session, keeps stacking.
+//
+// With the log unreadable the retired positions cannot be listed, and the
+// session-start ground truth cannot stand in for them (it is a snapshot that
+// never shows a position written mid-session). What survives the outage is
+// `director show`: a retired handoff prints a lifecycle line naming the handoff
+// that retired it.
+func handoffRecovery(self string, lost []string) string {
+	var b strings.Builder
+	if len(lost) > 0 {
+		fmt.Fprintf(&b, ". Retired by this handoff: %s (naming a retired position in a later handoff does not bring it back)", strings.Join(lost, ", "))
+	} else {
+		b.WriteString(". The log could not be read, so the positions it retired cannot be listed here; once it reads again, `director show <earlier handoff ULID>` prints a `lifecycle:` line naming the handoff that retired it, and they stay retired even if a later handoff names them")
+	}
+	fmt.Fprintf(&b, ". To recover, read each retired position with `director show <ULID>`, fold what you still need into a corrected handoff, and emit it with --refs %s (this handoff): that retires this one and puts a live resume point in its place", self)
+	return b.String()
+}
 
 // warnHandoffRefs classifies a freshly-appended handoff against the log and warns
 // on stderr when the fold will read it as IMPLICIT — the legacy shape that retires
@@ -133,7 +175,7 @@ func warnHandoffRefs(store *event.Store, ev event.Event, refList []string) {
 	events, err := store.ReadAll()
 	if err != nil {
 		if len(refList) == 0 {
-			fmt.Fprintln(os.Stderr, warnHandoffNoRefs)
+			fmt.Fprintln(os.Stderr, warnHandoffNoRefs(ev.ID, nil))
 		}
 		return
 	}
@@ -158,15 +200,23 @@ func warnHandoffRefs(store *event.Store, ev event.Event, refList []string) {
 		return
 	}
 	// Implicit: it retires every strictly-older position of this workstream, so
-	// what it costs is precisely the stack that was live before it landed.
-	if len(render.Fold(before).ResumeHandoffs[ev.Workstream]) == 0 {
+	// what it costs is precisely the stack that was live below it. A position
+	// above it (a parallel handoff that landed after this append) is untouched,
+	// and is neither lost nor listed.
+	var lost []string
+	for _, p := range render.Fold(before).ResumeHandoffs[ev.Workstream] {
+		if p.ID < ev.ID {
+			lost = append(lost, p.ID)
+		}
+	}
+	if len(lost) == 0 {
 		return
 	}
 	if len(refList) == 0 {
-		fmt.Fprintln(os.Stderr, warnHandoffNoRefs)
+		fmt.Fprintln(os.Stderr, warnHandoffNoRefs(ev.ID, lost))
 		return
 	}
-	fmt.Fprintln(os.Stderr, warnHandoffWrongRefs)
+	fmt.Fprintln(os.Stderr, warnHandoffWrongRefs(ev.ID, lost))
 }
 
 // canonicalRefs splits a comma-separated --refs value, canonicalizes each ULID,

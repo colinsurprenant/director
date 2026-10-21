@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/colinsurprenant/director/internal/event"
 	"github.com/colinsurprenant/director/internal/id"
 	"github.com/colinsurprenant/director/internal/identity"
+	"github.com/colinsurprenant/director/internal/render"
 )
 
 // TestRunEmitRoutingEcho locks emit's two-stream contract. stdout carries the
@@ -90,7 +92,19 @@ func TestRunEmitImplicitHandoffWarns(t *testing.T) {
 		t.Errorf("a ref-less handoff over an existing position must warn, got %q", stderr)
 	}
 	if !strings.Contains(stderr, "pass --refs <resume-point-ulid>") {
-		t.Errorf("the warning must name the remedy, got %q", stderr)
+		t.Errorf("the warning must name the next-time remedy, got %q", stderr)
+	}
+	// The recovery names the loss and the handoff the corrected one must ref.
+	if !strings.Contains(stderr, "Retired by this handoff: "+first+" ") {
+		t.Errorf("the warning must list the retired position %s, got %q", first, stderr)
+	}
+	if !strings.Contains(stderr, "emit it with --refs "+prior+" (this handoff)") {
+		t.Errorf("the warning must name this handoff %s as the ref of the corrected one, got %q", prior, stderr)
+	}
+	// A concurrent handoff at or above this one keeps stacking, so the corrected
+	// handoff is promised as a live position, not as the only one.
+	if !strings.Contains(stderr, "puts a live resume point in its place") {
+		t.Errorf("the warning must promise a live resume point, got %q", stderr)
 	}
 
 	// A handoff naming a position of its own workstream is EXPLICIT: silent.
@@ -125,9 +139,12 @@ func TestRunEmitImplicitHandoffWarns(t *testing.T) {
 		"an id no event carries":         unknown,
 		"a sibling workstream's handoff": siblingHandoff,
 	} {
-		_, stderr = emitCapture(t, "--type", "handoff", "--area", "x", "--refs", ref, "refs "+name)
+		self, stderr := emitCapture(t, "--type", "handoff", "--area", "x", "--refs", ref, "refs "+name)
 		if !strings.Contains(stderr, wrongRefsWarning) {
 			t.Errorf("--refs naming %s must warn (the fold reads it as ref-less), got %q", name, stderr)
+		}
+		if !strings.Contains(stderr, "emit it with --refs "+self+" (this handoff)") {
+			t.Errorf("--refs naming %s: the warning must name this handoff %s for the corrected one, got %q", name, self, stderr)
 		}
 		if strings.Contains(stderr, noRefsWarning) {
 			t.Errorf("--refs naming %s must take the wrong-refs warning, not the no-refs one: %q", name, stderr)
@@ -345,11 +362,120 @@ func TestRunEmitHandoffWarningNeedsALivePosition(t *testing.T) {
 		}
 		t.Cleanup(func() { os.Chmod(logPath, 0o644) })
 
-		_, stderr := emitCapture(t, "--type", "handoff", "--area", "x", "first position, log unreadable")
+		self, stderr := emitCapture(t, "--type", "handoff", "--area", "x", "first position, log unreadable")
 		if !strings.Contains(stderr, noRefsWarning) {
 			t.Errorf("an unreadable log must degrade to the flags-only no-refs warning, got %q", stderr)
 		}
+		// It cannot list the retired positions, so it must not claim any, and the
+		// session-start ground truth is no substitute (a snapshot that never shows a
+		// mid-session position), but the recovery still hangs off this handoff's own id.
+		if strings.Contains(stderr, "Retired by this handoff") || !strings.Contains(stderr, "The log could not be read, so the positions it retired cannot be listed here") {
+			t.Errorf("an unreadable log must say the retired positions cannot be listed, got %q", stderr)
+		}
+		if strings.Contains(stderr, "ground truth") || !strings.Contains(stderr, "`director show <earlier handoff ULID>` prints a `lifecycle:` line") {
+			t.Errorf("an unreadable log must point at director show's lifecycle line, not the ground truth, got %q", stderr)
+		}
+		if !strings.Contains(stderr, "emit it with --refs "+self+" (this handoff)") {
+			t.Errorf("the degraded warning must still name this handoff %s, got %q", self, stderr)
+		}
 	})
+}
+
+// resumeStack is the fold's answer to "which positions are live" for the
+// current workstream: the ULIDs of its resume stack, ascending.
+func resumeStack(t *testing.T) []string {
+	t.Helper()
+	hub, ws, err := resolveContext()
+	if err != nil {
+		t.Fatalf("resolveContext: %v", err)
+	}
+	events, err := event.NewStore(hub, ws.RepoKey).ReadAll()
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	var stack []string
+	for _, h := range render.Fold(events).ResumeHandoffs[ws.ID] {
+		stack = append(stack, h.ID)
+	}
+	return stack
+}
+
+// TestRunEmitImplicitHandoffRecovery proves the recovery the warnings spell out,
+// end to end through the fold. Two parallel sessions leave live positions; a
+// third emits an implicit handoff that retires both. Naming the retired
+// positions in a new handoff is the advice that does NOT work (the implicit mark
+// sits at the implicit handoff and keeps everything older retired, and the
+// implicit handoff itself stays live beside the new one). Naming the IMPLICIT
+// handoff does: it is explicit, retires exactly that handoff, and is newer than
+// the mark, so it is the one resume position.
+func TestRunEmitImplicitHandoffRecovery(t *testing.T) {
+	// parallelPositions leaves two live positions in a fresh workstream: both
+	// consolidate the same starting handoff, so neither retires the other.
+	parallelPositions := func(t *testing.T) (a, b string) {
+		t.Helper()
+		emitRepo(t)
+		start, _ := emitCapture(t, "--type", "handoff", "--area", "x", "starting position")
+		a, _ = emitCapture(t, "--type", "handoff", "--area", "x", "--refs", start, "session A position")
+		b, _ = emitCapture(t, "--type", "handoff", "--area", "x", "--refs", start, "session B position")
+		if got := resumeStack(t); !reflect.DeepEqual(got, []string{a, b}) {
+			t.Fatalf("setup: resume stack = %v, want [%s %s]", got, a, b)
+		}
+		return a, b
+	}
+
+	shapes := map[string]func(t *testing.T) (self, stderr string){
+		"ref-less": func(t *testing.T) (string, string) {
+			return emitCapture(t, "--type", "handoff", "--area", "x", "ref-less position")
+		},
+		"refs naming no handoff": func(t *testing.T) (string, string) {
+			note, _ := emitCapture(t, "--type", "note", "--area", "x", "a note, mis-copied as a ref")
+			return emitCapture(t, "--type", "handoff", "--area", "x", "--refs", note, "position with a mis-copied ref")
+		},
+	}
+	for name, implicit := range shapes {
+		t.Run(name+"/recovery names the implicit handoff", func(t *testing.T) {
+			a, b := parallelPositions(t)
+			self, stderr := implicit(t)
+
+			if !strings.Contains(stderr, "Retired by this handoff: "+a+", "+b+" ") {
+				t.Fatalf("the warning must list both retired positions %s, %s, got %q", a, b, stderr)
+			}
+			if got := resumeStack(t); !reflect.DeepEqual(got, []string{self}) {
+				t.Fatalf("after the implicit handoff the stack = %v, want only [%s]", got, self)
+			}
+			// The unreadable-log wording leans on this: once the log reads again,
+			// show names the handoff that retired each position.
+			for _, retired := range []string{a, b} {
+				shown, _ := captureStreams(t, func() { runShow([]string{retired}) })
+				if !strings.Contains(shown, "lifecycle: superseded by "+self+"\n") {
+					t.Errorf("show %s = %q, want a lifecycle line naming %s", retired, shown, self)
+				}
+			}
+
+			// The recovery the warning gives: a corrected handoff that refs the
+			// implicit one, which retires it and stands alone.
+			corrected, stderr := emitCapture(t, "--type", "handoff", "--area", "x", "--refs", self, "corrected handoff folding A and B")
+			if strings.Contains(stderr, "⚠") {
+				t.Errorf("the corrected handoff names a real position and must not warn, got %q", stderr)
+			}
+			if got := resumeStack(t); !reflect.DeepEqual(got, []string{corrected}) {
+				t.Errorf("after the corrected handoff: stack = %v, want exactly [%s]", got, corrected)
+			}
+		})
+
+		// What the old text said to do: re-emit naming the retired positions. It
+		// does not recover: they stay retired, and the implicit handoff is still
+		// live beside the new one.
+		t.Run(name+"/naming the retired positions does not recover", func(t *testing.T) {
+			a, b := parallelPositions(t)
+			self, _ := implicit(t)
+
+			wrong, _ := emitCapture(t, "--type", "handoff", "--area", "x", "--refs", a+","+b, "re-emit naming the retired positions")
+			if got := resumeStack(t); !reflect.DeepEqual(got, []string{self, wrong}) {
+				t.Errorf("stack = %v, want [%s %s]: the retired positions must not come back and the implicit handoff must stay live", got, self, wrong)
+			}
+		})
+	}
 }
 
 // captureStreams runs fn with BOTH os.Stdout and os.Stderr redirected to pipes
