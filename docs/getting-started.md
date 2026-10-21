@@ -189,7 +189,8 @@ Codex-specific notes:
   Esc is enough), run `/hooks` inside the session to review and trust them.
 - Ground truth injection, liveness, and close-out work identically on Claude Code, Codex, and Copilot
   CLI, and equivalently on OpenCode (same injected state, different mechanism: its plugin injects on
-  the first user message because OpenCode has no session-start hook; see "Using OpenCode?" below). The
+  the first user message on OpenCode 1 and into the system prompt on OpenCode 2, neither of which has
+  a session-start hook; see "Using OpenCode?" below). The
   Stop emit-guard and the context-fill handoff nudge are Claude Code-only for now (they read CC's
   transcript format and stay safely inert on Codex, OpenCode, and Copilot CLI), and so is the
   `SessionEnd` row reaper on Codex and OpenCode: neither exposes a session-end event (Copilot CLI does,
@@ -224,20 +225,39 @@ and none of your config files are merged or modified) and the boundary commands 
 at `~/.config/opencode/command/`, invoked as `/director-adopt`, `/director-complete`,
 `/director-handoff`. OpenCode-specific notes:
 
-- **Injection rides the first message.** OpenCode has no injectable session-start hook, so the plugin
-  prepends the ground truth to the first user message of each session. After a compaction the resumed
+- **One plugin file serves OpenCode 1 and OpenCode 2** (verified live on 1.18.3, 1.19.3, and 2.1.0;
+  the file also loaded on the older 1.x releases spot-checked, 1.14.17, 1.15.0, 1.16.0, 1.17.20, and
+  1.18.0, where only the load was checked; releases before 1.14.17 are untested). The two majors scan the same plugin directory and each rejects a
+  plugin in the other's shape, so the file's default export carries both entry points and each major
+  uses the one it knows. If you upgraded OpenCode to 2 while an older Director plugin (the OpenCode 1
+  shape) was installed, that plugin no longer loads and Director silently stops firing: re-run
+  `director install --opencode`, and use `director doctor` to confirm.
+- **Injection needs no session-start hook, because OpenCode has none.** On OpenCode 1 the plugin
+  prepends the ground truth to the first user message of each session; after a compaction the resumed
   turn is re-grounded through the system prompt (OpenCode's auto-continuation bypasses the message
-  hook), and the next user message re-injects the state durably. Behavior is otherwise identical to
-  Claude Code's session-start injection.
+  hook), and the next user message re-injects the state durably. On OpenCode 2 the plugin fetches the
+  ground truth on a session's first model request and appends it to the system prompt of every
+  request (OpenCode 2 does not persist such additions, so each request needs its own); a compaction
+  makes the next request fetch it again. Either way the state arrives as it does on Claude Code's
+  session-start injection.
 - The Stop emit-guard and the context-fill handoff nudge read CC's transcript format and stay safely
-  inert on OpenCode; end-of-turn fleet bookkeeping still runs (OpenCode's `session.idle` is a
-  turn-end signal, so it matches Claude Code's `Stop`). OpenCode has no session-end event, so it
-  gets no equivalent of Claude Code's `SessionEnd` row reaping. It needs one less than Codex does:
-  the liveness row registers on that same first user message and every turn end archives it, so an
-  exit at the prompt leaves nothing behind. A session that dies before a turn ends leaves a row that
-  ages out by TTL.
+  inert on OpenCode; end-of-turn fleet bookkeeping still runs (OpenCode 1's `session.idle` and
+  OpenCode 2's `session.execution.succeeded`/`failed` are turn-end signals, so they match Claude
+  Code's `Stop`; an interrupted turn does not archive the row, as on Claude Code). OpenCode has no
+  session-end event, so it gets no equivalent of Claude Code's `SessionEnd` row reaping. It needs one
+  less than Codex does: the liveness row registers on that same first user message (on OpenCode 2,
+  the session's first model request) and every turn end archives it, so an exit at the prompt leaves
+  nothing behind. A session that dies before a turn ends leaves a row that ages out by TTL.
 - The plugin resolves the `director` binary the same way the shims do: `DIRECTOR_BIN`, then `PATH`,
   then the symlink `install` drops at `<hooks root>/bin/director`.
+- **On OpenCode 2, environment variables come from the server, not your terminal.** Plugins run inside
+  OpenCode's server process, and by default every OpenCode 2 client (the TUI, `opencode run`) connects
+  to one shared background server, which keeps the environment of the client that first started it.
+  `DIRECTOR_DISABLE`, `DIRECTOR_BIN`, and `DIRECTOR_FLUSH_NUDGE_EVERY` are read from that environment,
+  so a variable exported in one terminal reaches the plugin only with `--standalone`
+  (`opencode run --standalone` starts a private server that inherits your environment; verified), or
+  when it is set in the environment that starts the shared service. OpenCode 1 starts its server with
+  each invocation, so your environment reaches the plugin there.
 
 `director uninstall --opencode` removes only the managed plugin (it refuses to touch a
 `director.js` it does not own) and the `/director-*` command files; the shared bin symlink survives
@@ -507,7 +527,7 @@ would not fire; it also warns on a `DIRECTOR_DISABLE` left set. The table covers
 | **Coordination silently does nothing** | The shims fail-safe to exit 0 when the binary is missing. Ensure `DIRECTOR_BIN` (or `PATH`, or the `~/.claude/director/bin/director` symlink a re-run of `director install` refreshes) resolves `director`. |
 | **Works in the terminal, dead in the desktop app** | Dock/Launchpad launches get the bare launchd `PATH` ([anthropics/claude-code#44649](https://github.com/anthropics/claude-code/issues/44649)), so the shims' `PATH` tier misses. Re-run `director install` (it drops the `~/.claude/director/bin/director` symlink the shims fall back to), or pin the binary explicitly with `DIRECTOR_BIN` via `"env"` in `settings.json`. |
 | **State is in the wrong place** | All cross-repo state lives under `DIRECTOR_HUB` (default `~/.director`). If you set it for one command, set it for all: sessions and your CLI must agree. |
-| **A sandbox or CI clone gets the digest and the emit guard** | Identity is keyed by the origin URL, so any clone of an adopted repo (a review sandbox, a CI checkout, a dispatched agent's copy) is treated as that project. Export `DIRECTOR_DISABLE=1` where that agent or job is launched: every hook becomes a no-op (no digest, no emit guard, no fleet rows) and the CLI still works. All four integrations share one hook entry point, so all honor it; the variable reaching hooks from the launching shell is confirmed for Claude Code, Codex and OpenCode, not yet for Copilot CLI. Don't pin it in `~/.claude/settings.json` `"env"`: that disables Director in every Claude Code session. |
+| **A sandbox or CI clone gets the digest and the emit guard** | Identity is keyed by the origin URL, so any clone of an adopted repo (a review sandbox, a CI checkout, a dispatched agent's copy) is treated as that project. Export `DIRECTOR_DISABLE=1` where that agent or job is launched: every hook becomes a no-op (no digest, no emit guard, no fleet rows) and the CLI still works. All four integrations share one hook entry point, so all honor it; the variable reaching hooks from the launching shell is confirmed for Claude Code, Codex and OpenCode 1 (on OpenCode 2 only with `--standalone`, or when set where the shared background server is started: see "Using OpenCode?"), not yet for Copilot CLI. Don't pin it in `~/.claude/settings.json` `"env"`: that disables Director in every Claude Code session. |
 | **A hook seems broken** | Hooks are fail-safe by design: a failure never blocks a session, it logs. Read `$DIRECTOR_HUB/health/hook.log` (one line per outcome, `ok=false` marks failures). |
 | **`director _hook ...`** | Internal: invoked by the shims, never run by hand. |
 | **A row reads `idle` or `dormant` though the session is active** | Liveness is derived from heartbeat age. `PostToolUse` refreshes it on every tool call, so a session making no tool calls can age to `idle` (after 4h) then `dormant` (after 2d). Dormant is the normal between-blocks state, not an error. |
@@ -516,7 +536,7 @@ would not fire; it also warns on a `DIRECTOR_DISABLE` left set. The table covers
 | **`adopt` imported nothing** | By design: the CLI registers only (identity + CHARTER stub + fleet row). The import path is `/director:adopt` in an agent session: it triages the repo's real open loops and imports only what you confirm. |
 | **`install` refused** | Your `~/.claude/settings.json` has a malformed (non-object) `hooks` value. Director won't overwrite data it doesn't understand: fix the file, then re-run. |
 | **`install --copilot` or `uninstall --copilot` refused** | `~/.copilot/hooks/director.json` exists and is not fully Director's: either it is a file you wrote, or you added a command of your own (or a `powershell` field) to one of ours. Both verbs rewrite or delete that file whole, so Director refuses rather than destroy your work. Move your commands into another `*.json` in the same directory (Copilot loads them all), or point Director elsewhere with `DIRECTOR_COPILOT_HOOKS_PATH`, then re-run. `director doctor` names the events involved. |
-| **`director doctor` fails `opencode hooks` on OpenCode 2** | OpenCode 2 refuses any plugin that lacks a default export (`export default { id, setup }`), and the plugin Director installs today is the OpenCode 1 shape, so on OpenCode 2 the plugin never loads and Director does not fire in OpenCode sessions (#89). `doctor` runs `opencode --version` to tell, and fails only when a line of its output is a version with major 2 or more and the installed plugin has no `export default` at the start of a line. OpenCode 1 is unaffected. Upgrade Director to a release with OpenCode 2 support, then re-run `director install --opencode`; re-installing the current version does not change the plugin's shape. |
+| **`director doctor` fails `opencode hooks` on OpenCode 2** | OpenCode 2 refuses any plugin that lacks a default export (`export default { id, setup }`), and the plugin file on disk is the OpenCode 1 shape that earlier Director releases installed, so on OpenCode 2 it never loads and Director does not fire in OpenCode sessions (#89). `doctor` runs `opencode --version` to tell, and fails only when a line of its output is a version with major 2 or more and the installed plugin has no `export default` at the start of a line. OpenCode 1 is unaffected. Re-run `director install --opencode`: the plugin this release installs carries both shapes and loads on OpenCode 1 and 2. |
 
 ---
 
