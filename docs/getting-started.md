@@ -243,21 +243,29 @@ at `~/.config/opencode/command/`, invoked as `/director-adopt`, `/director-compl
 - The Stop emit-guard and the context-fill handoff nudge read CC's transcript format and stay safely
   inert on OpenCode; end-of-turn fleet bookkeeping still runs (OpenCode 1's `session.idle` and
   OpenCode 2's `session.execution.succeeded`/`failed` are turn-end signals, so they match Claude
-  Code's `Stop`; an interrupted turn does not archive the row, as on Claude Code). OpenCode has no
+  Code's `Stop`; on OpenCode 2 an interrupted turn does not archive the row, as on Claude Code,
+  while the OpenCode 1 plugin treats every `session.idle` as a turn end). OpenCode has no
   session-end event, so it gets no equivalent of Claude Code's `SessionEnd` row reaping. It needs one
   less than Codex does: the liveness row registers on that same first user message (on OpenCode 2,
   the session's first model request) and every turn end archives it, so an exit at the prompt leaves
   nothing behind. A session that dies before a turn ends leaves a row that ages out by TTL.
 - The plugin resolves the `director` binary the same way the shims do: `DIRECTOR_BIN`, then `PATH`,
   then the symlink `install` drops at `<hooks root>/bin/director`.
-- **On OpenCode 2, environment variables come from the server, not your terminal.** Plugins run inside
-  OpenCode's server process, and by default every OpenCode 2 client (the TUI, `opencode run`) connects
-  to one shared background server, which keeps the environment of the client that first started it.
-  `DIRECTOR_DISABLE`, `DIRECTOR_BIN`, and `DIRECTOR_FLUSH_NUDGE_EVERY` are read from that environment,
-  so a variable exported in one terminal reaches the plugin only with `--standalone`
-  (`opencode run --standalone` starts a private server that inherits your environment; verified), or
-  when it is set in the environment that starts the shared service. OpenCode 1 starts its server with
-  each invocation, so your environment reaches the plugin there.
+- **On OpenCode 2, environment variables come from the server, not your terminal, and the hazard
+  runs both ways.** Plugins run inside OpenCode's server process, and by default every OpenCode 2
+  client (the TUI, `opencode run`) connects to one shared background server. That service is
+  spawned with the environment of whichever client starts it and keeps it until the service
+  restarts. `DIRECTOR_DISABLE`, `DIRECTOR_HUB`, `DIRECTOR_BIN`, and `DIRECTOR_FLUSH_NUDGE_EVERY` are
+  read from that environment. So a value exported in one terminal reaches the plugin only with
+  `--standalone` (`opencode run --standalone` starts a private server that inherits your
+  environment; verified), and conversely a `DIRECTOR_DISABLE=1` or `DIRECTOR_HUB=...` on the
+  `opencode run` that happens to start the service silently applies to every later session on the
+  machine until the service restarts: nothing in Director or `director doctor` can see that. **On
+  OpenCode 2, pair any per-run `DIRECTOR_DISABLE` or `DIRECTOR_HUB` with `--standalone`.** To set
+  one for the service on purpose, put it in the environment that starts the service, or in the
+  service's own config (`opencode service set env NAME VALUE`, which OpenCode applies to the service
+  process; check `opencode service set --help`). OpenCode 1 starts its server with each invocation,
+  so your environment reaches the plugin there.
 
 `director uninstall --opencode` removes only the managed plugin (it refuses to touch a
 `director.js` it does not own) and the `/director-*` command files; the shared bin symlink survives
@@ -527,7 +535,7 @@ would not fire; it also warns on a `DIRECTOR_DISABLE` left set. The table covers
 | **Coordination silently does nothing** | The shims fail-safe to exit 0 when the binary is missing. Ensure `DIRECTOR_BIN` (or `PATH`, or the `~/.claude/director/bin/director` symlink a re-run of `director install` refreshes) resolves `director`. |
 | **Works in the terminal, dead in the desktop app** | Dock/Launchpad launches get the bare launchd `PATH` ([anthropics/claude-code#44649](https://github.com/anthropics/claude-code/issues/44649)), so the shims' `PATH` tier misses. Re-run `director install` (it drops the `~/.claude/director/bin/director` symlink the shims fall back to), or pin the binary explicitly with `DIRECTOR_BIN` via `"env"` in `settings.json`. |
 | **State is in the wrong place** | All cross-repo state lives under `DIRECTOR_HUB` (default `~/.director`). If you set it for one command, set it for all: sessions and your CLI must agree. |
-| **A sandbox or CI clone gets the digest and the emit guard** | Identity is keyed by the origin URL, so any clone of an adopted repo (a review sandbox, a CI checkout, a dispatched agent's copy) is treated as that project. Export `DIRECTOR_DISABLE=1` where that agent or job is launched: every hook becomes a no-op (no digest, no emit guard, no fleet rows) and the CLI still works. All four integrations share one hook entry point, so all honor it; the variable reaching hooks from the launching shell is confirmed for Claude Code, Codex and OpenCode 1 (on OpenCode 2 only with `--standalone`, or when set where the shared background server is started: see "Using OpenCode?"), not yet for Copilot CLI. Don't pin it in `~/.claude/settings.json` `"env"`: that disables Director in every Claude Code session. |
+| **A sandbox or CI clone gets the digest and the emit guard** | Identity is keyed by the origin URL, so any clone of an adopted repo (a review sandbox, a CI checkout, a dispatched agent's copy) is treated as that project. Export `DIRECTOR_DISABLE=1` where that agent or job is launched: every hook becomes a no-op (no digest, no emit guard, no fleet rows) and the CLI still works. All four integrations share one hook entry point, so all honor it; the variable reaching hooks from the launching shell is confirmed for Claude Code, Codex and OpenCode 1 (on OpenCode 2 only with `--standalone`, or when set where the shared background server is started, and never on an `opencode run` that may start that service, or it applies to every later session: see "Using OpenCode?"), not yet for Copilot CLI. Don't pin it in `~/.claude/settings.json` `"env"`: that disables Director in every Claude Code session. |
 | **A hook seems broken** | Hooks are fail-safe by design: a failure never blocks a session, it logs. Read `$DIRECTOR_HUB/health/hook.log` (one line per outcome, `ok=false` marks failures). |
 | **`director _hook ...`** | Internal: invoked by the shims, never run by hand. |
 | **A row reads `idle` or `dormant` though the session is active** | Liveness is derived from heartbeat age. `PostToolUse` refreshes it on every tool call, so a session making no tool calls can age to `idle` (after 4h) then `dormant` (after 2d). Dormant is the normal between-blocks state, not an error. |
