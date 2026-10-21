@@ -1,0 +1,33 @@
+{
+  "sessionID": "ses_ea12ecff6ffeL2JnfLAkucQxFQ",
+  "info": {
+    "id": "msg_15ed13129001kmkuuvUmlbiYsn",
+    "parentID": "msg_15ed1301e001RsyE6EN90c8w1m",
+    "role": "assistant",
+    "mode": "build",
+    "agent": "build",
+    "path": {
+      "cwd": "/private/var/folders/0v/vw52k5gd7t9bk0v2lyj5dg780000gn/T/canary-opencode-ws.wsjSt8",
+      "root": "/private/var/folders/0v/vw52k5gd7t9bk0v2lyj5dg780000gn/T/canary-opencode-ws.wsjSt8"
+    },
+    "cost": 0,
+    "tokens": {
+      "total": 8018,
+      "input": 6021,
+      "output": 12,
+      "reasoning": 0,
+      "cache": {
+        "write": 0,
+        "read": 1985
+      }
+    },
+    "modelID": "big-pickle",
+    "providerID": "opencode",
+    "time": {
+      "created": 1792592130345,
+      "completed": 1792592133034
+    },
+    "sessionID": "ses_ea12ecff6ffeL2JnfLAkucQxFQ",
+    "finish": "stop"
+  }
+}

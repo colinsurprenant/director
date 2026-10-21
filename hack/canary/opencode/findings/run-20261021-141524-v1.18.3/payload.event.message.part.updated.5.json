@@ -1,0 +1,15 @@
+{
+  "sessionID": "ses_ea12ecff6ffeL2JnfLAkucQxFQ",
+  "part": {
+    "id": "prt_15ed13b4e001y4jnyi7LVNFXRG",
+    "messageID": "msg_15ed13129001kmkuuvUmlbiYsn",
+    "sessionID": "ses_ea12ecff6ffeL2JnfLAkucQxFQ",
+    "type": "text",
+    "text": "CANARY-TOKEN-OC6D33E9",
+    "time": {
+      "start": 1792592132942,
+      "end": 1792592132988
+    }
+  },
+  "time": 1792592132988
+}

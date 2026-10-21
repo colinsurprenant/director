@@ -1,0 +1,21 @@
+{
+  "location": {
+    "directory": "/private/var/folders/0v/vw52k5gd7t9bk0v2lyj5dg780000gn/T/canary-opencode-ws.Fgn4Te"
+  },
+  "data": {
+    "info": {
+      "id": "sh_15ed1db6d001XlPSjM5IdObB5x",
+      "status": "running",
+      "command": "grep -rhoE 'CANARY-[A-Za-z0-9_-]+' . 2>/dev/null | sort -u",
+      "cwd": "/private/var/folders/0v/vw52k5gd7t9bk0v2lyj5dg780000gn/T/canary-opencode-ws.Fgn4Te",
+      "shell": "/bin/bash",
+      "file": "/var/folders/0v/vw52k5gd7t9bk0v2lyj5dg780000gn/T/canary-opencode-iso.C7H1rp/data/opencode/shell/80051afaccb1086261a2a076b25196b33f11bab9/sh_15ed1db6d001XlPSjM5IdObB5x.out",
+      "metadata": {
+        "sessionID": "ses_ea12e4de4ffeaZb0I015mIOrL5"
+      },
+      "time": {
+        "started": 1792592173933
+      }
+    }
+  }
+}

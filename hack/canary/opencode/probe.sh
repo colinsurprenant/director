@@ -1,19 +1,38 @@
 #!/usr/bin/env bash
 # probe.sh — live-contract canary for OpenCode (`opencode`).
 #
-# Verifies that the OpenCode plugin-hook CONTRACT actually works end to end:
-# the plugin loads and its hooks are called, the chat.message synthetic-part
-# injection (Director's SessionStart-equivalent) lands in the model's context,
-# and the tool.execute.after output-append channel (the path Director's nudges
-# ride) reaches the model. OpenCode hooks are in-process function calls, so
-# the probe ships a recorder PLUGIN (plugin/canary.js) instead of a shell
-# logger.
+# Verifies that the OpenCode plugin-hook CONTRACT actually works end to end,
+# on both supported majors: the plugin loads and its hooks are called, the
+# session-start injection (Director's SessionStart-equivalent: a chat.message
+# synthetic part on OpenCode 1, a session "context" hook system part on
+# OpenCode 2) lands in the model's context, and the tool-result append channel
+# (the path Director's nudges ride: tool.execute.after output on 1,
+# tool "execute.after" result content on 2) reaches the model. OpenCode hooks
+# are in-process function calls, so the probe ships a recorder PLUGIN
+# (plugin/canary.js, one dual-shape file) instead of a shell logger.
 #
 # Usage:
-#   ./probe.sh            run the full probe (requires a configured provider)
+#   ./probe.sh            run the full probe (requires a configured provider,
+#                         or --isolate with CANARY_MODEL set to a free model)
 #   ./probe.sh --dry-run  set up workspace + plugin, print the commands it
 #                         WOULD run, do not call opencode
 #   ./probe.sh --keep     keep the temp workspace after the run
+#   ./probe.sh --isolate  run opencode against a scratch HOME and XDG_* dirs, so
+#                         nothing of the real config, data or auth is read or
+#                         written (no credentials: pair with CANARY_MODEL)
+#
+# Environment:
+#   OPENCODE_BIN          the opencode binary to test (default: PATH, then
+#                         Homebrew); how a second major is tested side by side
+#   CANARY_MODEL          passed as `-m <provider/model>` (e.g. opencode/big-pickle,
+#                         a free model that needs no auth)
+#   CANARY_HARNESS_KEY    the last-tested.json key this run records under
+#                         (default: opencode for major 2, opencode-v1 for major 1)
+#
+# OpenCode 2 runs always use --standalone: without it `opencode run` talks to the
+# shared background service, which would run the canary plugin inside that
+# long-lived server (and a service started by an earlier client carries that
+# client's environment, not this one's).
 #
 # Exit codes:
 #   0  the probe RAN (verdicts are data, including a negative one)
@@ -21,13 +40,15 @@
 #   2  auth-blocked (no provider configured / provider auth failed)
 #
 # Sandboxing: the probe never WRITES to ~/.config/opencode. The canary plugin
-# is copied into a throwaway workspace's .opencode/plugin/ dir, which OpenCode
-# loads project-locally with no registration. Full isolation is not possible:
-# the global config is still read (a globally installed Director plugin — this
-# machine dogfoods Director — also loads, but is inert evidence-wise: the
-# canary tokens exist only in canary.js, so nothing else can produce them),
-# and OpenCode records the canary sessions in its real data dir, since auth
-# lives there too. Only the workspace itself is sandboxed.
+# is copied into a throwaway workspace's .opencode/plugin/ dir, which both
+# majors load project-locally with no registration. Without --isolate full
+# isolation is not possible: the global config is still read (a globally
+# installed Director plugin — this machine dogfoods Director — also loads, but
+# is inert evidence-wise: the canary tokens exist only in canary.js, so nothing
+# else can produce them), and OpenCode records the canary sessions in its real
+# data dir, since auth lives there too. Only the workspace itself is sandboxed.
+# With --isolate nothing outside the temp dirs is read or written, at the cost
+# of having no credentials (use a free model).
 
 set -euo pipefail
 
@@ -49,10 +70,12 @@ HARNESS="opencode"
 # ---------------------------------------------------------------------------
 DRY_RUN=0
 KEEP=0
+ISOLATE=0
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=1 ;;
     --keep)    KEEP=1 ;;
+    --isolate) ISOLATE=1 ;;
     -h|--help)
       grep -E '^#( |$)' "${BASH_SOURCE[0]}" | sed -E 's/^# ?//'
       exit 0
@@ -73,8 +96,10 @@ die()  { printf '[canary] ERROR: %s\n' "$*" >&2; exit "${2:-1}"; }
 # ---------------------------------------------------------------------------
 # Locate opencode (PATH, then Homebrew)
 # ---------------------------------------------------------------------------
-OPENCODE_BIN=""
-if canary_have opencode; then
+OPENCODE_BIN="${OPENCODE_BIN:-}"
+if [ -n "$OPENCODE_BIN" ]; then
+  :
+elif canary_have opencode; then
   OPENCODE_BIN="$(command -v opencode)"
 elif [ -x /opt/homebrew/bin/opencode ]; then
   OPENCODE_BIN=/opt/homebrew/bin/opencode
@@ -89,12 +114,28 @@ if [ -z "$OPENCODE_BIN" ]; then
   fi
 fi
 
+# OpenCode 1 prints a bare semver, OpenCode 2 prints "opencode v2.1.0": reduce
+# both to the bare version so the results dir and last-tested.json read alike.
 AGENT_VERSION="unknown"
 if [ -x "$OPENCODE_BIN" ] || canary_have "$OPENCODE_BIN"; then
-  AGENT_VERSION="$("$OPENCODE_BIN" --version 2>/dev/null | head -n1 | tr -d ' ' || echo unknown)"
+  AGENT_VERSION="$("$OPENCODE_BIN" --version 2>/dev/null | head -n1 | sed -E 's/^[[:space:]]*[Oo]pencode[[:space:]]+//; s/^[vV]//' | tr -d ' ' || echo unknown)"
   [ -z "$AGENT_VERSION" ] && AGENT_VERSION="unknown"
 fi
-log "opencode: $OPENCODE_BIN (version $AGENT_VERSION)"
+AGENT_MAJOR="${AGENT_VERSION%%.*}"
+case "$AGENT_MAJOR" in
+  ''|*[!0-9]*) AGENT_MAJOR=0 ;;
+esac
+log "opencode: $OPENCODE_BIN (version $AGENT_VERSION, major $AGENT_MAJOR)"
+
+HARNESS_KEY="${CANARY_HARNESS_KEY:-}"
+if [ -z "$HARNESS_KEY" ]; then
+  if [ "$AGENT_MAJOR" -ge 2 ]; then HARNESS_KEY="opencode"; else HARNESS_KEY="opencode-v1"; fi
+fi
+
+# Extra `opencode run` flags. OpenCode 2 needs --standalone (see the header).
+RUN_ARGS=()
+if [ "$AGENT_MAJOR" -ge 2 ]; then RUN_ARGS+=(--standalone); fi
+if [ -n "${CANARY_MODEL:-}" ]; then RUN_ARGS+=(-m "$CANARY_MODEL"); fi
 
 # ---------------------------------------------------------------------------
 # Results dir
@@ -107,19 +148,42 @@ log "results dir: $RESULTS_DIR"
 # Temp workspace with the project-local canary plugin
 # ---------------------------------------------------------------------------
 WORKSPACE="$(mktemp -d "${TMPDIR:-/tmp}/canary-opencode-ws.XXXXXX")"
+ISO_ROOT=""
+OC_ENV=()
+if [ "$ISOLATE" -eq 1 ]; then
+  ISO_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/canary-opencode-iso.XXXXXX")"
+  mkdir -p "$ISO_ROOT/home" "$ISO_ROOT/config" "$ISO_ROOT/data" "$ISO_ROOT/state" "$ISO_ROOT/cache"
+  OC_ENV=(env
+    "HOME=$ISO_ROOT/home"
+    "XDG_CONFIG_HOME=$ISO_ROOT/config"
+    "XDG_DATA_HOME=$ISO_ROOT/data"
+    "XDG_STATE_HOME=$ISO_ROOT/state"
+    "XDG_CACHE_HOME=$ISO_ROOT/cache"
+    OPENCODE_DISABLE_CLAUDE_CODE=1
+    OPENCODE_DISABLE_AUTOUPDATE=1
+    OPENCODE_DISABLE_EXTERNAL_SKILLS=1)
+fi
 
 cleanup() {
   if [ "$KEEP" -eq 1 ]; then
-    log "keeping workspace: $WORKSPACE"
+    log "keeping workspace: $WORKSPACE ${ISO_ROOT:+and isolated opencode dirs: $ISO_ROOT}"
     return 0
   fi
-  # Only ever remove our own mktemp dir.
+  # Only ever remove our own mktemp dirs.
   case "$WORKSPACE" in
     "${TMPDIR:-/tmp}"/canary-opencode-ws.*|/tmp/canary-opencode-ws.*|/var/folders/*/canary-opencode-ws.*)
       rm -rf "$WORKSPACE" ;;
     *)
       warn "refusing to rm unexpected workspace path: $WORKSPACE" ;;
   esac
+  if [ -n "$ISO_ROOT" ]; then
+    case "$ISO_ROOT" in
+      "${TMPDIR:-/tmp}"/canary-opencode-iso.*|/tmp/canary-opencode-iso.*|/var/folders/*/canary-opencode-iso.*)
+        rm -rf "$ISO_ROOT" ;;
+      *)
+        warn "refusing to rm unexpected isolation path: $ISO_ROOT" ;;
+    esac
+  fi
 }
 trap cleanup EXIT
 
@@ -168,10 +232,10 @@ if [ "$DRY_RUN" -eq 1 ]; then
 [canary] --dry-run: setup complete, NOT invoking opencode.
 
 Would run (turn 1, injection probe), cwd=$WORKSPACE:
-  $OPENCODE_BIN run "$TURN1_PROMPT"
+  ${OC_ENV[*]:-} $OPENCODE_BIN run ${RUN_ARGS[*]:-} "$TURN1_PROMPT"
 
 Would run (turn 2, tool-loop probe), cwd=$WORKSPACE:
-  $OPENCODE_BIN run "$TURN2_PROMPT"
+  ${OC_ENV[*]:-} $OPENCODE_BIN run ${RUN_ARGS[*]:-} "$TURN2_PROMPT"
 
 Canary plugin: $WORKSPACE/.opencode/plugin/canary.js
 Results dir:   $RESULTS_DIR
@@ -185,7 +249,7 @@ fi
 # ---------------------------------------------------------------------------
 log "turn 1: injection probe (300s cap)"
 set +e
-( cd "$WORKSPACE" && run_with_timeout 300 "$OPENCODE_BIN" run "$TURN1_PROMPT" ) \
+( cd "$WORKSPACE" && run_with_timeout 300 ${OC_ENV[@]+"${OC_ENV[@]}"} "$OPENCODE_BIN" run ${RUN_ARGS[@]+"${RUN_ARGS[@]}"} "$TURN1_PROMPT" ) \
   </dev/null >"$RESULTS_DIR/turn1.out.txt" 2>"$RESULTS_DIR/turn1.err"
 T1_RC=$?
 set -e
@@ -210,7 +274,7 @@ fi
 # ---------------------------------------------------------------------------
 log "turn 2: tool-loop probe (300s cap)"
 set +e
-( cd "$WORKSPACE" && run_with_timeout 300 "$OPENCODE_BIN" run "$TURN2_PROMPT" ) \
+( cd "$WORKSPACE" && run_with_timeout 300 ${OC_ENV[@]+"${OC_ENV[@]}"} "$OPENCODE_BIN" run ${RUN_ARGS[@]+"${RUN_ARGS[@]}"} "$TURN2_PROMPT" ) \
   </dev/null >"$RESULTS_DIR/turn2.out.txt" 2>"$RESULTS_DIR/turn2.err"
 T2_RC=$?
 set -e
@@ -252,8 +316,8 @@ canary_findings_header "$FINDINGS_MD" "$HARNESS" "$AGENT_VERSION" "$RUN_TS"
 {
   printf '## Verdicts\n\n'
   printf '| Probe | Result |\n|---|---|\n'
-  printf '| TOKEN_INJECTED (chat.message synthetic part) | %s |\n' "$TOKEN_INJECTED"
-  printf '| PTU_INJECTED (tool.execute.after output append) | %s |\n' "$PTU_INJECTED"
+  printf '| TOKEN_INJECTED (chat.message synthetic part on OpenCode 1, session context hook on 2) | %s |\n' "$TOKEN_INJECTED"
+  printf '| PTU_INJECTED (tool.execute.after output append on OpenCode 1, execute.after result content on 2) | %s |\n' "$PTU_INJECTED"
   printf '| Turn 1 exit code | %s |\n' "$T1_RC"
   printf '| Turn 2 exit code | %s |\n' "$T2_RC"
   printf '\n'
@@ -284,10 +348,11 @@ canary_findings_header "$FINDINGS_MD" "$HARNESS" "$AGENT_VERSION" "$RUN_TS"
   printf '## Commands used\n\n'
   printf '```\n'
   printf 'cd %s\n' "$WORKSPACE"
+  printf '# opencode = the binary under test (version above); isolation: %s; last-tested key: %s\n' "$([ "$ISOLATE" -eq 1 ] && echo "scratch HOME and XDG dirs" || echo "none (real config and data dirs)")" "$HARNESS_KEY"
   printf '# turn 1 (injection probe)\n'
-  printf '%s run "%s"\n' "$OPENCODE_BIN" "$TURN1_PROMPT"
+  printf 'opencode run %s "%s"\n' "${RUN_ARGS[*]:-}" "$TURN1_PROMPT"
   printf '# turn 2 (tool-loop probe)\n'
-  printf '%s run "%s"\n' "$OPENCODE_BIN" "$TURN2_PROMPT"
+  printf 'opencode run %s "%s"\n' "${RUN_ARGS[*]:-}" "$TURN2_PROMPT"
   printf '```\n'
 } >>"$FINDINGS_MD"
 
@@ -296,7 +361,7 @@ canary_findings_header "$FINDINGS_MD" "$HARNESS" "$AGENT_VERSION" "$RUN_TS"
 # ---------------------------------------------------------------------------
 REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || echo "$CANARY_DIR")"
 RESULTS_REL="${RESULTS_DIR#"$REPO_ROOT"/}"
-canary_record_version "$LAST_TESTED" "$HARNESS" "$AGENT_VERSION" "$RUN_TS" "$RESULTS_REL"
+canary_record_version "$LAST_TESTED" "$HARNESS_KEY" "$AGENT_VERSION" "$RUN_TS" "$RESULTS_REL"
 
 # ---------------------------------------------------------------------------
 # Compact stdout summary

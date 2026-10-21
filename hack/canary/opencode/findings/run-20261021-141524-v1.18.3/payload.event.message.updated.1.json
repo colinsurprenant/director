@@ -1,0 +1,16 @@
+{
+  "sessionID": "ses_ea12ecff6ffeL2JnfLAkucQxFQ",
+  "info": {
+    "id": "msg_15ed1301e001RsyE6EN90c8w1m",
+    "role": "user",
+    "sessionID": "ses_ea12ecff6ffeL2JnfLAkucQxFQ",
+    "time": {
+      "created": 1792592130078
+    },
+    "agent": "build",
+    "model": {
+      "providerID": "opencode",
+      "modelID": "big-pickle"
+    }
+  }
+}
