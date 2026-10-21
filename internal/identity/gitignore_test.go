@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -95,12 +96,11 @@ func TestResolveLinkedWorktreeGetsItsOwn(t *testing.T) {
 	}
 }
 
-// TestResolveLeavesExistingIgnoreAlone: once the file exists it is the user's,
-// whatever it says, and is never rewritten.
+// TestResolveLeavesExistingIgnoreAlone: once a non-empty file exists it is the
+// user's, whatever it says, and is never rewritten.
 func TestResolveLeavesExistingIgnoreAlone(t *testing.T) {
 	cases := map[string]string{
 		"custom":                 "# mine\n!workstream-id\n",
-		"empty":                  "",
 		"no trailing newline":    "*",
 		"already the same body":  stateIgnoreBody,
 		"something unrelated":    "build/\n",
@@ -139,6 +139,162 @@ func TestResolveLeavesExistingIgnoreAlone(t *testing.T) {
 		}
 		if _, err := os.Lstat(target); err == nil {
 			t.Errorf("resolve wrote through the symlink to %s", target)
+		}
+	})
+}
+
+// TestResolveCompletesZeroByteIgnore: a zero-byte file is a write that never
+// finished (a crash between create and write), not a choice, so resolve completes
+// it. Anything non-empty, or not a regular file, stays untouched.
+func TestResolveCompletesZeroByteIgnore(t *testing.T) {
+	t.Run("zero-byte file is completed", func(t *testing.T) {
+		dir := newRepo(t)
+		if err := os.MkdirAll(filepath.Join(dir, ".director"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(ignorePath(dir), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Resolve(dir); err != nil {
+			t.Fatal(err)
+		}
+		if got := readIgnore(t, dir); got != stateIgnoreBody {
+			t.Errorf(".director/.gitignore = %q, want %q", got, stateIgnoreBody)
+		}
+		if out := mustGit(t, dir, "status", "--porcelain", "--untracked-files=all"); out != "" {
+			t.Errorf("git status after completing lists %q, want nothing", out)
+		}
+		// A second resolve leaves the completed file alone.
+		if _, err := Resolve(dir); err != nil {
+			t.Fatal(err)
+		}
+		if got := readIgnore(t, dir); got != stateIgnoreBody {
+			t.Errorf("second resolve changed it: %q", got)
+		}
+	})
+
+	t.Run("racing completers leave one body", func(t *testing.T) {
+		dir := newRepo(t)
+		if err := os.MkdirAll(filepath.Join(dir, ".director"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(ignorePath(dir), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		for i := 0; i < 8; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				ensureStateIgnored(dir)
+			}()
+		}
+		wg.Wait()
+		if got := readIgnore(t, dir); got != stateIgnoreBody {
+			t.Errorf("after racing completers = %q, want exactly %q", got, stateIgnoreBody)
+		}
+	})
+
+	t.Run("racing creators leave one body", func(t *testing.T) {
+		dir := newRepo(t)
+		if err := os.MkdirAll(filepath.Join(dir, ".director"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		for i := 0; i < 8; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				ensureStateIgnored(dir)
+			}()
+		}
+		wg.Wait()
+		if got := readIgnore(t, dir); got != stateIgnoreBody {
+			t.Errorf("after racing creators = %q, want exactly %q", got, stateIgnoreBody)
+		}
+	})
+
+	t.Run("a directory at the path is not touched", func(t *testing.T) {
+		dir := newRepo(t)
+		if err := os.MkdirAll(ignorePath(dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Resolve(dir); err != nil {
+			t.Fatal(err)
+		}
+		if fi, err := os.Lstat(ignorePath(dir)); err != nil || !fi.IsDir() {
+			t.Errorf(".director/.gitignore should still be the directory it was: %v %v", fi, err)
+		}
+	})
+}
+
+// TestResolveSkipsSymlinkedDirectorDir: O_EXCL refuses a symlink in the LAST path
+// component but follows one in the middle, so a symlinked .director must be
+// skipped. With `.director -> .` a write would land in the repo's own .gitignore,
+// and a `*` there hides every untracked file.
+//
+// What identity itself does through such a symlink is unchanged and out of scope
+// here: persist() follows it, so workstream-id and repo-key land beside the
+// symlink target. The ignore file is the only thing this check governs.
+func TestResolveSkipsSymlinkedDirectorDir(t *testing.T) {
+	link := func(t *testing.T, dir, target string) {
+		t.Helper()
+		if err := os.Symlink(target, filepath.Join(dir, ".director")); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+	}
+
+	t.Run("pointing at the toplevel", func(t *testing.T) {
+		dir := newRepo(t)
+		link(t, dir, ".")
+		ws, err := Resolve(dir)
+		if err != nil {
+			t.Fatalf("Resolve through a symlinked .director: %v", err)
+		}
+		if ws.ID == "" {
+			t.Error("empty workstream id")
+		}
+		if _, err := os.Lstat(filepath.Join(dir, ".gitignore")); err == nil {
+			b, _ := os.ReadFile(filepath.Join(dir, ".gitignore"))
+			t.Errorf("a repo-root .gitignore was created (%q): its * would hide every untracked file", b)
+		}
+		// Identity followed the symlink, as it always has; nothing was ignored.
+		if _, err := os.Stat(filepath.Join(dir, "workstream-id")); err != nil {
+			t.Errorf("expected identity to persist through the symlink, as before: %v", err)
+		}
+	})
+
+	t.Run("pointing at another directory", func(t *testing.T) {
+		dir := newRepo(t)
+		elsewhere := t.TempDir()
+		link(t, dir, elsewhere)
+		if _, err := Resolve(dir); err != nil {
+			t.Fatalf("Resolve through a symlinked .director: %v", err)
+		}
+		if _, err := os.Lstat(filepath.Join(elsewhere, ".gitignore")); err == nil {
+			t.Errorf("an ignore file was written through the symlink into %s", elsewhere)
+		}
+	})
+
+	t.Run("an existing root .gitignore is untouched", func(t *testing.T) {
+		for name, content := range map[string]string{
+			"with content": "build/\n",
+			"zero bytes":   "",
+		} {
+			t.Run(name, func(t *testing.T) {
+				dir := newRepo(t)
+				root := filepath.Join(dir, ".gitignore")
+				if err := os.WriteFile(root, []byte(content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				link(t, dir, ".")
+				if _, err := Resolve(dir); err != nil {
+					t.Fatal(err)
+				}
+				if b, err := os.ReadFile(root); err != nil || string(b) != content {
+					t.Errorf("the repo's own .gitignore changed: %q (%v), want %q", b, err, content)
+				}
+			})
 		}
 	})
 }
