@@ -17,8 +17,8 @@ Concretely, for each harness the canary asserts three things:
    adds later still needs a template line here before it is watched.
 2. Injection lands. The harness's session-start injection channel carries a
    secret token (Cursor: `additional_context` plus an `env` block; Claude
-   Code and Codex: `hookSpecificOutput.additionalContext`; OpenCode: a
-   `chat.message` synthetic part); the canary then asks the agent to echo the
+   Code and Codex: `hookSpecificOutput.additionalContext`; OpenCode 1: a
+   `chat.message` synthetic part, OpenCode 2: a `context` hook system part); the canary then asks the agent to echo the
    token and checks it reached the model's context.
 3. Payload shape holds. Each firing's raw payload is saved and its top-level
    JSON keys are listed, so a shape change upstream is visible.
@@ -51,8 +51,10 @@ that regression loud.
 analysis, findings header, version recording) so the modules stay thin. The
 claude-code and codex modules also probe the PostToolUse `additionalContext`
 channel (the path Director's nudges ride) with a second token; opencode probes
-its equivalents (`chat.message` synthetic-part injection and the
-`tool.execute.after` output append).
+its equivalents on both majors (`chat.message` synthetic-part injection and the
+`tool.execute.after` output append on OpenCode 1; the session `context` hook
+and the tool `execute.after` result-content append on OpenCode 2, from the same
+dual-shape recorder plugin).
 
 ## Running a module
 
@@ -86,11 +88,32 @@ Per-module prerequisites and sandboxing:
   affordance, `--dangerously-bypass-hook-trust` — safe because the sandbox's
   only hooks are the canary's logger. The gate itself is therefore not under
   test; the contract behind it is.
-- `opencode/` — needs a configured provider. Copies the canary plugin into the
-  throwaway workspace's `.opencode/plugin/` dir (project-local, loaded with no
-  registration); the real `~/.config/opencode` is read (global plugins load)
-  but never written, and OpenCode records the throwaway canary sessions in its
-  real data dir (auth lives there, so the data dir cannot be isolated).
+- `opencode/` — needs a configured provider, or `--isolate` with
+  `CANARY_MODEL=opencode/big-pickle` (a free model that needs no credentials).
+  Copies the canary plugin into the throwaway workspace's `.opencode/plugin/`
+  dir (project-local, loaded with no registration, by both majors). Without
+  `--isolate` the real `~/.config/opencode` is read (global plugins load) but
+  never written, and OpenCode records the throwaway canary sessions in its real
+  data dir (auth lives there, so the data dir cannot be isolated). With
+  `--isolate` OpenCode runs under `env -i` (a minimal PATH, `CANARY_PATH` to
+  override) with a scratch HOME and XDG dirs, so no real config, data, auth or
+  `OPENCODE_*` variable reaches it, and the recorder plugin is installed in the
+  scratch config dir rather than the workspace. The verdict tokens are random per
+  run and travel by environment only, and a verdict is INVALID, not YES, if a
+  tool result already carried a token (the agent read it from a file).
+  `OPENCODE_BIN` picks the binary, which is how each major is
+  tested; OpenCode 2 runs always use `--standalone`, so the plugin runs in a
+  private server that inherits the probe's environment. `last-tested.json`
+  tracks two OpenCode runs, one per major: `opencode` (2.x) and `opencode-v1`
+  (1.x, recorded at the oldest supported release, 1.18.3).
+  `opencode/director-live.sh` is the companion end-to-end test of Director's own
+  plugin (installed by the real `director install --opencode` into a scratch
+  config dir, with the agent confined by a permission ruleset to one allowed
+  shell command; the script header says exactly what is and is not isolated):
+  injection, fleet row, Stop, nudge, `DIRECTOR_DISABLE`, and on
+  OpenCode 2 the two-projects-on-one-server scoping. Its runs land in
+  `findings/director-*` dirs. `findings/loader-shape-1x-*.md` records a
+  loader-only check of the dual shape across older 1.x releases.
 
 Credential-copy caveat (claude-code off-macOS, codex): should the agent
 refresh its OAuth token mid-run, the rotated token lands only in the sandbox
@@ -140,6 +163,16 @@ Superseded runs live in git history, not the working tree — a re-run diffs
 against the current baseline, so old generations are dead weight (and inflate
 the PR file count past review tooling's limits). Prune the previous run when a
 fresh baseline lands.
+
+The same rule covers what `opencode/` adds: keep the latest `findings/director-*`
+run per OpenCode major and per release tested (`director-live.sh` records one
+per run, and `last-tested.json` does not point at them, so prune superseded ones
+by hand), and replace `findings/loader-shape-1x-*.md`, a dated loader-only check
+of the dual plugin shape across 1.x releases, when it is repeated rather than
+keeping both. `director-live.sh` writes only the text its detectors matched,
+never the model's output (the scratch hub holds a copy of a real project's
+digest), but still read a new `director-*` dir before committing it: no digest
+body, home path or email belongs in the public repo.
 
 ## When to run it
 

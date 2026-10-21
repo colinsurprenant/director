@@ -308,8 +308,8 @@ func TestDoctorOpenCodePresent(t *testing.T) {
 	}
 }
 
-// opencodeFixture is a healthy install with a real managed OpenCode plugin (the
-// v1 shape Director ships today) and the given `opencode --version` stdout.
+// opencodeFixture is a healthy install with the real managed OpenCode plugin (the
+// dual-shape one this binary embeds) and the given `opencode --version` stdout.
 func opencodeFixture(t *testing.T, versionOut string) (doctorInputs, string) {
 	t.Helper()
 	in := installedFixture(t)
@@ -321,6 +321,26 @@ func opencodeFixture(t *testing.T, versionOut string) (doctorInputs, string) {
 	}
 	in.opencodePlugin = pluginPath
 	in.opencodeVersion = func() string { return versionOut }
+	return in, pluginPath
+}
+
+// opencodeLegacyFixture is opencodeFixture with the plugin replaced by what an
+// older Director installed: a managed, templated file in the v1 shape (a named
+// export and no default export). It is the state #89 reported on OpenCode 2, and
+// what an upgrade finds on disk until `director install --opencode` runs again.
+func opencodeLegacyFixture(t *testing.T, versionOut string) (doctorInputs, string) {
+	t.Helper()
+	in, pluginPath := opencodeFixture(t, versionOut)
+	lit, err := json.Marshal(in.binPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := "// Director OpenCode plugin (_managedBy: director — do not edit; managed by `director install --opencode`).\n" +
+		"function fallbackBin() {\n  return " + string(lit) + "\n}\n" +
+		"export const DirectorPlugin = async () => ({})\n"
+	if err := os.WriteFile(pluginPath, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	return in, pluginPath
 }
 
@@ -339,7 +359,7 @@ func opencodeDetail(t *testing.T, rep doctorReport) string {
 // without a default export, so Director's v1-shaped plugin never fires there
 // while every other check reads healthy. doctor must say so.
 func TestDoctorOpenCode2WithV1PluginFails(t *testing.T) {
-	in, _ := opencodeFixture(t, "opencode v2.1.0\n")
+	in, _ := opencodeLegacyFixture(t, "opencode v2.1.0\n")
 	rep := diagnose(in)
 	if rep.healthy {
 		t.Fatalf("OpenCode 2 with the v1-shaped plugin must sink doctor, got %+v", rep.checks)
@@ -348,17 +368,68 @@ func TestDoctorOpenCode2WithV1PluginFails(t *testing.T) {
 		t.Fatalf("opencode check: got %v, want FAIL", lv)
 	}
 	d := opencodeDetail(t, rep)
-	for _, want := range []string{"OpenCode 2.1.0 cannot load Director's plugin", "default-export plugin", "v1 shape", "(#89)", "OpenCode 1 still works"} {
+	// Re-installing IS the fix now that the binary embeds the dual plugin: the
+	// message must say that, and must not send the user to wait for a release.
+	for _, want := range []string{"OpenCode 2.1.0 cannot load Director's plugin", "default-export plugin", "v1 shape", "(#89)", "OpenCode 1 still works", "re-run `director install --opencode`", "loads on both OpenCode 1 and 2"} {
 		if !strings.Contains(d, want) {
 			t.Errorf("failure text %q is missing %q", d, want)
 		}
+	}
+	for _, stale := range []string{"upgrade to a Director release", "does not change the shape"} {
+		if strings.Contains(d, stale) {
+			t.Errorf("failure text %q still carries the retired advice %q", d, stale)
+		}
+	}
+}
+
+// TestDoctorOpenCode2ReinstallFixesIt is the remedy the failure text names: after
+// `director install --opencode` replaces the legacy plugin, the same machine reads
+// healthy on OpenCode 2.
+func TestDoctorOpenCode2ReinstallFixesIt(t *testing.T) {
+	in, pluginPath := opencodeLegacyFixture(t, "opencode v2.1.0\n")
+	if rep := diagnose(in); levelOf(t, rep, "opencode hooks") != levelFail {
+		t.Fatalf("precondition: the legacy plugin must fail on OpenCode 2, got %+v", rep.checks)
+	}
+	if err := install.InstallOpenCode(pluginPath); err != nil {
+		t.Fatalf("re-install over the legacy plugin: %v", err)
+	}
+	rep := diagnose(in)
+	if !rep.healthy {
+		t.Fatalf("OpenCode 2 must be healthy after the re-install, got %+v", rep.checks)
+	}
+	if lv := levelOf(t, rep, "opencode hooks"); lv != levelOK {
+		t.Errorf("opencode check: got %v, want OK", lv)
+	}
+}
+
+// TestEmbeddedOpenCodePluginPassesDoctorShapeCheck holds the plugin this binary
+// embeds to doctor's own pattern, so the two cannot drift: if the plugin's default
+// export ever stops matching opencodeDefaultExport, doctor would fail every fresh
+// install on OpenCode 2 while the plugin itself loads fine.
+func TestEmbeddedOpenCodePluginPassesDoctorShapeCheck(t *testing.T) {
+	pluginPath := filepath.Join(t.TempDir(), "plugin", "director.js")
+	t.Setenv("DIRECTOR_OPENCODE_COMMANDS_DIR", filepath.Join(t.TempDir(), "oc-command"))
+	t.Setenv("DIRECTOR_HOOKS_DIR", filepath.Join(t.TempDir(), "hooks"))
+	if err := install.InstallOpenCode(pluginPath); err != nil {
+		t.Fatalf("InstallOpenCode: %v", err)
+	}
+	data, err := os.ReadFile(pluginPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opencodeDefaultExport.Match(data) {
+		t.Errorf("the embedded plugin has no default export at the start of a line (doctor would fail it on OpenCode 2):\n%.600s", data)
+	}
+	in := doctorInputs{opencodePlugin: pluginPath, opencodeVersion: func() string { return "opencode v2.1.0\n" }}
+	if msg := opencodePluginShapeFailure(in, data, nil); msg != "" {
+		t.Errorf("shape check rejects the embedded plugin on OpenCode 2: %s", msg)
 	}
 }
 
 // TestDoctorOpenCode2ShapeOutranksLadder: with both broken, the shape failure
 // speaks, because no binary ladder matters when the host refuses the plugin.
 func TestDoctorOpenCode2ShapeOutranksLadder(t *testing.T) {
-	in, _ := opencodeFixture(t, "opencode v2.1.0")
+	in, _ := opencodeLegacyFixture(t, "opencode v2.1.0")
 	in.binPath = filepath.Join(t.TempDir(), "moved", "bin", "director") // stale baked fallback too
 	rep := diagnose(in)
 	if d := opencodeDetail(t, rep); !strings.Contains(d, "#89") {
@@ -369,7 +440,7 @@ func TestDoctorOpenCode2ShapeOutranksLadder(t *testing.T) {
 // TestDoctorOpenCode1WithV1PluginStaysOK: OpenCode 1 loads the v1 shape, so the
 // check is unchanged there.
 func TestDoctorOpenCode1WithV1PluginStaysOK(t *testing.T) {
-	in, _ := opencodeFixture(t, "1.14.7\n")
+	in, _ := opencodeLegacyFixture(t, "1.14.7\n")
 	rep := diagnose(in)
 	if !rep.healthy {
 		t.Fatalf("OpenCode 1 with the v1-shaped plugin must stay healthy, got %+v", rep.checks)
@@ -379,10 +450,20 @@ func TestDoctorOpenCode1WithV1PluginStaysOK(t *testing.T) {
 	}
 }
 
-// TestDoctorOpenCode2WithDefaultExportIsOK: a plugin carrying the default export
-// (the dual shape the OpenCode 2 support ships) passes on OpenCode 2.
+// TestDoctorOpenCode2WithDefaultExportIsOK: the plugin this binary installs (the
+// dual shape) passes on OpenCode 2, as does a legacy plugin that gained a default
+// export.
 func TestDoctorOpenCode2WithDefaultExportIsOK(t *testing.T) {
-	in, pluginPath := opencodeFixture(t, "opencode v2.1.0")
+	in, _ := opencodeFixture(t, "opencode v2.1.0")
+	rep := diagnose(in)
+	if !rep.healthy {
+		t.Fatalf("OpenCode 2 with the installed dual-shape plugin must be healthy, got %+v", rep.checks)
+	}
+	if lv := levelOf(t, rep, "opencode hooks"); lv != levelOK {
+		t.Errorf("opencode check: got %v, want OK", lv)
+	}
+
+	in, pluginPath := opencodeLegacyFixture(t, "opencode v2.1.0")
 	f, err := os.OpenFile(pluginPath, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -392,7 +473,7 @@ func TestDoctorOpenCode2WithDefaultExportIsOK(t *testing.T) {
 	}
 	f.Close()
 
-	rep := diagnose(in)
+	rep = diagnose(in)
 	if !rep.healthy {
 		t.Fatalf("OpenCode 2 with a default-export plugin must be healthy, got %+v", rep.checks)
 	}
@@ -415,7 +496,7 @@ func TestDoctorOpenCode2PhraseIsNotADefaultExport(t *testing.T) {
 		"indented in block": "if (false) {\n  export default {}\n}\n",
 	} {
 		t.Run(name, func(t *testing.T) {
-			in, pluginPath := opencodeFixture(t, "opencode v2.1.0")
+			in, pluginPath := opencodeLegacyFixture(t, "opencode v2.1.0")
 			f, err := os.OpenFile(pluginPath, os.O_APPEND|os.O_WRONLY, 0)
 			if err != nil {
 				t.Fatal(err)
@@ -440,7 +521,7 @@ func TestDoctorOpenCode2PhraseIsNotADefaultExport(t *testing.T) {
 		"spaced":   "export   default {}\n",
 	} {
 		t.Run("accepts "+name, func(t *testing.T) {
-			in, pluginPath := opencodeFixture(t, "opencode v2.1.0")
+			in, pluginPath := opencodeLegacyFixture(t, "opencode v2.1.0")
 			f, err := os.OpenFile(pluginPath, os.O_APPEND|os.O_WRONLY, 0)
 			if err != nil {
 				t.Fatal(err)

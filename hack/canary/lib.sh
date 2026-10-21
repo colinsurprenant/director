@@ -183,3 +183,35 @@ canary_record_version() {
 EOF
   fi
 }
+
+# canary_scratch_git <git args...> — run git against a SCRATCH repo (pass -C <dir>)
+# under a controlled environment. A maintainer may run a canary from inside a git
+# hook or with GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_CONFIG_* or
+# GIT_CEILING_DIRECTORIES exported, and plain `git init` / `git commit` there would
+# route to (or be configured by) a REAL repository. Here the environment is cleared
+# down to a minimal PATH, no HOME, no system or global config, a fixed identity,
+# and hooks, signing and the default branch are pinned.
+canary_scratch_git() {
+  local git_bin
+  git_bin="$(command -v git)" || { printf 'canary: git not found\n' >&2; return 1; }
+  env -i \
+    "PATH=$(dirname -- "$git_bin"):/usr/bin:/bin:/usr/sbin:/sbin" \
+    HOME=/nonexistent \
+    GIT_CONFIG_NOSYSTEM=1 \
+    GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_AUTHOR_NAME="Canary Scratch" GIT_AUTHOR_EMAIL="canary@example.invalid" \
+    GIT_COMMITTER_NAME="Canary Scratch" GIT_COMMITTER_EMAIL="canary@example.invalid" \
+    "$git_bin" -c core.hooksPath=/dev/null -c commit.gpgsign=false -c init.defaultBranch=main "$@"
+}
+
+# canary_without_git_env <command...> — run a command with every GIT_* variable of
+# the caller's environment removed (for tools that shell out to git themselves,
+# such as `go build` stamping version control, where a full env -i would also drop
+# HOME and the toolchain's own variables).
+canary_without_git_env() {
+  local args=() v
+  while IFS= read -r v; do
+    args+=(-u "$v")
+  done < <(compgen -e | grep '^GIT_' || true)
+  env ${args[@]+"${args[@]}"} "$@"
+}

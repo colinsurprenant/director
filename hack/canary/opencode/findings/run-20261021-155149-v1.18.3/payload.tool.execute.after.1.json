@@ -1,0 +1,11 @@
+{
+  "input": {
+    "tool": "bash",
+    "sessionID": "ses_ea0d67e48ffeArPlLfmIKVg4Sc",
+    "callID": "call_284ffbbbe45a4cc68f62afb3",
+    "args": {
+      "command": "echo canary-shell-ok"
+    }
+  },
+  "title": "echo canary-shell-ok"
+}

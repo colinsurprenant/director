@@ -20,8 +20,13 @@
     "results": "hack/canary/codex/findings/run-20260722-192412-v0.144.6"
   },
   "opencode": {
+    "version": "2.1.0",
+    "last_run": "2026-10-21T15:51:48Z",
+    "results": "hack/canary/opencode/findings/run-20261021-155130-v2.1.0"
+  },
+  "opencode-v1": {
     "version": "1.18.3",
-    "last_run": "2026-07-22T19:25:01Z",
-    "results": "hack/canary/opencode/findings/run-20260722-192424-v1.18.3"
+    "last_run": "2026-10-21T15:52:03Z",
+    "results": "hack/canary/opencode/findings/run-20261021-155149-v1.18.3"
   }
 }

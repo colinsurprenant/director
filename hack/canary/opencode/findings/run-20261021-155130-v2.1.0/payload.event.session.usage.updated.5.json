@@ -1,0 +1,15 @@
+{
+  "data": {
+    "sessionID": "ses_ea0d6ca95ffeIBrJSEDN3nJ19O",
+    "cost": 0,
+    "tokens": {
+      "input": 4208,
+      "output": 120,
+      "reasoning": 400,
+      "cache": {
+        "read": 7552,
+        "write": 0
+      }
+    }
+  }
+}

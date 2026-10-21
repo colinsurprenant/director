@@ -1,0 +1,19 @@
+{
+  "sessionID": "ses_ea0d69028ffeLWMEzipWbgbj7Z",
+  "info": {
+    "role": "user",
+    "time": {
+      "created": 1792597913577
+    },
+    "agent": "build",
+    "model": {
+      "providerID": "opencode",
+      "modelID": "big-pickle"
+    },
+    "id": "msg_15f296fe9001eTFXyk4yb2R6Qv",
+    "sessionID": "ses_ea0d69028ffeLWMEzipWbgbj7Z",
+    "summary": {
+      "diffs": []
+    }
+  }
+}

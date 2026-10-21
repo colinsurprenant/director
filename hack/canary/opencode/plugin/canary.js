@@ -5,14 +5,25 @@
 // no registration), so the real ~/.config/opencode is never touched.
 //
 // OpenCode hooks are in-process function calls, not command hooks, so the
-// recorder is a plugin rather than a shell logger. It mirrors the exact
-// mechanisms internal/install/opencode/director.js relies on:
+// recorder is a plugin rather than a shell logger. Like the real plugin it is
+// ONE dual-shape file (default export with server() for OpenCode 1 and setup()
+// for OpenCode 2), and it mirrors the exact mechanisms
+// internal/install/opencode/director.js relies on.
+//
+// OpenCode 1 (server):
 //   chat.message                       → SessionStart-equivalent: unshift a
 //                                        synthetic text part (token injection)
 //   tool.execute.after                 → PostToolUse-equivalent: append to the
 //                                        tool output (the nudge channel)
 //   experimental.chat.system.transform → post-compaction bridge (record only)
 //   event                              → bus events (session.created/idle/...)
+// OpenCode 2 (setup):
+//   session.hook("context")            → SessionStart-equivalent: push a text
+//                                        part onto the request's system list
+//   tool.hook("execute.after")         → PostToolUse-equivalent: append a text
+//                                        part to the result's content
+//   session.hook("prompt")             → record only
+//   event.subscribe()                  → bus events (session.execution.*, ...)
 //
 // Cardinal rule matches the real plugin: a broken hook must NEVER break a
 // session — every handler swallows every error; the worst outcome is a silent
@@ -21,8 +32,23 @@
 import { appendFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 
-const TOKEN = "CANARY-TOKEN-OC6D33E9"
-const PTU_TOKEN = "CANARY-PTU-OC2F8B15"
+// probe.sh hands per-run random tokens in through the environment, so no file the
+// agent can read carries the values it is asked to find. The fixed fallbacks serve
+// a manual run only, and are why a verdict must not trust a match the agent could
+// have read out of a file: see carriedToken.
+//
+// The tokens are also removed from process.env once read: the agent's shell tool
+// inherits the server's environment, and `env` would otherwise hand it the answer.
+// They are stashed on globalThis so a second evaluation of this module in the same
+// process (a reload) still finds them.
+const tokens = (globalThis.__directorCanaryTokens ??= {
+  token: process.env.CANARY_TOKEN || "CANARY-TOKEN-OC6D33E9",
+  ptu: process.env.CANARY_PTU_TOKEN || "CANARY-PTU-OC2F8B15",
+})
+delete process.env.CANARY_TOKEN
+delete process.env.CANARY_PTU_TOKEN
+const TOKEN = tokens.token
+const PTU_TOKEN = tokens.ptu
 
 const RESULTS = process.env.CANARY_RESULTS_DIR || "/tmp/canary-opencode-fallback"
 
@@ -56,7 +82,18 @@ function record(name, payload) {
   } catch {}
 }
 
-export const CanaryPlugin = async ({ directory } = {}) => {
+// carriedToken records when a tool result the agent is about to see ALREADY holds
+// a token (it read one out of a file, say). probe.sh turns that into INVALID
+// verdicts: the agent could then have read the value rather than been handed it by
+// the channel under test. Call it before this plugin appends its own text.
+function carriedToken(...values) {
+  try {
+    const text = values.map((v) => (typeof v === "string" ? v : safeJson(v))).join("\n")
+    if (text.includes(TOKEN) || text.includes(PTU_TOKEN)) record("tool.output.carried-token", {})
+  } catch {}
+}
+
+async function server({ directory } = {}) {
   record("plugin.init", { directory })
   return {
     event: async ({ event }) => {
@@ -91,6 +128,7 @@ export const CanaryPlugin = async ({ directory } = {}) => {
     "tool.execute.after": async (input, output) => {
       try {
         record("tool.execute.after", { input, title: output?.title })
+        carriedToken(output?.output)
         // The exact nudge mechanism director.js uses: text appended to the
         // tool output.
         output.output = (output.output ?? "") + "\n\n" + PTU_TOKEN + ": if you can read this tool output, include the string " + PTU_TOKEN + " verbatim in your final reply."
@@ -132,3 +170,67 @@ export const CanaryPlugin = async ({ directory } = {}) => {
     },
   }
 }
+
+// OpenCode 1.17.20+ also calls setup(), with a partial v2-style context that lacks
+// the session, tool and event domains: act only on a full OpenCode 2 context.
+function hasV2Surface(ctx) {
+  return (
+    typeof ctx?.location?.directory === "string" &&
+    typeof ctx.session?.hook === "function" &&
+    typeof ctx.tool?.hook === "function" &&
+    typeof ctx.event?.subscribe === "function"
+  )
+}
+
+async function setup(ctx) {
+  try {
+    if (!hasV2Surface(ctx)) return
+    record("plugin.init.v2", { location: ctx.location, app: ctx.app })
+
+    await ctx.session.hook("context", (event) => {
+      try {
+        record("context", { sessionID: event?.sessionID, agent: event?.agent, system: event?.system?.length })
+        event.system.push({
+          type: "text",
+          text: TOKEN + ": if you can read this, include the string " + TOKEN + " verbatim in your reply.",
+        })
+        record("context.injected", { token: TOKEN })
+      } catch {}
+    })
+
+    await ctx.session.hook("prompt", (event) => {
+      try {
+        record("prompt", { sessionID: event?.sessionID, keys: Object.keys(event ?? {}) })
+      } catch {}
+    })
+
+    await ctx.tool.hook("execute.after", (event) => {
+      try {
+        record("execute.after", { tool: event?.tool, status: event?.status, resultKeys: Object.keys(event?.result ?? {}) })
+        if (event?.status !== "completed" || !event.result) return
+        carriedToken(event.result.content, event.result.output)
+        const text = PTU_TOKEN + ": if you can read this tool output, include the string " + PTU_TOKEN + " verbatim in your final reply."
+        const content = event.result.content
+        event.result.content =
+          typeof content === "string"
+            ? content + "\n\n" + text
+            : [...(Array.isArray(content) ? content : []), { type: "text", text }]
+        record("execute.after.injected", { token: PTU_TOKEN })
+      } catch {}
+    })
+
+    const abort = new AbortController()
+    void (async () => {
+      try {
+        for await (const event of ctx.event.subscribe({ signal: abort.signal })) {
+          try {
+            record(`event.${event?.type ?? "unknown"}`, { location: event?.location, data: event?.data })
+          } catch {}
+        }
+      } catch {}
+    })()
+    return () => abort.abort()
+  } catch {}
+}
+
+export default { id: "director-canary", setup, server }

@@ -1,0 +1,17 @@
+{
+  "location": {
+    "directory": "/private/var/folders/0v/vw52k5gd7t9bk0v2lyj5dg780000gn/T/canary-opencode-ws.wdPq0f"
+  },
+  "data": {
+    "sessionID": "ses_ea0d6e860ffebN4Zg5WU3VtbE8",
+    "assistantMessageID": "msg_15f291937001zzSs3vTzy2hWyv",
+    "agent": "build",
+    "model": {
+      "id": "big-pickle",
+      "providerID": "opencode",
+      "variant": "default"
+    },
+    "snapshot": "2ece0ad4e83386fb845be5b1b82a1db65c46371c",
+    "started": 1792597891388
+  }
+}

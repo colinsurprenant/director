@@ -1,0 +1,21 @@
+{
+  "location": {
+    "directory": "/private/var/folders/0v/vw52k5gd7t9bk0v2lyj5dg780000gn/T/canary-opencode-ws.wdPq0f"
+  },
+  "data": {
+    "info": {
+      "id": "sh_15f293b44001fI5Nh5rQ1MQuDD",
+      "status": "running",
+      "command": "echo canary-shell-ok",
+      "cwd": "/private/var/folders/0v/vw52k5gd7t9bk0v2lyj5dg780000gn/T/canary-opencode-ws.wdPq0f",
+      "shell": "/bin/zsh",
+      "file": "/var/folders/0v/vw52k5gd7t9bk0v2lyj5dg780000gn/T/canary-opencode-iso.dxjLCA/data/opencode/shell/6b51676fb9e5f86772badf83b1f3df34b554f0d5/sh_15f293b44001fI5Nh5rQ1MQuDD.out",
+      "metadata": {
+        "sessionID": "ses_ea0d6ca95ffeIBrJSEDN3nJ19O"
+      },
+      "time": {
+        "started": 1792597900100
+      }
+    }
+  }
+}
