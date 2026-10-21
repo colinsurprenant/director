@@ -121,7 +121,7 @@ The render can be stale; a safety-critical "should I escalate?" check cannot run
     └── log/<ulid>-<workstream>.md       ← append-only typed events: decision · open-item · handoff · note (§17)
 ```
 
-In-worktree, per repo: `.director/workstream-id`, `.director/repo-key` (tiny; commit-vs-ignore decided per ownership — see §12; since v1.20.1 identity keeps `.director/` out of git with a self-ignoring `.director/.gitignore`).
+In-worktree, per repo: `.director/workstream-id`, `.director/repo-key` (tiny; commit-vs-ignore decided per ownership — see §12; since v1.20.1 identity writes a self-ignoring `.director/.gitignore`, best effort: if `.director/` cannot be written, or is a symlink, nothing is ignored and identity still works).
 
 ### 5.2 The LOG entry (one file each)
 
