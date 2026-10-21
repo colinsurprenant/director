@@ -1,9 +1,0 @@
-[0m
-> build · big-pickle
-[0m$ [0mecho canary-shell-ok
-canary-shell-ok
-> build · big-pickle
-[0m$ [0mgrep -rhoE 'CANARY-[A-Za-z0-9_-]+' . 2>/dev/null | sort -u
-CANARY-PTU-OC2F8B15
-CANARY-TOKEN-OC6D33E9
-> build · big-pickle

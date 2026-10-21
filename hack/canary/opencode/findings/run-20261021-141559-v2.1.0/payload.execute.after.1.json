@@ -1,9 +1,0 @@
-{
-  "tool": "shell",
-  "status": "completed",
-  "resultKeys": [
-    "output",
-    "content",
-    "metadata"
-  ]
-}

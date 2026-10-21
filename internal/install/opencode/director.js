@@ -13,10 +13,12 @@
 // does not know:
 //   server(input)  OpenCode 1: the hook-object API (the v1 half)
 //   setup(ctx)     OpenCode 2: the Promise plugin API (the v2 half)
-// OpenCode 1.18 and later ALSO calls setup(), with a partial v2-style context
-// (no session, tool, event or location; verified live on 1.18.3 and 1.19.3), so
-// the v2 half acts only on a context carrying the whole surface it needs
-// (hasV2Surface) and the v1 half is never double-wired.
+// OpenCode 1.17.20 and later ALSO call setup(), with a partial v2-style context
+// (no session, tool, event or location; verified live on 1.17.20, 1.18.3 and
+// 1.19.3; 1.16.0 and earlier call only server()), so the v2 half acts only on a
+// context carrying the whole surface it needs (hasV2Surface) and the two halves
+// latch each other out (v1Active, v2Active): a host that handed both a full
+// context would otherwise wire Director twice.
 //
 // Event mapping, OpenCode 1 (server):
 //   chat.message        → SessionStart  (once per session; digest injected as a
@@ -51,10 +53,15 @@
 //                                     on a user interrupt either; the hook runs
 //                                     detached, see stop)
 //   session.created                 → subagent and location filter (see below)
+//   session.moved                   → the session changed location: its cached
+//                                     classification and text are dropped, so the
+//                                     next look re-asks the host (the destination
+//                                     instance picks it up, the source stops)
 //   session.compaction.ended        → re-grounding: the cached text is dropped and
 //                                     the next request fetches it again with
 //                                     source=compact
-//   session.deleted                 → drops the session's cached state
+//   session.deleted, .archived      → drops the session's cached state (the maps
+//                                     are also capped: see setup)
 // The event bus is shared by every plugin instance in the server while hooks
 // are per location, and execution events carry no location, so each instance
 // keeps only the sessions of its own ctx.location (see classify).
@@ -66,10 +73,16 @@
 // hook is also deadline-bounded (guard).
 //
 // Environment: OpenCode 2 runs plugins inside its server process, and the shared
-// background service carries the environment of the client that first started it.
-// DIRECTOR_DISABLE, DIRECTOR_BIN and DIRECTOR_FLUSH_NUDGE_EVERY are read from the
-// server process's environment, which is right per server and is the terminal's
-// only under `opencode --standalone`.
+// background service is spawned with the environment of whichever client starts
+// it, then keeps it until the service restarts. DIRECTOR_DISABLE, DIRECTOR_HUB,
+// DIRECTOR_BIN and DIRECTOR_FLUSH_NUDGE_EVERY are read from that server process's
+// environment, so a terminal's value reaches the plugin only under
+// `opencode run --standalone`, and the hazard runs both ways: a DIRECTOR_DISABLE=1
+// or DIRECTOR_HUB=... on an `opencode run` that happens to START the shared
+// service silently applies to every later session on the machine, and neither
+// the plugin nor `director doctor` can see it. Pair any per-run value of those
+// variables with `--standalone` (the service's own config can also carry an env
+// map: `opencode service set env NAME VALUE`).
 
 import { spawn } from "node:child_process"
 
@@ -216,16 +229,22 @@ function additionalContext(control) {
   return typeof ctx === "string" ? ctx : ""
 }
 
-// v1Active latches once OpenCode 1 has called server(), so a host that were to
-// hand setup() a context rich enough to pass hasV2Surface cannot wire Director a
-// second time on top of the v1 hooks. OpenCode 2 never calls server().
+// v1Active latches once OpenCode 1 has called server(), and v2Active once a
+// setup() has wired its hooks, so a host that handed both entry points a usable
+// context could not wire Director twice: whichever half runs first wins and the
+// other stands down. OpenCode 2 never calls server() and OpenCode 1 hands setup()
+// only a partial context, so neither latch trips in practice; they are module
+// level on purpose, because one process runs one setup() per location and only
+// the v1 half's presence should stop those.
 let v1Active = false
+let v2Active = false
 
 // ---------------------------------------------------------------------------
 // OpenCode 1 half
 // ---------------------------------------------------------------------------
 
 async function server({ directory, client }) {
+  if (v2Active) return {}
   v1Active = true
   if (disabled()) return {}
 
@@ -395,7 +414,7 @@ async function server({ directory, client }) {
 // ---------------------------------------------------------------------------
 
 // hasV2Surface reports whether ctx is a full OpenCode 2 plugin context. It is a
-// capability check, not a version sniff: OpenCode 1.18+ calls setup() with a
+// capability check, not a version sniff: OpenCode 1.17.20+ calls setup() with a
 // partial context, and wiring against whatever happens to be present would
 // either throw or double-fire next to server()'s hooks.
 function hasV2Surface(ctx) {
@@ -442,14 +461,27 @@ function guard(body) {
 }
 
 // sameDir compares two directory paths as OpenCode reports them, tolerating a
-// trailing separator and, on Windows, drive-letter case.
+// trailing separator and, on Windows, drive-letter case and the choice between
+// `\` and `/` (a backslash is an ordinary file name character elsewhere).
 function sameDir(a, b) {
   if (typeof a !== "string" || typeof b !== "string") return false
+  const win = process.platform === "win32"
   const norm = (p) => {
-    const trimmed = p.length > 1 ? p.replace(/[\\/]+$/, "") : p
-    return process.platform === "win32" ? trimmed.toLowerCase() : trimmed
+    const slashed = win ? p.replace(/\\/g, "/") : p
+    const trimmed = slashed.length > 1 ? slashed.replace(/\/+$/, "") : slashed
+    return win ? trimmed.toLowerCase() : trimmed
   }
   return norm(a) === norm(b)
+}
+
+// setCapped stores key → value as the newest entry of a size-capped map: a
+// re-insert moves an existing key to the back, and the oldest entries go first
+// (Map keeps insertion order), so the map is an LRU when readers re-store what
+// they touch.
+function setCapped(map, key, value, cap) {
+  map.delete(key)
+  map.set(key, value)
+  while (map.size > cap) map.delete(map.keys().next().value)
 }
 
 // stringifyOutput renders a tool's structured `output` the way OpenCode does when
@@ -495,6 +527,16 @@ function sleep(ms, signal) {
   })
 }
 
+// kindsCap and textsCap bound the per-instance maps of a service that can run for
+// weeks. kinds holds one short entry per session of ANY project (the bus is
+// shared), so its cap is generous; texts holds a digest of up to ~10 KB per
+// top-level session of this location, so a few dozen live sessions fit well
+// inside its cap. Both are LRU (see setCapped), so an evicted session is a stale
+// one, and an eviction costs little: one session.get, or one hook spawn on that
+// session's next request.
+const kindsCap = 4096
+const textsCap = 128
+
 async function setup(ctx) {
   try {
     if (disabled() || v1Active || !hasV2Surface(ctx)) return
@@ -508,16 +550,31 @@ async function setup(ctx) {
     // to this consumer). texts: each top-level session's ground-truth text, as a
     // promise so concurrent requests share one fetch. regrounding: sessions whose
     // text was dropped by a compaction and must be fetched again as source=compact.
+    // lookups: the session.get calls in flight, so an invalidation that lands
+    // while one is awaited can disown its answer (see classify).
     const kinds = new Map()
     const texts = new Map()
     const regrounding = new Set()
+    const lookups = new Map()
 
     const payload = (event, sessionID) => basePayload(event, sessionID, here)
 
-    const remember = (sid, location, parentID) => {
+    const classified = (sid, location, parentID) => {
       const kind = !sameDir(location?.directory, here) ? "foreign" : parentID ? "child" : "top"
-      kinds.set(sid, kind)
+      setCapped(kinds, sid, kind, kindsCap)
       return kind
+    }
+
+    // forget drops everything known about a session. Used when the session is
+    // gone (deleted, archived) or has changed what the cache describes (moved to
+    // another location), and it disowns any session.get already in flight, whose
+    // answer may predate the change: without that, a classify that was suspended
+    // across a delete would write the dead session back into the maps for good.
+    const forget = (sid) => {
+      kinds.delete(sid)
+      texts.delete(sid)
+      regrounding.delete(sid)
+      for (const lookup of lookups.get(sid) ?? []) lookup.stale = true
     }
 
     // classify resolves a session to "top" | "child" | "foreign" | "unknown".
@@ -529,11 +586,23 @@ async function setup(ctx) {
     // it; nothing is cached on failure.
     const classify = async (sid) => {
       const known = kinds.get(sid)
-      if (known) return known
-      const res = await bounded(ctx.session.get({ sessionID: sid }))
+      if (known) {
+        setCapped(kinds, sid, known, kindsCap)
+        return known
+      }
+      const lookup = { stale: false }
+      const pending = lookups.get(sid) ?? new Set()
+      pending.add(lookup)
+      lookups.set(sid, pending)
+      // The async wrapper turns a synchronous throw from get into a rejection
+      // bounded absorbs, so the bookkeeping below always runs.
+      const res = await bounded((async () => ctx.session.get({ sessionID: sid }))())
+      pending.delete(lookup)
+      if (pending.size === 0) lookups.delete(sid)
+      if (lookup.stale) return "unknown"
       const info = res?.data ?? res
       if (info && typeof info === "object" && info.location?.directory) {
-        return remember(sid, info.location, info.parentID)
+        return classified(sid, info.location, info.parentID)
       }
       return "unknown"
     }
@@ -544,7 +613,10 @@ async function setup(ctx) {
     // dir), and retrying the latter would spawn a process on every model request.
     const groundTruth = async (sid) => {
       const cached = texts.get(sid)
-      if (cached !== undefined) return cached
+      if (cached !== undefined) {
+        setCapped(texts, sid, cached, textsCap)
+        return cached
+      }
       if ((await classify(sid)) !== "top") return ""
       // classify may have suspended, so a concurrent request for this session may
       // have started the fetch in the meantime.
@@ -552,7 +624,7 @@ async function setup(ctx) {
       if (raced !== undefined) return raced
       const source = regrounding.delete(sid) ? "compact" : "startup"
       const fetched = runHook("sessionstart", { ...payload("SessionStart", sid), source }).then(additionalContext)
-      texts.set(sid, fetched)
+      setCapped(texts, sid, fetched, textsCap)
       return fetched
     }
 
@@ -575,12 +647,21 @@ async function setup(ctx) {
       switch (event.type) {
         case "session.created":
           // Without a location the event cannot classify; classify() asks the host.
-          if (event.data.location?.directory) remember(sid, event.data.location, event.data.parentID)
+          if (event.data.location?.directory) classified(sid, event.data.location, event.data.parentID)
+          return
+        case "session.moved":
+          // The session now lives somewhere else (a worktree move rewrites its
+          // directory). Whatever was cached is about the old place: the instance
+          // it left must stop acting on it, and the instance it arrived at must
+          // stop treating it as foreign. Re-asking the host settles both, and
+          // the ground truth is refetched for the new project on the next request.
+          forget(sid)
           return
         case "session.deleted":
-          kinds.delete(sid)
-          texts.delete(sid)
-          regrounding.delete(sid)
+        case "session.archived":
+          // An archived session is out of active use; if it is resumed it is
+          // classified and grounded again like any session after a restart.
+          forget(sid)
           return
         case "session.compaction.ended":
           // Only a session already grounded needs it again; one that never was
@@ -640,6 +721,7 @@ async function setup(ctx) {
       }),
     )
 
+    v2Active = true
     void consume()
 
     return () => {
@@ -647,6 +729,7 @@ async function setup(ctx) {
       kinds.clear()
       texts.clear()
       regrounding.clear()
+      lookups.clear()
     }
   } catch {}
 }

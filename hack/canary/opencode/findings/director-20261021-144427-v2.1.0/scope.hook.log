@@ -1,7 +1,0 @@
-2026-10-21T14:43:48.360548Z	sessionstart	ok=false	session=ses_ea114e787ffekmiEc4C7gqLYHx	injection budget: full payload 52600 units > 10000 — older decisions collapsed to count+pointer, newest 10 kept (52600 → 14528 units); then open-item headlines shortened (full text via `director show <ulid>`) (14528 → 12151 units); then unseen decisions collapsed too (12151 → 10113 units) — STILL over budget after every rung: the digest (open-items, handoffs) is 4283 units, the rest of the payload (CHARTER, protocol, banner, resume point, nudge) 5830; if the digest dominates groom the log (resolve/supersede/promote), otherwise trim the CHARTER (open-items and handoff positions are never dropped)
-2026-10-21T14:43:48.360859Z	sessionstart	ok=true	session=ses_ea114e787ffekmiEc4C7gqLYHx	injected ground truth for github.com-colinsurprenant-director (source=startup, throwaway=false)
-2026-10-21T14:43:52.756653Z	posttooluse	ok=true	session=ses_ea114e787ffekmiEc4C7gqLYHx	flush nudge disabled (set DIRECTOR_FLUSH_NUDGE_EVERY=N to enable)
-2026-10-21T14:43:54.501326Z	stop	ok=true	session=ses_ea114e787ffekmiEc4C7gqLYHx	emit-guard allow
-2026-10-21T14:43:56.908064Z	sessionstart	ok=true	session=ses_ea114c551ffedom1omXLRhk3Eb	injected ground truth for github.com-colinsurprenant-director-live-other (source=startup, throwaway=false)
-2026-10-21T14:44:01.748968Z	posttooluse	ok=true	session=ses_ea114c551ffedom1omXLRhk3Eb	flush nudge disabled (set DIRECTOR_FLUSH_NUDGE_EVERY=N to enable)
-2026-10-21T14:44:05.086923Z	stop	ok=true	session=ses_ea114c551ffedom1omXLRhk3Eb	emit-guard allow

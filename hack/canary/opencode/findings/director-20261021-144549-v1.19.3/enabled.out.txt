@@ -1,5 +1,0 @@
-I'll run the command now.
-▸ Director: clone-main-aaa5961e · 17 open-item(s), 2 need-you
-Director: context is accumulating.
-
-(Note: recorded the nudge-delivery observation as `director emit` note 01M5FERR64W5V2E58J7QQMNTHF; the `director` CLI was not on PATH, used <home>/.local/bin/director.)

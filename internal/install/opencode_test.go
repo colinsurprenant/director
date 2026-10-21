@@ -81,9 +81,11 @@ func TestInstallOpenCodeWritesTemplatedPlugin(t *testing.T) {
 // TestOpenCodePluginIsTheDualShape pins the one-file contract (#89) on the text
 // install writes: both OpenCode majors scan the same plugin dir and each rejects a
 // file in the other's shape, so the plugin must default-export one object carrying
-// BOTH entry points, and must export nothing else (OpenCode 1 would load a named
-// export a second time, next to the default's server()). The behavior behind the
-// shape is executed by TestOpenCodePluginNodeSmoke; this runs everywhere.
+// BOTH entry points, and must export nothing else: a named export is dead weight
+// on the loaders verified here (1.18.3 and later ignore it beside a default with
+// server()), and would be a second plugin on any older loader that walks every
+// export. The behavior behind the shape is executed by TestOpenCodePluginNodeSmoke;
+// this runs everywhere.
 func TestOpenCodePluginIsTheDualShape(t *testing.T) {
 	pluginPath, _, _ := setupOpenCode(t)
 	if err := InstallOpenCode(pluginPath); err != nil {
@@ -110,7 +112,7 @@ func TestOpenCodePluginIsTheDualShape(t *testing.T) {
 	// Every export statement in the file must be the one default export.
 	for _, line := range regexp.MustCompile(`(?m)^export\b.*$`).FindAllString(src, -1) {
 		if !strings.HasPrefix(line, "export default {") {
-			t.Errorf("unexpected export (OpenCode 1 would load a named export again): %q", line)
+			t.Errorf("unexpected export (only the default export belongs here): %q", line)
 		}
 	}
 	if strings.Contains(src, "export const DirectorPlugin") {

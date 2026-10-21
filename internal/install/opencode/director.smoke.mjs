@@ -128,13 +128,17 @@ function channel(signal) {
 const HERE = join(work, "project")
 
 // fakeCtx builds an OpenCode 2 plugin context. sessions maps an id to the
-// Session.Info that session.get returns.
-function fakeCtx(sessions = {}, overrides = {}) {
-  const state = { hooks: {}, subscribed: 0, signal: null, channel: null }
+// Session.Info that session.get returns (the caller may change it later, as the
+// host would on a move). state.gets counts session.get calls, and state.hold, when
+// set to a promise, parks every session.get until it settles.
+function fakeCtx(sessions = {}, overrides = {}, directory = HERE) {
+  const state = { hooks: {}, subscribed: 0, signal: null, channel: null, gets: 0, hold: null }
   const ctx = {
-    location: { directory: HERE, project: { id: "p", directory: HERE, canonical: HERE } },
+    location: { directory, project: { id: "p", directory, canonical: directory } },
     session: {
       get: async ({ sessionID }) => {
+        state.gets++
+        if (state.hold) await state.hold
         if (!(sessionID in sessions)) throw new Error("not found")
         return sessions[sessionID]
       },
@@ -176,7 +180,10 @@ const testSpawn = (name, fn) =>
 
 test("default export carries id, setup and server and nothing else is exported", async () => {
   const mod = await load(pluginPath)
-  assert.deepEqual(Object.keys(mod), ["default"], "a named export would be loaded a second time by OpenCode 1")
+  // Not needed, and a loader that walks every export (the legacy path of older
+  // OpenCode 1 loaders) would run it next to the default's server(); 1.18.3 and
+  // later ignore it.
+  assert.deepEqual(Object.keys(mod), ["default"], "the plugin must export only its default")
   assert.equal(typeof mod.default.id, "string")
   assert.ok(mod.default.id.length > 0)
   assert.equal(typeof mod.default.setup, "function")
@@ -390,7 +397,9 @@ test("a missing binary never rejects a hook, an event or setup", async () => {
     state.channel.push({ type: "session.execution.succeeded", data: { sessionID: "ses_top" } })
     await new Promise((r) => setTimeout(r, 200))
     cleanup()
-    const hooks = await plugin.server({ directory: HERE, client: { session: { get: async () => ({ data: top("ses_1") }) } } })
+    // (A fresh module instance: this one has wired setup(), which stands server() down.)
+    const { default: v1plugin } = await load(pluginPath, "missing-v1")
+    const hooks = await v1plugin.server({ directory: HERE, client: { session: { get: async () => ({ data: top("ses_1") }) } } })
     const output = { parts: [], message: { id: "msg_1" } }
     await hooks["chat.message"]({ sessionID: "ses_1" }, output)
     assert.deepEqual(output.parts, [])
@@ -400,6 +409,240 @@ test("a missing binary never rejects a hook, an event or setup", async () => {
     process.off("unhandledRejection", onUnhandled)
   }
   assert.deepEqual(unhandled, [])
+})
+
+test("setup stands down once server has run, and server once setup has wired", async () => {
+  const { default: plugin } = await load(pluginPath, "latch2")
+  nodeOptions("ok")
+  const { ctx, state } = fakeCtx()
+  const cleanup = await plugin.setup(ctx)
+  assert.equal(typeof cleanup, "function")
+  assert.deepEqual(await plugin.server({ directory: HERE, client: { session: { get: async () => ({}) } } }), {})
+  // A second location's setup() in the same process still wires: only server()'s presence stops it.
+  const second = fakeCtx({}, {}, join(work, "other-location"))
+  assert.equal(typeof (await plugin.setup(second.ctx)), "function")
+  assert.equal(second.state.subscribed, 1)
+  cleanup()
+})
+
+testSpawn("session.moved hands a session from one location's instance to the other's", async () => {
+  nodeOptions("ok")
+  const before = calls().length
+  const { default: plugin } = await load(pluginPath, "moved")
+
+  // The destination instance first sees the session as another project's.
+  const arriving = { ses_in: foreign("ses_in") }
+  const dest = fakeCtx(arriving)
+  const destCleanup = await plugin.setup(dest.ctx)
+  const first = { sessionID: "ses_in", system: [] }
+  await dest.state.hooks["session.context"](first)
+  assert.deepEqual(first.system, [], "a foreign session must not be injected")
+  arriving.ses_in = top("ses_in")
+  dest.state.channel.push({ type: "session.moved", data: { sessionID: "ses_in", location: { directory: HERE }, projectID: "p" } })
+  await new Promise((r) => setTimeout(r, 100))
+  const second = { sessionID: "ses_in", system: [] }
+  await dest.state.hooks["session.context"](second)
+  assert.equal(second.system.length, 1, "after the move the destination instance must coordinate the session")
+
+  // The source instance owned it, then loses it: no more Stop with the old cwd.
+  const leaving = { ses_out: top("ses_out") }
+  const src = fakeCtx(leaving)
+  const srcCleanup = await plugin.setup(src.ctx)
+  await src.state.hooks["session.context"]({ sessionID: "ses_out", system: [] })
+  leaving.ses_out = foreign("ses_out")
+  src.state.channel.push({ type: "session.moved", data: { sessionID: "ses_out", location: { directory: join(work, "elsewhere") }, projectID: "p" } })
+  await new Promise((r) => setTimeout(r, 100))
+  src.state.channel.push({ type: "session.execution.succeeded", data: { sessionID: "ses_out" } })
+  await new Promise((r) => setTimeout(r, 300))
+  assert.equal(calls().slice(before).filter((c) => c.event === "stop" && c.payload.session_id === "ses_out").length, 0)
+  destCleanup()
+  srcCleanup()
+})
+
+testSpawn("session.deleted during a lookup is not written back, and session.archived forgets a session", async () => {
+  nodeOptions("ok")
+  const before = calls().length
+  const { default: plugin } = await load(pluginPath, "deleted")
+  const sessions = { ses_gone: top("ses_gone"), ses_old: top("ses_old") }
+  const { ctx, state } = fakeCtx(sessions)
+  const cleanup = await plugin.setup(ctx)
+
+  let release
+  state.hold = new Promise((r) => (release = r))
+  const event = { sessionID: "ses_gone", system: [] }
+  const pending = state.hooks["session.context"](event)
+  await new Promise((r) => setTimeout(r, 100)) // the hook is now parked inside classify
+  state.channel.push({ type: "session.deleted", data: { sessionID: "ses_gone" } })
+  await new Promise((r) => setTimeout(r, 100))
+  state.hold = null
+  release()
+  await pending
+  assert.deepEqual(event.system, [], "a session deleted mid-lookup must not be injected")
+  delete sessions.ses_gone
+  const again = { sessionID: "ses_gone", system: [] }
+  await state.hooks["session.context"](again)
+  assert.deepEqual(again.system, [], "the dead session must not have been cached as live")
+  assert.equal(calls().slice(before).filter((c) => c.event === "sessionstart" && c.payload.session_id === "ses_gone").length, 0)
+
+  // Archived: known, then forgotten, so the next request asks the host again and refetches.
+  await state.hooks["session.context"]({ sessionID: "ses_old", system: [] })
+  const asked = state.gets
+  state.channel.push({ type: "session.archived", data: { sessionID: "ses_old" } })
+  await new Promise((r) => setTimeout(r, 100))
+  const resumed = { sessionID: "ses_old", system: [] }
+  await state.hooks["session.context"](resumed)
+  assert.equal(resumed.system.length, 1)
+  assert.equal(state.gets, asked + 1, "an archived session is classified afresh")
+  assert.equal(calls().slice(before).filter((c) => c.event === "sessionstart" && c.payload.session_id === "ses_old").length, 2)
+  cleanup()
+})
+
+testSpawn("two concurrent first requests for a session share one fetch", async () => {
+  nodeOptions("ok")
+  const before = calls().length
+  const { default: plugin } = await load(pluginPath, "concurrent")
+  const { ctx, state } = fakeCtx({ ses_top: top("ses_top") })
+  const cleanup = await plugin.setup(ctx)
+  const a = { sessionID: "ses_top", system: [] }
+  const b = { sessionID: "ses_top", system: [] }
+  await Promise.all([state.hooks["session.context"](a), state.hooks["session.context"](b)])
+  assert.equal(a.system.length, 1)
+  assert.equal(b.system.length, 1)
+  assert.equal(calls().slice(before).filter((c) => c.event === "sessionstart").length, 1)
+  cleanup()
+})
+
+test("the event stream is re-subscribed after it ends or throws, and not after cleanup", async () => {
+  process.env.DIRECTOR_BIN = join(work, "no-such-director") // nothing may spawn here
+  delete process.env.NODE_OPTIONS
+  const { default: plugin } = await load(pluginPath, "resub")
+  let subscribes = 0
+  let third = null
+  const { ctx, state } = fakeCtx(
+    { ses_x: top("ses_x") },
+    {
+      event: {
+        subscribe: ({ signal }) => {
+          subscribes++
+          if (subscribes === 1) return { [Symbol.asyncIterator]: () => ({ next: async () => ({ done: true, value: undefined }) }) }
+          if (subscribes === 2) return { [Symbol.asyncIterator]: () => ({ next: async () => { throw new Error("overflow") } }) }
+          third = channel(signal)
+          return third.iterable
+        },
+      },
+    },
+  )
+  const cleanup = await plugin.setup(ctx)
+  assert.equal(subscribes, 1)
+  await waitFor(() => subscribes === 3, "the third subscription", 6000)
+  // The third stream works: an event on it is handled (the session is classified with no lookup).
+  third.push({ type: "session.created", data: { sessionID: "ses_y", location: { directory: HERE } } })
+  await new Promise((r) => setTimeout(r, 100))
+  await state.hooks["session.context"]({ sessionID: "ses_y", system: [] })
+  assert.equal(state.gets, 0, "the event from the re-subscribed stream must have classified the session")
+  cleanup()
+  await new Promise((r) => setTimeout(r, 800))
+  assert.equal(subscribes, 3, "no re-subscription after cleanup")
+})
+
+testSpawn("sessions are compared by directory the way Windows spells it", async () => {
+  nodeOptions("ok")
+  const { default: plugin } = await load(pluginPath, "win")
+  const { ctx, state } = fakeCtx({}, {}, "C:\\Work\\Proj")
+  const cleanup = await plugin.setup(ctx)
+  const real = Object.getOwnPropertyDescriptor(process, "platform")
+  Object.defineProperty(process, "platform", { value: "win32" })
+  try {
+    state.channel.push({ type: "session.created", data: { sessionID: "ses_same", location: { directory: "c:/work/proj/" } } })
+    state.channel.push({ type: "session.created", data: { sessionID: "ses_other", location: { directory: "c:/work/other" } } })
+    await new Promise((r) => setTimeout(r, 100))
+  } finally {
+    Object.defineProperty(process, "platform", real)
+  }
+  // Classified by the events alone, with no lookup: the same directory spelled
+  // with another case, separator and trailing slash is ours, a different one is not.
+  const mine = { sessionID: "ses_same", system: [] }
+  const theirs = { sessionID: "ses_other", system: [] }
+  await state.hooks["session.context"](mine)
+  await state.hooks["session.context"](theirs)
+  assert.equal(mine.system.length, 1)
+  assert.deepEqual(theirs.system, [])
+  assert.equal(state.gets, 0)
+  cleanup()
+})
+
+test("the session classification map is capped, oldest first", async () => {
+  process.env.DIRECTOR_BIN = join(work, "no-such-director")
+  delete process.env.NODE_OPTIONS
+  const { default: plugin } = await load(pluginPath, "cap")
+  const { ctx, state } = fakeCtx({ ses_000000: foreign("ses_000000") })
+  const cleanup = await plugin.setup(ctx)
+  for (let i = 0; i < 4200; i++) {
+    state.channel.push({ type: "session.created", data: { sessionID: "ses_" + String(i).padStart(6, "0"), location: { directory: join(work, "elsewhere") } } })
+  }
+  await new Promise((r) => setTimeout(r, 400))
+  await state.hooks["session.context"]({ sessionID: "ses_004199", system: [] })
+  assert.equal(state.gets, 0, "a recent session stays classified")
+  await state.hooks["session.context"]({ sessionID: "ses_000000", system: [] })
+  assert.equal(state.gets, 1, "the oldest session was evicted and is asked for again")
+  cleanup()
+})
+
+testSpawn("the OpenCode 1 half injects on the first message, nudges, re-grounds after a compaction and stops on idle", async () => {
+  nodeOptions("ok")
+  const before = calls().length
+  const { default: plugin } = await load(pluginPath, "v1behavior")
+  const infos = { ses_a: { id: "ses_a" }, ses_k: { id: "ses_k", parentID: "ses_a" } }
+  const client = {
+    session: {
+      get: async ({ path: { id } }) => {
+        if (!(id in infos)) throw new Error("not found")
+        return { data: infos[id] }
+      },
+    },
+  }
+  const hooks = await plugin.server({ directory: HERE, client })
+
+  const first = { parts: [], message: { id: "msg_1" } }
+  await hooks["chat.message"]({ sessionID: "ses_a" }, first)
+  assert.equal(first.parts.length, 1)
+  assert.equal(first.parts[0].type, "text")
+  assert.equal(first.parts[0].synthetic, true)
+  assert.equal(first.parts[0].text, "GROUND-TRUTH")
+  assert.equal(first.parts[0].sessionID, "ses_a")
+  assert.equal(first.parts[0].messageID, "msg_1")
+  assert.ok(first.parts[0].id.startsWith("prt_director"))
+  const next = { parts: [], message: { id: "msg_2" } }
+  await hooks["chat.message"]({ sessionID: "ses_a" }, next)
+  assert.deepEqual(next.parts, [], "once per session")
+  const kid = { parts: [], message: { id: "msg_3" } }
+  await hooks["chat.message"]({ sessionID: "ses_k" }, kid)
+  assert.deepEqual(kid.parts, [], "a subagent session is never injected")
+
+  const tool = { output: "tool out" }
+  await hooks["tool.execute.after"]({ sessionID: "ses_a", tool: "bash" }, tool)
+  assert.equal(tool.output, "tool out\n\nNUDGE")
+
+  // The compaction bridge: the system prompt carries the ground truth until the next message.
+  await hooks.event({ event: { type: "session.compacted", properties: { sessionID: "ses_a" } } })
+  const sys1 = { system: [] }
+  const sys2 = { system: [] }
+  await hooks["experimental.chat.system.transform"]({ sessionID: "ses_a" }, sys1)
+  await hooks["experimental.chat.system.transform"]({ sessionID: "ses_a" }, sys2)
+  assert.deepEqual(sys1.system, ["GROUND-TRUTH"])
+  assert.deepEqual(sys2.system, ["GROUND-TRUTH"])
+
+  await hooks.event({ event: { type: "session.idle", properties: { sessionID: "ses_a" } } })
+  await hooks.event({ event: { type: "session.idle", properties: { sessionID: "ses_k" } } })
+  const seen = calls().slice(before)
+  assert.deepEqual(
+    seen.filter((c) => c.event === "sessionstart").map((c) => c.payload.source),
+    ["startup", "compact"],
+    "the bridge fetches once, as source=compact",
+  )
+  const stops = seen.filter((c) => c.event === "stop")
+  assert.equal(stops.length, 1, "Stop for the top-level session only")
+  assert.equal(stops[0].payload.session_id, "ses_a")
 })
 
 testSpawn("a slow binary is cut off at the deadline without rejecting", async () => {

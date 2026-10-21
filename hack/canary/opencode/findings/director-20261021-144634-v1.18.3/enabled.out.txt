@@ -1,3 +1,0 @@
-I'll run the command first.
-▸ Director: clone-main-aaa5961e · 17 open-item(s), 2 need-you
-Director: context is accumulating. If you've made a decision, opened a loop, or reached a boundary, emit it now with `director emit` while context is healthy — don't wait for a compaction.
