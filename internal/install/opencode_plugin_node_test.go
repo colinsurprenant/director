@@ -42,7 +42,7 @@ func TestOpenCodePluginNodeSmoke(t *testing.T) {
 		t.Fatalf("writeOpenCodePlugin: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second) // the cases wait on real timers: ~20s when idle
 	defer cancel()
 	cmd := exec.CommandContext(ctx, node, filepath.Join("opencode", "director.smoke.mjs"), plugin)
 	var combined bytes.Buffer

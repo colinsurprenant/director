@@ -53,18 +53,30 @@
 //                                     on a user interrupt either; the hook runs
 //                                     detached, see stop)
 //   session.created                 → subagent and location filter (see below)
-//   session.moved                   → the session changed location: its cached
-//                                     classification and text are dropped, so the
-//                                     next look re-asks the host (the destination
-//                                     instance picks it up, the source stops)
+//   session.moved                   → the session changed location: its epoch ends
+//                                     (see below), so everything cached for it is
+//                                     dropped and anything in flight for it is
+//                                     killed; the next look re-asks the host (the
+//                                     destination instance picks it up, the
+//                                     source stops)
 //   session.compaction.ended        → re-grounding: the cached text is dropped and
 //                                     the next request fetches it again with
 //                                     source=compact
-//   session.deleted, .archived      → drops the session's cached state (the maps
-//                                     are also capped: see setup)
+//   session.deleted, .archived      → the session's epoch ends
 // The event bus is shared by every plugin instance in the server while hooks
 // are per location, and execution events carry no location, so each instance
 // keeps only the sessions of its own ctx.location (see classify).
+//
+// Per-session lifecycle (v2): each session an instance tracks has an EPOCH, one
+// object holding everything known about it (classification, ground-truth text,
+// re-ground mark) and an AbortController. Moved, deleted, archived, a stream
+// re-subscription (events of the gap are lost) and the instance's unload end
+// epochs: the controller aborts, which kills any child spawned under it, and the
+// object is dropped. Every async step that works on a session (lookup, fetch,
+// heartbeat) runs under the call's deadline AND its epoch, and checks both after
+// each await before it spawns, caches, or touches the host's event; its results
+// live on the epoch object it started under, so a late answer can neither be
+// used nor land in a newer epoch's cache.
 //
 // Cardinal rule, same as the Go adapter (§13 t5): a broken hook must NEVER
 // break a session. Every handler swallows every error; the worst outcome is
@@ -457,31 +469,53 @@ function bounded(work, signal) {
   })
 }
 
+// link returns a signal that aborts when ANY of the given signals does, an abort
+// of its own, and a release that detaches it from them (callers release on
+// settle: the sources, an epoch's above all, outlive any one call). It is
+// hand-rolled because AbortSignal.any is newer than some runtimes a plugin may
+// run on.
+function link(...sources) {
+  const ctl = new AbortController()
+  const abort = () => ctl.abort()
+  for (const source of sources) {
+    if (source.aborted) {
+      abort()
+      break
+    }
+    source.addEventListener("abort", abort, { once: true })
+  }
+  return {
+    signal: ctl.signal,
+    abort,
+    release: () => {
+      for (const source of sources) source.removeEventListener("abort", abort)
+    },
+  }
+}
+
 // guard turns a v2 hook body into one that cannot reject and cannot run past ONE
 // deadline: OpenCode 2 awaits hooks inline on the model-request and tool paths
 // (and a prompt hook rejection can refuse the prompt), so an error or a hang
 // here would degrade the user's session instead of just Director. The deadline is
-// an AbortSignal handed to the body, which threads it through its lookups and its
-// spawns and checks it after each await and before it spawns or mutates the
-// event: abandoning the body is not enough, because work left running would
-// outlive the hook that started it (a late SessionStart re-creating the fleet row
-// the turn's Stop had just archived). The signal also fires when the plugin
-// instance unloads (instance), and when the body is done, which stops anything
-// the body left behind.
+// an AbortSignal handed to the body, which threads it (with the session's epoch)
+// through its lookups and spawns and checks it after each await and before it
+// spawns or mutates the event: abandoning the body is not enough, because work
+// left running would outlive the hook that started it (a late SessionStart
+// re-creating the fleet row the turn's Stop had just archived). The signal also
+// fires when the plugin instance unloads (instance), and when the body is done,
+// which stops anything the body left behind.
 function guard(body, instance) {
   return async (event) => {
     if (instance.aborted) return
-    const call = new AbortController()
-    const expire = () => call.abort()
-    const timer = setTimeout(expire, hookTimeoutMs)
-    instance.addEventListener("abort", expire, { once: true })
+    const call = link(instance)
+    const timer = setTimeout(call.abort, hookTimeoutMs)
     try {
       await bounded(body(event, call.signal), call.signal)
     } catch {
     } finally {
       clearTimeout(timer)
-      instance.removeEventListener("abort", expire)
       call.abort()
+      call.release()
     }
   }
 }
@@ -498,16 +532,6 @@ function sameDir(a, b) {
     return win ? trimmed.toLowerCase() : trimmed
   }
   return norm(a) === norm(b)
-}
-
-// setCapped stores key → value as the newest entry of a size-capped map: a
-// re-insert moves an existing key to the back, and the oldest entries go first
-// (Map keeps insertion order), so the map is an LRU when readers re-store what
-// they touch.
-function setCapped(map, key, value, cap) {
-  map.delete(key)
-  map.set(key, value)
-  while (map.size > cap) map.delete(map.keys().next().value)
 }
 
 // stringifyOutput renders a tool's structured `output` the way OpenCode does when
@@ -553,17 +577,15 @@ function sleep(ms, signal) {
   })
 }
 
-// kindsCap and textsCap bound the per-instance maps of a service that can run for
-// weeks. kinds holds one short entry per session of ANY project (the bus is
-// shared), so its cap is generous; texts holds a digest of up to ~10 KB per
-// top-level session of this location, so a few dozen live sessions fit well
-// inside its cap, and regrounding (a mark per compacted session, never read for
-// an idle one) shares texts' cap. All three are LRU (see setCapped), so an
-// evicted entry is a stale one, and an eviction costs little: one session.get, one
-// hook spawn on that session's next request, or a startup fetch where a compact
-// one was due.
-const kindsCap = 4096
-const textsCap = 128
+// epochCap bounds the per-instance session table of a service that can run for
+// weeks. The table holds one epoch per session of ANY project (the bus is
+// shared), most of them just a classification, and a digest of up to ~10 KB for
+// each top-level session of this location that has been grounded, so 1024 epochs
+// cost at most about 10 MB. It is an LRU (a touch moves an epoch to the back), so
+// an evicted epoch is a stale one, and eviction ends it like any other end:
+// anything in flight for it is killed, and it costs one session.get or one hook
+// spawn on that session's next request.
+const epochCap = 1024
 
 // v2Instances counts the OpenCode 2 plugin instances (one per location) that are
 // wiring or wired in this process; server() stands down while it is non-zero.
@@ -578,58 +600,51 @@ async function setup(ctx) {
     v2Instances++
     counted = true
     const here = ctx.location.directory
-    const abort = new AbortController()
-
-    // Per-plugin-instance state, one instance per location. kinds: the session
-    // classification ("top" | "child" | "foreign"), filled from session.created
-    // and recovered by classify for ids it never saw (a session resumed after a
-    // server restart, or one whose first model request beats its created event
-    // to this consumer). texts: each top-level session's ground-truth text, as a
-    // promise so concurrent requests share one fetch. regrounding: sessions whose
-    // text was dropped by a compaction and must be fetched again as source=compact.
-    // lookups: the session.get calls in flight, so an invalidation that lands
-    // while one is awaited can disown its answer (see classify).
-    const kinds = new Map()
-    const texts = new Map()
-    const regrounding = new Map()
-    const lookups = new Map()
+    const abort = new AbortController() // the instance's lifetime
 
     const payload = (event, sessionID) => basePayload(event, sessionID, here)
 
-    const classified = (sid, location, parentID) => {
-      const kind = !sameDir(location?.directory, here) ? "foreign" : parentID ? "child" : "top"
-      setCapped(kinds, sid, kind, kindsCap)
-      return kind
+    // The session table: sid → epoch { ctl, kind, text, regrounding }.
+    //   ctl          aborts when the epoch ends (see the header);
+    //   kind         "top" | "child" | "foreign", once known;
+    //   text         the ground-truth text as a promise, so concurrent requests
+    //                share one fetch;
+    //   regrounding  a compaction dropped the text: fetch it again as source=compact.
+    const epochs = new Map()
+    const live = (epoch) => !epoch.ctl.signal.aborted
+
+    // epochOf returns the session's epoch, creating it on first touch, and marks
+    // it the most recently used.
+    const epochOf = (sid) => {
+      let epoch = epochs.get(sid)
+      if (epoch) epochs.delete(sid)
+      else epoch = { ctl: new AbortController(), kind: undefined, text: undefined, regrounding: false }
+      epochs.set(sid, epoch)
+      while (epochs.size > epochCap) {
+        const [oldest, evicted] = epochs.entries().next().value
+        epochs.delete(oldest)
+        evicted.ctl.abort()
+      }
+      return epoch
     }
 
-    // disown marks every session.get in flight for sid (or for all sessions) stale,
-    // so the answer is dropped when it lands.
-    const disown = (sid) => {
-      for (const lookup of lookups.get(sid) ?? []) lookup.stale = true
-    }
-
-    // forget drops everything known about a session. Used when the session is
-    // gone (deleted, archived) or has changed what the cache describes (moved to
-    // another location), and it disowns any session.get already in flight, whose
-    // answer may predate the change: without that, a classify that was suspended
-    // across a delete would write the dead session back into the maps for good.
+    // forget ends a session's epoch: the session is gone (deleted, archived) or
+    // has changed what the epoch describes (moved to another location). The epoch
+    // leaves the table before it aborts, so nothing that wakes on the abort can
+    // find it. forgetAll ends them all: when the event stream is re-subscribed
+    // (the events of the gap are lost) and when the instance unloads.
     const forget = (sid) => {
-      kinds.delete(sid)
-      texts.delete(sid)
-      regrounding.delete(sid)
-      disown(sid)
+      const epoch = epochs.get(sid)
+      epochs.delete(sid)
+      epoch?.ctl.abort()
+    }
+    const forgetAll = () => {
+      const all = [...epochs.values()]
+      epochs.clear()
+      for (const epoch of all) epoch.ctl.abort()
     }
 
-    // forgetAll is forget for every session: when the event stream is re-subscribed
-    // (the events of the gap are lost) and when the instance unloads (nothing may
-    // repopulate a dead instance).
-    const forgetAll = () => {
-      for (const sid of lookups.keys()) disown(sid)
-      lookups.clear()
-      kinds.clear()
-      texts.clear()
-      regrounding.clear()
-    }
+    const kindOf = (location, parentID) => (!sameDir(location?.directory, here) ? "foreign" : parentID ? "child" : "top")
 
     // classify resolves a session to "top" | "child" | "foreign" | "unknown".
     // The event bus is shared by every plugin instance in the server while hooks
@@ -637,57 +652,59 @@ async function setup(ctx) {
     // another project reaches this instance too: the location check is what keeps
     // Director from heartbeating, archiving or injecting into it. As on OpenCode
     // 1, a failed lookup is "unknown", never a guess, and every consumer skips on
-    // it; nothing is cached on failure, nor once signal (the caller's deadline, or
-    // the instance's unload) has aborted.
-    const classify = async (sid, signal) => {
-      const known = kinds.get(sid)
-      if (known) {
-        setCapped(kinds, sid, known, kindsCap)
-        return known
+    // it; nothing is cached on failure, nor when call (the caller's deadline) or
+    // the epoch has ended while the lookup was out: its answer is then about a
+    // session that may have moved or died.
+    const classify = async (sid, epoch, call) => {
+      if (epoch.kind) return epoch.kind
+      const lookup = link(call, epoch.ctl.signal)
+      try {
+        // The async wrapper turns a synchronous throw from get into a rejection
+        // bounded absorbs.
+        const res = await bounded((async () => ctx.session.get({ sessionID: sid }))(), lookup.signal)
+        if (lookup.signal.aborted) return "unknown"
+        const info = res?.data ?? res
+        if (info && typeof info === "object" && info.location?.directory) {
+          epoch.kind = kindOf(info.location, info.parentID)
+          return epoch.kind
+        }
+        return "unknown"
+      } finally {
+        lookup.release()
       }
-      const lookup = { stale: false }
-      const pending = lookups.get(sid) ?? new Set()
-      pending.add(lookup)
-      lookups.set(sid, pending)
-      // The async wrapper turns a synchronous throw from get into a rejection
-      // bounded absorbs, so the bookkeeping below always runs.
-      const res = await bounded((async () => ctx.session.get({ sessionID: sid }))(), signal)
-      pending.delete(lookup)
-      if (pending.size === 0 && lookups.get(sid) === pending) lookups.delete(sid)
-      if (lookup.stale || signal?.aborted) return "unknown"
-      const info = res?.data ?? res
-      if (info && typeof info === "object" && info.location?.directory) {
-        return classified(sid, info.location, info.parentID)
-      }
-      return "unknown"
     }
 
-    // groundTruth returns the session's ground-truth text, fetching it once per
-    // session (and again after a compaction). An empty or failed fetch is cached
-    // as "": null cannot tell "hook failed" from "nothing to inject" (a non-git
-    // dir), and retrying the latter would spawn a process on every model request.
-    // A fetch cut short by signal is the exception: it caches nothing, and gives a
-    // compact re-ground its mark back, so the next request tries again.
-    const groundTruth = async (sid, signal) => {
-      const cached = texts.get(sid)
-      if (cached !== undefined) {
-        setCapped(texts, sid, cached, textsCap)
-        return cached
+    // groundTruth returns the epoch's ground-truth text, fetching it once per epoch
+    // (and again after a compaction). An empty or failed fetch is cached as "":
+    // null cannot tell "hook failed" from "nothing to inject" (a non-git dir), and
+    // retrying the latter would spawn a process on every model request. A fetch
+    // cut short is the exception: by the epoch's end it caches nothing and the
+    // child is dead; by the caller's deadline alone it clears its own entry and
+    // gives a compact re-ground its mark back, so the next request tries again.
+    // Results are stored on the epoch the fetch started under, never looked up by
+    // sid, so a late answer cannot land in a newer epoch.
+    const groundTruth = async (sid, epoch, call) => {
+      if (epoch.text === undefined) {
+        if ((await classify(sid, epoch, call)) !== "top" || !live(epoch) || call.aborted) return ""
+        // classify may have suspended, so a concurrent request for this session may
+        // have started the fetch in the meantime.
+        if (epoch.text === undefined) {
+          const source = epoch.regrounding ? "compact" : "startup"
+          epoch.regrounding = false
+          const fetch = link(call, epoch.ctl.signal)
+          const fetched = runHook("sessionstart", { ...payload("SessionStart", sid), source }, { signal: fetch.signal }).then(
+            (control) => {
+              fetch.release()
+              if (!fetch.signal.aborted) return additionalContext(control)
+              if (epoch.text === fetched) epoch.text = undefined
+              if (source === "compact" && live(epoch)) epoch.regrounding = true
+              return ""
+            },
+          )
+          epoch.text = fetched
+        }
       }
-      if ((await classify(sid, signal)) !== "top" || signal.aborted) return ""
-      // classify may have suspended, so a concurrent request for this session may
-      // have started the fetch in the meantime.
-      const raced = texts.get(sid)
-      if (raced !== undefined) return raced
-      const source = regrounding.delete(sid) ? "compact" : "startup"
-      const fetched = runHook("sessionstart", { ...payload("SessionStart", sid), source }, { signal }).then((control) => {
-        if (!signal.aborted) return additionalContext(control)
-        if (texts.get(sid) === fetched) texts.delete(sid)
-        if (source === "compact" && !abort.signal.aborted) setCapped(regrounding, sid, true, textsCap)
-        return ""
-      })
-      setCapped(texts, sid, fetched, textsCap)
-      return fetched
+      return epoch.text
     }
 
     // stop is fleet bookkeeping only, as on OpenCode 1: the control output is
@@ -696,29 +713,33 @@ async function setup(ctx) {
     // by that server's teardown, which takes its whole process group down, and a
     // director child still inside the group dies before it can archive the row.
     // Every other hook fires mid-session, with the server alive for its duration.
-    // For the same reason the spawned child is deliberately NOT tied to the
-    // instance's signal (unload is that teardown); only the decision to spawn is.
+    // For the same reason the spawned child is deliberately NOT tied to any
+    // signal (unload is that teardown); only the DECISION to spawn is gated, on
+    // the classification and the epoch as they stand at the moment of spawning.
     const stop = async (sid) => {
       try {
-        if ((await classify(sid, abort.signal)) !== "top" || abort.signal.aborted) return
+        const epoch = epochOf(sid)
+        if ((await classify(sid, epoch, abort.signal)) !== "top" || !live(epoch) || abort.signal.aborted) return
         await runHook("stop", { ...payload("Stop", sid), stop_hook_active: false }, { detached: true })
       } catch {}
     }
 
     const onEvent = (event) => {
+      // A stream that outlives the unload (a host that keeps yielding after the
+      // abort) must not give a dead instance a session table again.
       const sid = event?.data?.sessionID
-      if (!sid) return
+      if (!sid || abort.signal.aborted) return
       switch (event.type) {
         case "session.created":
           // Without a location the event cannot classify; classify() asks the host.
-          if (event.data.location?.directory) classified(sid, event.data.location, event.data.parentID)
+          if (event.data.location?.directory) epochOf(sid).kind = kindOf(event.data.location, event.data.parentID)
           return
         case "session.moved":
           // The session now lives somewhere else (a worktree move rewrites its
-          // directory). Whatever was cached is about the old place: the instance
-          // it left must stop acting on it, and the instance it arrived at must
-          // stop treating it as foreign. Re-asking the host settles both, and
-          // the ground truth is refetched for the new project on the next request.
+          // directory): the instance it left must stop acting on it, and the
+          // instance it arrived at must stop treating it as foreign. A new epoch
+          // re-asks the host, and the ground truth is refetched for the new
+          // project on the next request.
           forget(sid)
           return
         case "session.deleted":
@@ -727,11 +748,16 @@ async function setup(ctx) {
           // classified and grounded again like any session after a restart.
           forget(sid)
           return
-        case "session.compaction.ended":
+        case "session.compaction.ended": {
           // Only a session already grounded needs it again; one that never was
           // (post-restart) takes the startup path on its next request anyway.
-          if (texts.delete(sid)) setCapped(regrounding, sid, true, textsCap)
+          const epoch = epochs.get(sid)
+          if (epoch?.text !== undefined) {
+            epoch.text = undefined
+            epoch.regrounding = true
+          }
           return
+        }
         case "session.execution.succeeded":
         case "session.execution.failed":
           // Not awaited: the stream buffers behind a slow consumer and can
@@ -745,8 +771,8 @@ async function setup(ctx) {
     // or fails (the host drops slow consumers) is re-subscribed with backoff: a
     // permanently dead subscription would silently stop every Stop and compaction
     // re-ground. The host's re-subscription has no replay cursor, so the events of
-    // the gap are LOST (a move, a delete, a compaction): everything cached before
-    // it may be stale, and is dropped before the new subscription starts.
+    // the gap are LOST (a move, a delete, a compaction): every epoch is ended
+    // before the new subscription starts.
     const consume = async () => {
       let delay = 500
       let resubscribing = false
@@ -768,33 +794,43 @@ async function setup(ctx) {
 
     await ctx.session.hook(
       "context",
-      guard(async (event, signal) => {
+      guard(async (event, call) => {
         const sid = event?.sessionID
         if (!sid || !Array.isArray(event.system)) return
-        const text = await groundTruth(sid, signal)
-        if (text && !signal.aborted) event.system.push({ type: "text", text })
+        const epoch = epochOf(sid)
+        const text = await groundTruth(sid, epoch, call)
+        // A request that waited on a shared fetch must not inject what a moved or
+        // deleted session's epoch produced.
+        if (text && live(epoch) && !call.aborted) event.system.push({ type: "text", text })
       }, abort.signal),
     )
 
     await ctx.tool.hook(
       "execute.after",
-      guard(async (event, signal) => {
+      guard(async (event, call) => {
         const sid = event?.sessionID
-        if (!sid || (await classify(sid, signal)) !== "top" || signal.aborted) return
-        const control = await runHook("posttooluse", { ...payload("PostToolUse", sid), tool_name: event.tool }, { signal })
+        if (!sid) return
+        const epoch = epochOf(sid)
+        if ((await classify(sid, epoch, call)) !== "top" || !live(epoch) || call.aborted) return
+        const beat = link(call, epoch.ctl.signal)
+        let control
+        try {
+          control = await runHook("posttooluse", { ...payload("PostToolUse", sid), tool_name: event.tool }, { signal: beat.signal })
+        } finally {
+          beat.release()
+        }
         const text = additionalContext(control)
         // The heartbeat is the point of the call, so it runs for a failed tool
         // too; a nudge has nowhere to ride on one and is dropped.
-        if (!text || signal.aborted || event.status !== "completed" || !event.result) return
+        if (!text || !live(epoch) || call.aborted || event.status !== "completed" || !event.result) return
         appendToResult(event.result, text)
       }, abort.signal),
     )
 
     void consume()
 
-    // Unloading: stop everything in flight (hooks watch the instance's signal
-    // through guard) and drop all state, disowning pending lookups so none of
-    // them can repopulate it or spawn afterwards.
+    // Unloading: end every epoch (killing what they have in flight) and stop the
+    // instance's hooks and stream; nothing repopulates a dead instance.
     let unloaded = false
     return () => {
       abort.abort()

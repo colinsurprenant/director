@@ -599,17 +599,17 @@ testSpawn("sessions are compared by directory the way Windows spells it", async 
   cleanup()
 })
 
-test("the session classification map is capped, oldest first", async () => {
+test("the session table is capped, oldest first", async () => {
   process.env.DIRECTOR_BIN = join(work, "no-such-director")
   delete process.env.NODE_OPTIONS
   const { default: plugin } = await load(pluginPath, "cap")
   const { ctx, state } = fakeCtx({ ses_000000: foreign("ses_000000") })
   const cleanup = await plugin.setup(ctx)
-  for (let i = 0; i < 4200; i++) {
+  for (let i = 0; i < 1100; i++) {
     state.channel.push({ type: "session.created", data: { sessionID: "ses_" + String(i).padStart(6, "0"), location: { directory: join(work, "elsewhere") } } })
   }
   await new Promise((r) => setTimeout(r, 400))
-  await state.hooks["session.context"]({ sessionID: "ses_004199", system: [] })
+  await state.hooks["session.context"]({ sessionID: "ses_001099", system: [] })
   assert.equal(state.gets, 0, "a recent session stays classified")
   await state.hooks["session.context"]({ sessionID: "ses_000000", system: [] })
   assert.equal(state.gets, 1, "the oldest session was evicted and is asked for again")
@@ -763,32 +763,176 @@ testSpawn("a re-subscribed stream starts from a clean slate", async () => {
   cleanup()
 })
 
-testSpawn("re-ground marks of sessions that never return are capped", async () => {
+testSpawn("a re-ground mark lives and dies with its session's epoch", async () => {
   process.env.DIRECTOR_BIN = join(work, "no-such-director") // grounding is just a cached "" here
   delete process.env.NODE_OPTIONS
   const { default: plugin } = await load(pluginPath, "regcap")
-  const id = (i) => "ses_" + String(i).padStart(4, "0")
-  const sessions = {}
-  for (let i = 0; i < 256; i++) sessions[id(i)] = top(id(i))
+  const sessions = { ses_old: top("ses_old"), ses_new: top("ses_new") }
   const { ctx, state } = fakeCtx(sessions)
   const cleanup = await plugin.setup(ctx)
-  const compacted = async (from, to) => {
-    for (let i = from; i < to; i++) await state.hooks["session.context"]({ sessionID: id(i), system: [] })
-    for (let i = from; i < to; i++) state.channel.push({ type: "session.compaction.ended", data: { sessionID: id(i) } })
-    await new Promise((r) => setTimeout(r, 300))
+  const compacted = async (sid) => {
+    await state.hooks["session.context"]({ sessionID: sid, system: [] })
+    state.channel.push({ type: "session.compaction.ended", data: { sessionID: sid } })
+    await new Promise((r) => setTimeout(r, 50))
   }
-  await compacted(0, 128)
-  await compacted(128, 256) // 256 marks asked for, none of them ever read
+  await compacted("ses_old") // marked for a re-ground, then never resumed...
+  for (let i = 0; i < 1100; i++) {
+    // ...while other sessions fill the table until its epoch is evicted.
+    state.channel.push({ type: "session.created", data: { sessionID: "ses_fill" + i, location: { directory: join(work, "elsewhere") } } })
+  }
+  await new Promise((r) => setTimeout(r, 300))
+  await compacted("ses_new")
   nodeOptions("ok")
   const before = calls().length
-  await state.hooks["session.context"]({ sessionID: id(0), system: [] })
-  await state.hooks["session.context"]({ sessionID: id(255), system: [] })
+  await state.hooks["session.context"]({ sessionID: "ses_old", system: [] })
+  await state.hooks["session.context"]({ sessionID: "ses_new", system: [] })
   const sources = Object.fromEntries(
     calls().slice(before).filter((c) => c.event === "sessionstart").map((c) => [c.payload.session_id, c.payload.source]),
   )
-  assert.equal(sources[id(255)], "compact", "the newest mark survives")
-  assert.equal(sources[id(0)], "startup", "the oldest mark was evicted by the cap")
+  assert.equal(sources.ses_new, "compact", "a live epoch keeps its mark")
+  assert.equal(sources.ses_old, "startup", "an evicted epoch took its mark with it")
   cleanup()
+})
+
+// A fetch is made slow with FAKE_DIRECTOR_DELAY_MS (the child answers and logs only
+// after the delay, so a killed child never does); `ended` helps the next cases.
+const sessionstarts = (before, sid) =>
+  calls().slice(before).filter((c) => c.event === "sessionstart" && c.payload.session_id === sid).length
+const settles = (p, ms = 2000) => Promise.race([p.then(() => "released"), new Promise((r) => setTimeout(() => r("stuck"), ms))])
+const tick = (ms) => new Promise((r) => setTimeout(r, ms))
+
+for (const [name, end] of [
+  ["moved", (state, sessions, sid) => { sessions[sid] = foreign(sid); state.channel.push({ type: "session.moved", data: { sessionID: sid, location: { directory: join(work, "elsewhere") }, projectID: "p" } }) }],
+  ["deleted", (state, sessions, sid) => { delete sessions[sid]; state.channel.push({ type: "session.deleted", data: { sessionID: sid } }) }],
+]) {
+  testSpawn(`a session ${name} while its SessionStart fetch is pending injects nothing old, kills the child and caches nothing`, async () => {
+    nodeOptions("ok")
+    process.env.FAKE_DIRECTOR_DELAY_MS = "800"
+    try {
+      const before = calls().length
+      const { default: plugin } = await load(pluginPath, "pending-" + name)
+      const sessions = { ses_p: top("ses_p") }
+      const { ctx, state } = fakeCtx(sessions)
+      const cleanup = await plugin.setup(ctx)
+      const first = { sessionID: "ses_p", system: [] }
+      const joined = { sessionID: "ses_p", system: [] }
+      const a = state.hooks["session.context"](first)
+      await tick(200) // the child is spawned and sleeping
+      const b = state.hooks["session.context"](joined) // joins the shared fetch
+      await tick(50)
+      end(state, sessions, "ses_p")
+      assert.equal(await settles(Promise.all([a, b]), 400), "released", "the waiting hooks are released when the epoch ends, not when the child would have answered")
+      assert.deepEqual(first.system, [], "the first waiter must not inject the old text")
+      assert.deepEqual(joined.system, [], "nor the one that joined its fetch")
+      await tick(1100)
+      assert.equal(sessionstarts(before, "ses_p"), 0, "the child must have been killed, not left to answer")
+      delete process.env.FAKE_DIRECTOR_DELAY_MS
+      const after = { sessionID: "ses_p", system: [] }
+      await state.hooks["session.context"](after)
+      assert.deepEqual(after.system, [], "nothing was cached for the ended epoch, and the session is no longer ours")
+      assert.equal(sessionstarts(before, "ses_p"), 0)
+      cleanup()
+    } finally {
+      delete process.env.FAKE_DIRECTOR_DELAY_MS
+    }
+  })
+}
+
+testSpawn("evicting a session's epoch from the full table ends its in-flight fetch", async () => {
+  nodeOptions("ok")
+  process.env.FAKE_DIRECTOR_DELAY_MS = "800"
+  try {
+    const before = calls().length
+    const { default: plugin } = await load(pluginPath, "evict-inflight")
+    const { ctx, state } = fakeCtx({ ses_p: top("ses_p") })
+    const cleanup = await plugin.setup(ctx)
+    const event = { sessionID: "ses_p", system: [] }
+    const pending = state.hooks["session.context"](event)
+    await tick(200) // the child is spawned and sleeping
+    for (let i = 0; i < 1100; i++) {
+      state.channel.push({ type: "session.created", data: { sessionID: "ses_fill" + i, location: { directory: join(work, "elsewhere") } } })
+    }
+    assert.equal(await settles(pending, 500), "released", "the evicted epoch's waiter is released")
+    assert.deepEqual(event.system, [])
+    await tick(1000)
+    assert.equal(sessionstarts(before, "ses_p"), 0, "the evicted epoch's child was killed")
+    cleanup()
+  } finally {
+    delete process.env.FAKE_DIRECTOR_DELAY_MS
+  }
+})
+
+testSpawn("a reconnect while a SessionStart fetch is pending injects nothing old and kills the child", async () => {
+  nodeOptions("ok")
+  process.env.FAKE_DIRECTOR_DELAY_MS = "1500"
+  try {
+    const before = calls().length
+    const { default: plugin } = await load(pluginPath, "pending-gap")
+    let subscribes = 0
+    let fail = null
+    const { ctx, state } = fakeCtx(
+      { ses_p: top("ses_p") },
+      {
+        event: {
+          subscribe: ({ signal }) => {
+            subscribes++
+            if (subscribes === 1) {
+              return { [Symbol.asyncIterator]: () => ({ next: () => new Promise((_, reject) => { fail = () => reject(new Error("overflow")) }) }) }
+            }
+            return channel(signal).iterable
+          },
+        },
+      },
+    )
+    const cleanup = await plugin.setup(ctx)
+    const event = { sessionID: "ses_p", system: [] }
+    const pending = state.hooks["session.context"](event)
+    await tick(200)
+    fail() // the stream drops; the re-subscription (and with it forgetAll) follows after the backoff
+    assert.equal(await settles(pending, 1200), "released", "the re-subscription ends the epoch and releases the waiting hook")
+    assert.deepEqual(event.system, [])
+    await tick(1800)
+    assert.equal(sessionstarts(before, "ses_p"), 0, "the child must have been killed")
+    delete process.env.FAKE_DIRECTOR_DELAY_MS
+    const next = { sessionID: "ses_p", system: [] }
+    await state.hooks["session.context"](next)
+    assert.equal(next.system.length, 1, "the next request starts a fresh epoch and grounds normally")
+    assert.equal(sessionstarts(before, "ses_p"), 1)
+    cleanup()
+  } finally {
+    delete process.env.FAKE_DIRECTOR_DELAY_MS
+  }
+})
+
+testSpawn("an old epoch's fetch cannot populate or clear the cache of the epoch that replaced it", async () => {
+  nodeOptions("ok")
+  process.env.FAKE_DIRECTOR_DELAY_MS = "400"
+  try {
+    const before = calls().length
+    const { default: plugin } = await load(pluginPath, "epoch-swap")
+    const { ctx, state } = fakeCtx({ ses_p: top("ses_p") })
+    const cleanup = await plugin.setup(ctx)
+    const old = { sessionID: "ses_p", system: [] }
+    const oldHook = state.hooks["session.context"](old)
+    await tick(200) // the old epoch's child is spawned and sleeping
+    delete process.env.FAKE_DIRECTOR_DELAY_MS
+    // A move within this location (a subpath change): the session is still ours, so a NEW epoch starts.
+    state.channel.push({ type: "session.moved", data: { sessionID: "ses_p", location: { directory: HERE }, projectID: "p" } })
+    await tick(100)
+    const fresh = { sessionID: "ses_p", system: [] }
+    await state.hooks["session.context"](fresh)
+    await oldHook // the old epoch's fetch settles now
+    assert.deepEqual(old.system, [], "the old epoch's waiter injects nothing")
+    assert.equal(fresh.system.length, 1, "the new epoch grounds")
+    await tick(500)
+    const again = { sessionID: "ses_p", system: [] }
+    await state.hooks["session.context"](again)
+    assert.equal(again.system.length, 1, "the new epoch's cache survived the old fetch's end")
+    assert.equal(sessionstarts(before, "ses_p"), 1, "one fetch only: the old child died, the new text was cached and reused")
+    cleanup()
+  } finally {
+    delete process.env.FAKE_DIRECTOR_DELAY_MS
+  }
 })
 
 testSpawn("a slow binary is cut off at the deadline without rejecting", async () => {
