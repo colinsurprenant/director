@@ -435,7 +435,12 @@ workstream from offering a dead resume point), a `handoff` whose refs name same-
 survives instead of being silently overwritten, and a `decision` whose refs name `decision`(s)
 **supersedes** them, dropping them from the digest's active decisions (any decision, any workstream,
 no ordering check). A handoff carrying no such refs falls back to retiring
-every older position of its workstream. Your job is to **review**: read `status`/`brief`,
+every older position of its workstream. Because a note ref concludes a handoff and every older position
+of its workstream, `director emit` confirms on stderr, per affected workstream, which resume points a note
+just concluded (`→ note concluded resume point(s) of <workstream>: <ULIDs>`). `/director:complete` does
+this on purpose; for any other note the line says how to restore the position (a handoff whose `--refs` names
+those ULIDs, emitted from that workstream), and a note that concludes nothing (or whose log cannot be read) prints nothing.
+Your job is to **review**: read `status`/`brief`,
 answer the escalations, edit CHARTERs to steer, not to relay.
 
 At block boundaries, `/director:handoff` is the one slash command you need (installed by `director install`, with
@@ -472,9 +477,14 @@ rather than letting the later one silently overwrite the earlier. The stack coll
 boundary: the next session reads all of them, treats their union as its starting position, and its own
 handoff `--refs` each one, which retires exactly those and leaves the workstream on a single resume
 point again. `director emit` also prints a warning on stderr whenever a handoff would retire positions
-implicitly (no `--refs` at all, or refs that name no earlier handoff of that workstream). Those positions
-stay retired even if a later handoff names them, so the remedy is to read each one with `director show`
-and fold it into a corrected handoff whose `--refs` names the implicit one, which retires it.
+implicitly (no `--refs` at all, or refs that name no earlier handoff of that workstream). When it can read
+the log, the warning lists the ULID of each position it retired and the implicit handoff's own ULID. When it
+cannot, only the no-refs shape warns (the mis-copied-refs shape needs the log to detect), and it lists no
+positions: once the log reads again, `director show` on an earlier handoff names the handoff that retired it.
+Those positions stay retired even if a later handoff names them, so the remedy is to read each one with `director show`
+and fold it into a corrected handoff whose `--refs` names the implicit one (the ULID the warning gives),
+which retires it and puts a live resume point in its place (a handoff a parallel session wrote at or
+after the implicit one still stacks beside it).
 
 Since v1.20, `/director:handoff` also re-reads the workstream's current positions just before writing
 (the session-start snapshot cannot show a handoff a parallel session wrote mid-session), reads each one
@@ -488,7 +498,7 @@ new handoff carries no `--refs` (a workstream's first).
 ## 6. Troubleshooting
 
 Start with **`director doctor`**: it checks the whole install chain (binary resolution, Claude Code,
-Codex, OpenCode, and Copilot CLI hooks, shims present, the hub's sandbox write grant, hub writable) and names the broken link, exiting non-zero when coordination
+Codex, OpenCode (including whether an OpenCode 2 host can load the plugin), and Copilot CLI hooks, shims present, the hub's sandbox write grant, hub writable) and names the broken link, exiting non-zero when coordination
 would not fire; it also warns on a `DIRECTOR_DISABLE` left set. The table covers the specifics.
 
 | Symptom | Cause & fix |
@@ -506,6 +516,7 @@ would not fire; it also warns on a `DIRECTOR_DISABLE` left set. The table covers
 | **`adopt` imported nothing** | By design: the CLI registers only (identity + CHARTER stub + fleet row). The import path is `/director:adopt` in an agent session: it triages the repo's real open loops and imports only what you confirm. |
 | **`install` refused** | Your `~/.claude/settings.json` has a malformed (non-object) `hooks` value. Director won't overwrite data it doesn't understand: fix the file, then re-run. |
 | **`install --copilot` or `uninstall --copilot` refused** | `~/.copilot/hooks/director.json` exists and is not fully Director's: either it is a file you wrote, or you added a command of your own (or a `powershell` field) to one of ours. Both verbs rewrite or delete that file whole, so Director refuses rather than destroy your work. Move your commands into another `*.json` in the same directory (Copilot loads them all), or point Director elsewhere with `DIRECTOR_COPILOT_HOOKS_PATH`, then re-run. `director doctor` names the events involved. |
+| **`director doctor` fails `opencode hooks` on OpenCode 2** | OpenCode 2 refuses any plugin that lacks a default export (`export default { id, setup }`), and the plugin Director installs today is the OpenCode 1 shape, so on OpenCode 2 the plugin never loads and Director does not fire in OpenCode sessions (#89). `doctor` runs `opencode --version` to tell, and fails only when a line of its output is a version with major 2 or more and the installed plugin has no `export default` at the start of a line. OpenCode 1 is unaffected. Upgrade Director to a release with OpenCode 2 support, then re-run `director install --opencode`; re-installing the current version does not change the plugin's shape. |
 
 ---
 

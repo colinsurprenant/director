@@ -21,7 +21,12 @@ func repoKey(dir string, git gitRunner) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return repoKeyAt(top, dir, git)
+	key, err := repoKeyAt(top, dir, git)
+	if err != nil {
+		return "", err
+	}
+	ensureStateIgnored(top)
+	return key, nil
 }
 
 // repoKeyAt is repoKey with the repo toplevel already resolved by the caller. It

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/colinsurprenant/director/internal/event"
@@ -86,20 +87,67 @@ func runEmit(args []string) int {
 	// whose cwd drifted sees the misroute in its own transcript.
 	fmt.Println(ev.ID)
 	fmt.Fprintf(os.Stderr, "→ %s · %s\n", ws.RepoKey, ws.ID)
-	if event.Kind(typ) == event.KindHandoff {
+	switch event.Kind(typ) {
+	case event.KindHandoff:
 		warnHandoffRefs(store, ev, refList)
+	case event.KindNote:
+		if len(refList) > 0 {
+			confirmNoteConcluded(store, ev, ws.ID)
+		}
 	}
 	return 0
 }
 
 // The two implicit-handoff shapes, worded to name the LOSS rather than describe
 // the flag: what a session must act on is that a position it never saw is being
-// retired, and that loss is invisible after the fact.
+// retired, and that loss is invisible after the fact. Each opening clause is
+// followed by the recovery that actually works (handoffRecovery), because the
+// obvious one does not: the implicit mark counts every implicit handoff, so a
+// retired position stays retired even if a later handoff names it.
 const (
-	warnHandoffNoRefs = "⚠ handoff without --refs: it supersedes ALL older handoffs of this workstream, including parallel positions you may not have seen — pass --refs <resume-point-ulid> to supersede only what you rehydrated from"
+	warnHandoffNoRefsHead = "⚠ handoff without --refs: it supersedes ALL older handoffs of this workstream, including parallel positions you may not have seen"
 
-	warnHandoffWrongRefs = "⚠ handoff --refs names no handoff of this workstream (a note, a sibling workstream's position, or an unknown id — a ULID mis-copied from another line in the digest is the usual cause): the fold reads it as ref-less, so it supersedes ALL older handoffs of this workstream, including parallel positions you may not have seen — re-emit with the resume-point ULID(s) from your ground truth"
+	warnHandoffWrongRefsHead = "⚠ handoff --refs names no handoff of this workstream (a note, a sibling workstream's position, or an unknown id — a ULID mis-copied from another line in the digest is the usual cause): the fold reads it as ref-less, so it supersedes ALL older handoffs of this workstream, including parallel positions you may not have seen"
 )
+
+// warnHandoffNoRefs and warnHandoffWrongRefs build the two warnings for the
+// implicit handoff self, which retired the positions in lost (nil when the log
+// could not be read, so they are unknown). The no-refs shape also keeps the
+// next-time advice, since an omitted flag is the one a session can still fix at
+// the source.
+func warnHandoffNoRefs(self string, lost []string) string {
+	return warnHandoffNoRefsHead + handoffRecovery(self, lost) +
+		". Next time, pass --refs <resume-point-ulid> to supersede only what you rehydrated from"
+}
+
+func warnHandoffWrongRefs(self string, lost []string) string {
+	return warnHandoffWrongRefsHead + handoffRecovery(self, lost)
+}
+
+// handoffRecovery is the shared tail: which positions were retired, and the one
+// recovery the fold supports. Naming a retired position in a new handoff does
+// nothing (the implicit mark sits at self and retires everything strictly older),
+// so the recovery names self instead: a handoff whose --refs names an earlier
+// handoff of the workstream is explicit, retires exactly that one, and is newer
+// than the implicit mark, so it is a live position (TestRunEmitImplicitHandoffRecovery
+// runs this through the fold). It is not promised to be the ONLY one: a handoff
+// at or above the implicit one, from a concurrent session, keeps stacking.
+//
+// With the log unreadable the retired positions cannot be listed, and the
+// session-start ground truth cannot stand in for them (it is a snapshot that
+// never shows a position written mid-session). What survives the outage is
+// `director show`: a retired handoff prints a lifecycle line naming the handoff
+// that retired it.
+func handoffRecovery(self string, lost []string) string {
+	var b strings.Builder
+	if len(lost) > 0 {
+		fmt.Fprintf(&b, ". Retired by this handoff: %s (naming a retired position in a later handoff does not bring it back)", strings.Join(lost, ", "))
+	} else {
+		b.WriteString(". The log could not be read, so the positions it retired cannot be listed here; once it reads again, `director show <earlier handoff ULID>` prints a `lifecycle:` line naming the handoff that retired it, and they stay retired even if a later handoff names them")
+	}
+	fmt.Fprintf(&b, ". To recover, read each retired position with `director show <ULID>`, fold what you still need into a corrected handoff, and emit it with --refs %s (this handoff): that retires this one and puts a live resume point in its place", self)
+	return b.String()
+}
 
 // warnHandoffRefs classifies a freshly-appended handoff against the log and warns
 // on stderr when the fold will read it as IMPLICIT — the legacy shape that retires
@@ -133,7 +181,7 @@ func warnHandoffRefs(store *event.Store, ev event.Event, refList []string) {
 	events, err := store.ReadAll()
 	if err != nil {
 		if len(refList) == 0 {
-			fmt.Fprintln(os.Stderr, warnHandoffNoRefs)
+			fmt.Fprintln(os.Stderr, warnHandoffNoRefs(ev.ID, nil))
 		}
 		return
 	}
@@ -158,15 +206,96 @@ func warnHandoffRefs(store *event.Store, ev event.Event, refList []string) {
 		return
 	}
 	// Implicit: it retires every strictly-older position of this workstream, so
-	// what it costs is precisely the stack that was live before it landed.
-	if len(render.Fold(before).ResumeHandoffs[ev.Workstream]) == 0 {
+	// what it costs is precisely the stack that was live below it. A position
+	// above it (a parallel handoff that landed after this append) is untouched,
+	// and is neither lost nor listed.
+	var lost []string
+	for _, p := range render.Fold(before).ResumeHandoffs[ev.Workstream] {
+		if p.ID < ev.ID {
+			lost = append(lost, p.ID)
+		}
+	}
+	if len(lost) == 0 {
 		return
 	}
 	if len(refList) == 0 {
-		fmt.Fprintln(os.Stderr, warnHandoffNoRefs)
+		fmt.Fprintln(os.Stderr, warnHandoffNoRefs(ev.ID, lost))
 		return
 	}
-	fmt.Fprintln(os.Stderr, warnHandoffWrongRefs)
+	fmt.Fprintln(os.Stderr, warnHandoffWrongRefs(ev.ID, lost))
+}
+
+// confirmNoteConcluded says which resume points a freshly-appended note just
+// retired, on stderr. A note whose --refs name a handoff CONCLUDES it, and the
+// fold's per-workstream high-water mark retires that handoff and every older one
+// of its workstream. /director:complete does that on purpose, but any other note
+// doing it silently drops live resume points, and nothing at the write says so.
+//
+// The answer is the fold's, not a re-implementation of the high-water rule: the
+// positions live in the log minus this note and gone from the log with it are
+// exactly what the note concluded. Both folds read the same snapshot, so a
+// concurrent writer cannot be mistaken for this note's doing. A note that
+// retires no live position (refs naming open-items, decisions, notes, or
+// handoffs at or below a conclusion mark that already stands) prints nothing,
+// since notes cross-link constantly.
+//
+// The line names whatever the fold retired, which can include an older LIVE
+// position even when the handoff the note named was itself already retired: the
+// fold sets the conclusion mark on ANY referenced handoff, retired or not
+// (fold.go:287-296), and the mark retires every older live position of its
+// workstream (fold.go:373). With R < A < B < C, A and B ref R, and C ref B, A and
+// C are live and B is retired; a note naming B still concludes A, and the line
+// says so (the retired-ref subtest of TestRunEmitNoteConclusionConfirms).
+//
+// It is a confirmation, not an alarm, because the close-out case is legitimate;
+// the write stays a pure append and is never rejected. The recovery clause is
+// the fold's own behavior: a handoff whose --refs name a same-workstream handoff
+// is explicit and newer than the conclusion mark, so it is the live resume
+// point again (TestRunEmitNoteConclusionRecovery runs this through the fold).
+// That handoff must be emitted FROM the affected workstream: one emitted here
+// belongs to this workstream and cannot restore another's position. A read
+// failure prints nothing: without the log a handoff ref cannot be told from a
+// cross-link.
+func confirmNoteConcluded(store *event.Store, ev event.Event, wsID string) {
+	events, err := store.ReadAll()
+	if err != nil {
+		return
+	}
+	before := make([]event.Event, 0, len(events))
+	for _, e := range events {
+		if e.ID != ev.ID {
+			before = append(before, e)
+		}
+	}
+	was := render.Fold(before).ResumeHandoffs
+	now := render.Fold(events).ResumeHandoffs
+
+	affected := make([]string, 0, len(was))
+	concluded := make(map[string][]string, len(was))
+	for ws, positions := range was {
+		live := make(map[string]bool, len(now[ws]))
+		for _, h := range now[ws] {
+			live[h.ID] = true
+		}
+		for _, h := range positions {
+			if !live[h.ID] {
+				concluded[ws] = append(concluded[ws], h.ID)
+			}
+		}
+		if len(concluded[ws]) > 0 {
+			affected = append(affected, ws)
+		}
+	}
+	sort.Strings(affected)
+	for _, ws := range affected {
+		ids := concluded[ws]
+		restore := fmt.Sprintf("restore the position with a handoff whose --refs names %s", strings.Join(ids, ","))
+		if ws != wsID {
+			restore += ", emitted from that workstream's own worktree"
+		}
+		fmt.Fprintf(os.Stderr, "→ note concluded resume point(s) of %s: %s; they no longer surface as resumable. /director:complete does this on purpose; if this note was not a close-out, %s (director show <ULID> for its body).\n",
+			ws, strings.Join(ids, ", "), restore)
+	}
 }
 
 // canonicalRefs splits a comma-separated --refs value, canonicalizes each ULID,

@@ -382,7 +382,7 @@ $DIRECTOR_HUB/
 └── health/                 # hook health log + render manifests
 ```
 
-In each adopted worktree: `.director/workstream-id` (and `.director/repo-key`), tiny and stable.
+In each adopted worktree: `.director/workstream-id` (and `.director/repo-key`), tiny and stable. To keep them out of git, Director writes `.director/.gitignore` (a comment and `*`, which also ignores the file itself), best effort: whenever identity resolves and finds that file missing or empty (an interrupted write), it writes it. If `.director/` cannot be written, or is a symlink, nothing is ignored and identity still works. Each linked worktree gets its own, a non-empty existing `.director/.gitignore` is never rewritten, and your repo's own `.gitignore` and `.git` are never touched. Without the file `git add -A` would commit the id and every other clone or worktree would inherit it. Ignore rules do not apply to files git already tracks: a repo that committed `.director/` before this fix needs `git rm -r --cached .director` and a commit.
 
 ## Fresh walkthrough
 

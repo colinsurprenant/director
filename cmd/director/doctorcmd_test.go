@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/colinsurprenant/director/internal/install"
 )
@@ -305,6 +306,273 @@ func TestDoctorOpenCodePresent(t *testing.T) {
 	if lv := levelOf(t, rep, "opencode hooks"); lv != levelOK {
 		t.Errorf("opencode check: got %v, want OK", lv)
 	}
+}
+
+// opencodeFixture is a healthy install with a real managed OpenCode plugin (the
+// v1 shape Director ships today) and the given `opencode --version` stdout.
+func opencodeFixture(t *testing.T, versionOut string) (doctorInputs, string) {
+	t.Helper()
+	in := installedFixture(t)
+	pluginPath := filepath.Join(t.TempDir(), "plugin", "director.js")
+	t.Setenv("DIRECTOR_OPENCODE_PLUGIN_PATH", pluginPath)
+	t.Setenv("DIRECTOR_OPENCODE_COMMANDS_DIR", filepath.Join(t.TempDir(), "oc-command"))
+	if err := install.InstallOpenCode(pluginPath); err != nil {
+		t.Fatalf("InstallOpenCode fixture: %v", err)
+	}
+	in.opencodePlugin = pluginPath
+	in.opencodeVersion = func() string { return versionOut }
+	return in, pluginPath
+}
+
+func opencodeDetail(t *testing.T, rep doctorReport) string {
+	t.Helper()
+	for _, c := range rep.checks {
+		if c.title == "opencode hooks" {
+			return c.detail
+		}
+	}
+	t.Fatalf("no opencode check in %+v", rep.checks)
+	return ""
+}
+
+// TestDoctorOpenCode2WithV1PluginFails is #89: OpenCode 2 refuses a plugin
+// without a default export, so Director's v1-shaped plugin never fires there
+// while every other check reads healthy. doctor must say so.
+func TestDoctorOpenCode2WithV1PluginFails(t *testing.T) {
+	in, _ := opencodeFixture(t, "opencode v2.1.0\n")
+	rep := diagnose(in)
+	if rep.healthy {
+		t.Fatalf("OpenCode 2 with the v1-shaped plugin must sink doctor, got %+v", rep.checks)
+	}
+	if lv := levelOf(t, rep, "opencode hooks"); lv != levelFail {
+		t.Fatalf("opencode check: got %v, want FAIL", lv)
+	}
+	d := opencodeDetail(t, rep)
+	for _, want := range []string{"OpenCode 2.1.0 cannot load Director's plugin", "default-export plugin", "v1 shape", "(#89)", "OpenCode 1 still works"} {
+		if !strings.Contains(d, want) {
+			t.Errorf("failure text %q is missing %q", d, want)
+		}
+	}
+}
+
+// TestDoctorOpenCode2ShapeOutranksLadder: with both broken, the shape failure
+// speaks, because no binary ladder matters when the host refuses the plugin.
+func TestDoctorOpenCode2ShapeOutranksLadder(t *testing.T) {
+	in, _ := opencodeFixture(t, "opencode v2.1.0")
+	in.binPath = filepath.Join(t.TempDir(), "moved", "bin", "director") // stale baked fallback too
+	rep := diagnose(in)
+	if d := opencodeDetail(t, rep); !strings.Contains(d, "#89") {
+		t.Errorf("the shape failure must lead, got %q", d)
+	}
+}
+
+// TestDoctorOpenCode1WithV1PluginStaysOK: OpenCode 1 loads the v1 shape, so the
+// check is unchanged there.
+func TestDoctorOpenCode1WithV1PluginStaysOK(t *testing.T) {
+	in, _ := opencodeFixture(t, "1.14.7\n")
+	rep := diagnose(in)
+	if !rep.healthy {
+		t.Fatalf("OpenCode 1 with the v1-shaped plugin must stay healthy, got %+v", rep.checks)
+	}
+	if lv := levelOf(t, rep, "opencode hooks"); lv != levelOK {
+		t.Errorf("opencode check: got %v, want OK", lv)
+	}
+}
+
+// TestDoctorOpenCode2WithDefaultExportIsOK: a plugin carrying the default export
+// (the dual shape the OpenCode 2 support ships) passes on OpenCode 2.
+func TestDoctorOpenCode2WithDefaultExportIsOK(t *testing.T) {
+	in, pluginPath := opencodeFixture(t, "opencode v2.1.0")
+	f, err := os.OpenFile(pluginPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("\nexport default { id: \"director\", setup: DirectorPlugin }\n"); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	rep := diagnose(in)
+	if !rep.healthy {
+		t.Fatalf("OpenCode 2 with a default-export plugin must be healthy, got %+v", rep.checks)
+	}
+	if lv := levelOf(t, rep, "opencode hooks"); lv != levelOK {
+		t.Errorf("opencode check: got %v, want OK", lv)
+	}
+}
+
+// TestDoctorOpenCode2PhraseIsNotADefaultExport: the words "export default"
+// elsewhere in the file (a comment, a string literal, the baked install path) are
+// not a default export, so a v1-shaped plugin that merely mentions them still
+// fails on OpenCode 2.
+func TestDoctorOpenCode2PhraseIsNotADefaultExport(t *testing.T) {
+	for name, extra := range map[string]string{
+		"line comment":      "// OpenCode 2 wants export default { id, setup } and we do not have it\n",
+		"block comment":     "/*\n * export default { id, setup }\n */\n",
+		"quoted path":       `const hooks = "/Users/x/export default/director/hooks"` + "\n",
+		"trailing phrase":   `const v1 = true // export default later` + "\n",
+		"after other code":  `const x = 1; export default {}` + "\n",
+		"indented in block": "if (false) {\n  export default {}\n}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			in, pluginPath := opencodeFixture(t, "opencode v2.1.0")
+			f, err := os.OpenFile(pluginPath, os.O_APPEND|os.O_WRONLY, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.WriteString("\n" + extra); err != nil {
+				t.Fatal(err)
+			}
+			f.Close()
+
+			rep := diagnose(in)
+			if lv := levelOf(t, rep, "opencode hooks"); lv != levelFail {
+				t.Errorf("a file that only mentions the phrase must still FAIL on OpenCode 2, got %v: %s", lv, opencodeDetail(t, rep))
+			}
+		})
+	}
+
+	// And the forms that ARE a default export at line start.
+	for name, line := range map[string]string{
+		"object":   "export default { id: \"director\", setup: DirectorPlugin }\n",
+		"function": "export default async function setup() {}\n",
+		"crlf":     "export default {}\r\n",
+		"spaced":   "export   default {}\n",
+	} {
+		t.Run("accepts "+name, func(t *testing.T) {
+			in, pluginPath := opencodeFixture(t, "opencode v2.1.0")
+			f, err := os.OpenFile(pluginPath, os.O_APPEND|os.O_WRONLY, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.WriteString("\n" + line); err != nil {
+				t.Fatal(err)
+			}
+			f.Close()
+			if lv := levelOf(t, diagnose(in), "opencode hooks"); lv != levelOK {
+				t.Errorf("a default export at line start must pass on OpenCode 2, got %v", lv)
+			}
+		})
+	}
+}
+
+// TestDoctorOpenCodeVersionUnknownSkipsShapeCheck: the shape check adds failures
+// only on positive evidence. No probe, opencode missing or failing, or output
+// that does not parse all leave the check exactly as it was.
+func TestDoctorOpenCodeVersionUnknownSkipsShapeCheck(t *testing.T) {
+	for name, out := range map[string]string{
+		"opencode missing or failing": "",
+		"unparsable":                  "opencode dev build\n",
+		"no patch component":          "opencode v2.1\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			in, _ := opencodeFixture(t, out)
+			rep := diagnose(in)
+			if !rep.healthy {
+				t.Fatalf("an unknown OpenCode version must not fail doctor, got %+v", rep.checks)
+			}
+			if lv := levelOf(t, rep, "opencode hooks"); lv != levelOK {
+				t.Errorf("opencode check: got %v, want OK", lv)
+			}
+		})
+	}
+	t.Run("no probe wired", func(t *testing.T) {
+		in, _ := opencodeFixture(t, "opencode v2.1.0")
+		in.opencodeVersion = nil
+		if rep := diagnose(in); !rep.healthy {
+			t.Fatalf("a nil probe must skip the check, got %+v", rep.checks)
+		}
+	})
+}
+
+func TestParseOpenCodeVersion(t *testing.T) {
+	cases := []struct {
+		in      string
+		version string
+		major   int
+		ok      bool
+	}{
+		{"opencode v2.1.0\n", "2.1.0", 2, true},
+		{"1.14.7\n", "1.14.7", 1, true},
+		{"1.19.3", "1.19.3", 1, true},
+		{"v10.2.1", "10.2.1", 10, true},
+		{"  opencode v2.1.0  \r\n", "2.1.0", 2, true},
+		{"opencode v2.0.0-beta.3", "2.0.0", 2, true},
+		// Wrapper output ahead of the real line, or a version that is not OpenCode's.
+		{"node v22.0.0\nopencode v1.14.7", "1.14.7", 1, true},
+		{"shim 1.0.0\nopencode v2.1.0", "2.1.0", 2, true},
+		{"node v22.0.0\n1.14.7\n", "1.14.7", 1, true},
+		{"requires runtime >=20.0.0", "", 0, false},
+		{"error: node 18.0.0 is too old, need 20.0.0\n", "", 0, false},
+		{"node v22.0.0", "", 0, false},
+		{"opencode v2.1.0 (build 3.4.5)", "", 0, false},
+		{"", "", 0, false},
+		{"opencode dev", "", 0, false},
+		{"2.1", "", 0, false},
+	}
+	for _, c := range cases {
+		version, major, ok := parseOpenCodeVersion(c.in)
+		if version != c.version || major != c.major || ok != c.ok {
+			t.Errorf("parseOpenCodeVersion(%q) = (%q, %d, %v), want (%q, %d, %v)", c.in, version, major, ok, c.version, c.major, c.ok)
+		}
+	}
+}
+
+// TestRunOpenCodeVersion exercises the real probe against fake `opencode`
+// executables on a scratch PATH: a good one, a failing one, a missing one, and a
+// wedged one that the timeout must cut off.
+func TestRunOpenCodeVersion(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script stand-ins for opencode are Unix-only")
+	}
+	fake := func(t *testing.T, script string) {
+		t.Helper()
+		dir := t.TempDir()
+		if script == "" {
+			// Missing binary: the scratch dir alone, so a real opencode installed in
+			// /bin or /usr/bin cannot answer the probe.
+			t.Setenv("PATH", dir)
+			return
+		}
+		if err := os.WriteFile(filepath.Join(dir, "opencode"), []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		// /bin and /usr/bin carry sleep and friends for the stand-in scripts.
+		t.Setenv("PATH", dir+string(os.PathListSeparator)+"/bin"+string(os.PathListSeparator)+"/usr/bin")
+	}
+
+	t.Run("prints the version", func(t *testing.T) {
+		fake(t, `echo "opencode v2.1.0"`)
+		if got := runOpenCodeVersion(); strings.TrimSpace(got) != "opencode v2.1.0" {
+			t.Errorf("got %q", got)
+		}
+	})
+	t.Run("exits non-zero", func(t *testing.T) {
+		fake(t, `echo "opencode v2.1.0"; exit 3`)
+		if got := runOpenCodeVersion(); got != "" {
+			t.Errorf("a failing probe must read as unavailable, got %q", got)
+		}
+	})
+	t.Run("not on PATH", func(t *testing.T) {
+		fake(t, "")
+		if got := runOpenCodeVersion(); got != "" {
+			t.Errorf("got %q", got)
+		}
+	})
+	t.Run("wedged binary is cut off by the timeout", func(t *testing.T) {
+		fake(t, `exec sleep 30`)
+		orig := opencodeVersionTimeout
+		opencodeVersionTimeout = 200 * time.Millisecond
+		t.Cleanup(func() { opencodeVersionTimeout = orig })
+		start := time.Now()
+		if got := runOpenCodeVersion(); got != "" {
+			t.Errorf("got %q", got)
+		}
+		// Neither a quick failure (the stand-in never ran) nor a hang.
+		if elapsed := time.Since(start); elapsed < 150*time.Millisecond || elapsed > 5*time.Second {
+			t.Errorf("the probe took %v, want it cut off by the 200ms timeout", elapsed)
+		}
+	})
 }
 
 func TestDoctorDirectorBinBrokenFails(t *testing.T) {

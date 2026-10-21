@@ -121,7 +121,7 @@ The render can be stale; a safety-critical "should I escalate?" check cannot run
     └── log/<ulid>-<workstream>.md       ← append-only typed events: decision · open-item · handoff · note (§17)
 ```
 
-In-worktree, per repo: `.director/workstream-id`, `.director/repo-key` (tiny; commit-vs-ignore decided per ownership — see §12).
+In-worktree, per repo: `.director/workstream-id`, `.director/repo-key` (tiny; commit-vs-ignore decided per ownership — see §12; since v1.20.1 identity writes a self-ignoring `.director/.gitignore`, best effort: if `.director/` cannot be written, or is a symlink, nothing is ignored and identity still works).
 
 ### 5.2 The LOG entry (one file each)
 
@@ -238,7 +238,7 @@ Lean hook-first core (§5) + adoption Tier 0+1 (§6 — `director adopt`: identi
 
 - **Abandonment is the headline risk.** Every v1 choice is biased toward "self-sustaining with near-zero manual ceremony." Re-evaluate after one week of real use.
 - Bounded-digest token budget needs tuning (too big → accelerates the compaction it fights).
-- Repo-key persistence (`.director/repo-key`) committed vs gitignored — decide per ownership (owned: commit; shared: gitignore + hub-side mapping).
+- Repo-key persistence (`.director/repo-key`) committed vs gitignored — decide per ownership (owned: commit; shared: gitignore + hub-side mapping). Resolved in v1.20.1: identity writes a self-ignoring `.director/.gitignore` (a comment and `*`) and never touches the repo's own `.gitignore` or `.git`, because a committed `workstream-id` hands every clone and worktree the same id and collapses parallel worktrees into one workstream.
 - Adoption relevance bar for auto-seeding open-items needs a concrete heuristic.
 
 ## 13. Quality scenarios & test plan

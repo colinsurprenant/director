@@ -41,6 +41,9 @@ func resolve(dir string, git gitRunner) (Workstream, error) {
 	if err != nil {
 		return Workstream{}, err
 	}
+	// repoKeyAt has read or persisted .director/repo-key, so .director/ exists
+	// now; ignore it before anything else can fail and leave it exposed.
+	ensureStateIgnored(top)
 	branch, err := currentBranch(dir, git)
 	if err != nil {
 		return Workstream{}, err

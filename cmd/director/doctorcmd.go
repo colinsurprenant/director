@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -9,7 +10,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/colinsurprenant/director/internal/hook"
 	"github.com/colinsurprenant/director/internal/install"
@@ -85,6 +89,7 @@ type doctorInputs struct {
 	binPath                 string                // the install symlink tier (<hooks root>/bin/director)
 	codexHooks              string                // ~/.codex/hooks.json
 	opencodePlugin          string                // ~/.config/opencode/plugin/director.js
+	opencodeVersion         func() string         // stdout of `opencode --version`, "" when unavailable; nil skips the OpenCode 2 shape check
 	copilotHooks            string                // ~/.copilot/hooks/director.json
 	hub                     string                // the coordination hub root
 	hubAllowWrite           string                // the hub form install grants in sandbox.filesystem.allowWrite
@@ -192,6 +197,7 @@ func doctorInputsFromEnv() (doctorInputs, error) {
 		binPath:                 binPath,
 		codexHooks:              codexHooks,
 		opencodePlugin:          opencodePlugin,
+		opencodeVersion:         runOpenCodeVersion,
 		copilotHooks:            copilotHooks,
 		hub:                     hub,
 		hubAllowWrite:           install.HubAllowWriteValue(),
@@ -480,12 +486,19 @@ func copilotDocumentDrift(path string) string {
 // probing the OLD path while binaryResolutionCheck happily verifies the new
 // one. Without this, a settings-pinned machine with a dead PATH/symlink reads
 // all-healthy while OpenCode coordination is silently dead.
+//
+// The plugin's SHAPE is checked first, because nothing downstream matters when
+// the host refuses to load it: see opencodePluginShapeFailure.
 func opencodeHooksCheck(in doctorInputs) (check, bool) {
 	if !install.OpenCodePluginPresent(in.opencodePlugin) {
 		return check{}, false
 	}
+	data, readErr := os.ReadFile(in.opencodePlugin)
+	if msg := opencodePluginShapeFailure(in, data, readErr); msg != "" {
+		return check{"opencode hooks", levelFail, msg}, true
+	}
 	baked := false
-	if data, err := os.ReadFile(in.opencodePlugin); err == nil {
+	if readErr == nil {
 		if lit, err := json.Marshal(in.binPath); err == nil {
 			baked = bytes.Contains(data, lit)
 		}
@@ -506,6 +519,86 @@ func opencodeHooksCheck(in doctorInputs) (check, bool) {
 		return check{"opencode hooks", levelFail, fmt.Sprintf(
 			"plugin present at %s but its binary ladder resolves nothing: no DIRECTOR_BIN in the environment (a settings.json env pin does NOT reach the OpenCode server), `director` not on PATH, and the fallback %s is missing — re-run `director install --opencode`.", in.opencodePlugin, in.binPath)}, true
 	}
+}
+
+// opencodeVersionLine matches a line that is ENTIRELY an OpenCode version:
+// OpenCode 1 prints a bare semver, OpenCode 2 prints "opencode v2.1.0". Anchoring
+// the whole line (not searching for a semver anywhere) keeps wrapper and error
+// output from being misread: `node v22.0.0` ahead of the real line, or "requires
+// runtime >=20.0.0", carry versions that are not OpenCode's. A pre-release or
+// build suffix is allowed so a beta still reads as its major.
+var opencodeVersionLine = regexp.MustCompile(`(?i)^(?:opencode\s+)?v?(\d+)\.(\d+)\.(\d+)(?:[-+][0-9a-z.+-]*)?$`)
+
+// parseOpenCodeVersion extracts the version and its major from `opencode
+// --version` output: the first line that is entirely a version wins. ok is false
+// when no line is, which callers treat as "cannot tell" rather than as a failure.
+func parseOpenCodeVersion(out string) (version string, major int, ok bool) {
+	for _, line := range strings.Split(out, "\n") {
+		m := opencodeVersionLine.FindStringSubmatch(strings.TrimSpace(line))
+		if m == nil {
+			continue
+		}
+		major, err := strconv.Atoi(m[1])
+		if err != nil {
+			return "", 0, false
+		}
+		return m[1] + "." + m[2] + "." + m[3], major, true
+	}
+	return "", 0, false
+}
+
+// opencodeDefaultExport matches a default export at the start of a line, the form
+// OpenCode 2 loads. The bare phrase is not enough: it also appears in comments
+// and string literals, and the baked install path is embedded in the file. The
+// plugin is Director's own managed file and the dual-shape plugin that fixes #89
+// declares `export default {`, so `export { x as default }` is deliberately not
+// accepted: a form Director never writes is not evidence the plugin loads.
+var opencodeDefaultExport = regexp.MustCompile(`(?m)^export\s+default\b`)
+
+// opencodeVersionTimeout bounds the `opencode --version` probe. doctor is off the
+// hot path, but a wedged binary must not hang it; a var so a test can shorten it.
+var opencodeVersionTimeout = 3 * time.Second
+
+// runOpenCodeVersion returns stdout of `opencode --version`, or "" when opencode
+// is not on PATH, the call fails, or it outlives the timeout. WaitDelay makes the
+// timeout hold even when a child keeps the stdout pipe open past the kill.
+func runOpenCodeVersion() string {
+	path, err := exec.LookPath("opencode")
+	if err != nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), opencodeVersionTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, path, "--version")
+	cmd.WaitDelay = time.Second
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		return ""
+	}
+	return stdout.String()
+}
+
+// opencodePluginShapeFailure returns the failure text when the installed OpenCode
+// is major 2 or newer and Director's managed plugin lacks the default-export shape
+// it requires, and "" otherwise. OpenCode 2 refuses a plugin without
+// `export default { id, setup }`, so the v1-shaped plugin never loads there and
+// Director silently does nothing while every other check reads healthy (#89).
+// The check is the managed file's own text (a default export at the start of a
+// line, opencodeDefaultExport), not a version pin on Director, so the dual-shape plugin that fixes this keeps passing it.
+// Any inability to tell (no probe, opencode missing or unparsable, an unreadable
+// plugin) skips the check: it adds failures only on positive evidence.
+func opencodePluginShapeFailure(in doctorInputs, plugin []byte, readErr error) string {
+	if in.opencodeVersion == nil || readErr != nil {
+		return ""
+	}
+	version, major, ok := parseOpenCodeVersion(in.opencodeVersion())
+	if !ok || major < 2 || opencodeDefaultExport.Match(plugin) {
+		return ""
+	}
+	return fmt.Sprintf(
+		"OpenCode %s cannot load Director's plugin at %s: OpenCode 2 requires a default-export plugin (`export default { id, setup }`) and this one is the v1 shape, so Director does not fire in OpenCode sessions (#89). OpenCode 1 still works; upgrade to a Director release with OpenCode 2 support (re-installing this version does not change the shape).",
+		version, in.opencodePlugin)
 }
 
 // hubCheck confirms coordination state can actually be written. A not-yet-created
