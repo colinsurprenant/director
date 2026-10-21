@@ -1,0 +1,23 @@
+{
+  "location": {
+    "directory": "/private/var/folders/0v/vw52k5gd7t9bk0v2lyj5dg780000gn/T/canary-opencode-ws.wdPq0f"
+  },
+  "data": {
+    "sessionID": "ses_ea0d6ca95ffeIBrJSEDN3nJ19O",
+    "assistantMessageID": "msg_15f293655001WbD5O6EnpLyU6r",
+    "finish": "tool-calls",
+    "rawFinish": "tool_calls",
+    "cost": 0,
+    "tokens": {
+      "input": 3537,
+      "output": 37,
+      "reasoning": 1,
+      "cache": {
+        "read": 1920,
+        "write": 0
+      }
+    },
+    "snapshot": "2ece0ad4e83386fb845be5b1b82a1db65c46371c",
+    "files": []
+  }
+}

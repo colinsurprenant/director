@@ -1,0 +1,4 @@
+2026-10-21T15:49:15.820435Z	sessionstart	ok=false	session=ses_ea0d8f9e9ffeiq40vV88WV71HE	injection budget: full payload 52944 units > 10000 — older decisions collapsed to count+pointer, newest 10 kept
+2026-10-21T15:49:15.820705Z	sessionstart	ok=true	session=ses_ea0d8f9e9ffeiq40vV88WV71HE	injected ground truth for github.com-colinsurprenant-director (source=startup, throwaway=false)
+2026-10-21T15:49:19.56329Z	posttooluse	ok=true	session=ses_ea0d8f9e9ffeiq40vV88WV71HE	flush nudge fired at tool #1
+2026-10-21T15:49:25.284307Z	stop	ok=true	session=ses_ea0d8f9e9ffeiq40vV88WV71HE	emit-guard allow

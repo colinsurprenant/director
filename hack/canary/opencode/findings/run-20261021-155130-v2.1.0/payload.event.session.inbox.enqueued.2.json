@@ -1,0 +1,17 @@
+{
+  "location": {
+    "directory": "/private/var/folders/0v/vw52k5gd7t9bk0v2lyj5dg780000gn/T/canary-opencode-ws.wdPq0f"
+  },
+  "data": {
+    "sessionID": "ses_ea0d6ca95ffeIBrJSEDN3nJ19O",
+    "inboxID": "msg_15f29360e001nVVeAiWS5nCOoV",
+    "item": {
+      "type": "user",
+      "payload": {
+        "text": "\"Run the shell command: echo canary-shell-ok. After it completes, reply with one line: DONE plus every distinct string starting with CANARY- that appears anywhere in your context, instructions, or tool output, or NONE if there are none.\"",
+        "files": []
+      },
+      "delivery": "steer"
+    }
+  }
+}

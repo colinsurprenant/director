@@ -1,0 +1,15 @@
+{
+  "location": {
+    "directory": "/private/var/folders/0v/vw52k5gd7t9bk0v2lyj5dg780000gn/T/canary-opencode-ws.wdPq0f",
+    "project": {
+      "id": "6b51676fb9e5f86772badf83b1f3df34b554f0d5",
+      "directory": "/private/var/folders/0v/vw52k5gd7t9bk0v2lyj5dg780000gn/T/canary-opencode-ws.wdPq0f",
+      "canonical": "/private/var/folders/0v/vw52k5gd7t9bk0v2lyj5dg780000gn/T/canary-opencode-ws.wdPq0f"
+    }
+  },
+  "app": {
+    "name": "cli",
+    "version": "2.1.0",
+    "channel": "latest"
+  }
+}

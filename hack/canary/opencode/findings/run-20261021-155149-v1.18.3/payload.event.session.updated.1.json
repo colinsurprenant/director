@@ -1,0 +1,49 @@
+{
+  "sessionID": "ses_ea0d69028ffeLWMEzipWbgbj7Z",
+  "info": {
+    "id": "ses_ea0d69028ffeLWMEzipWbgbj7Z",
+    "slug": "jolly-tiger",
+    "projectID": "ee3073cb36e010524346ce7aefe70351d82f7d1b",
+    "directory": "/private/var/folders/0v/vw52k5gd7t9bk0v2lyj5dg780000gn/T/canary-opencode-ws.PlUmAM",
+    "path": "",
+    "title": "New session - 2026-10-21T15:51:53.559Z",
+    "agent": "build",
+    "model": {
+      "id": "big-pickle",
+      "providerID": "opencode",
+      "variant": "default"
+    },
+    "version": "1.18.3",
+    "cost": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "permission": [
+      {
+        "permission": "question",
+        "pattern": "*",
+        "action": "deny"
+      },
+      {
+        "permission": "plan_enter",
+        "pattern": "*",
+        "action": "deny"
+      },
+      {
+        "permission": "plan_exit",
+        "pattern": "*",
+        "action": "deny"
+      }
+    ],
+    "time": {
+      "created": 1792597913559,
+      "updated": 1792597913577
+    }
+  }
+}

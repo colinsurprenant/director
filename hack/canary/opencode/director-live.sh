@@ -6,11 +6,14 @@
 # by the real `director install --opencode`) against one OpenCode binary, on
 # either major. Per run it answers, from real sessions:
 #   LOADED     OpenCode loaded the plugin (no load failure in its log)
-#   INJECTED   the SessionStart ground truth reached the model
+#   INJECTED   the SessionStart ground truth reached the model (judged on the
+#              acknowledgement line the digest asks the model to open with, which
+#              the prompt does not contain)
 #   ROW        a fleet row for the session appeared in the hub during the turn
 #   STOP       the turn end archived that row (the Stop hook ran to completion)
 #   NUDGE      the PostToolUse nudge (forced with DIRECTOR_FLUSH_NUDGE_EVERY=1)
-#              reached the model
+#              reached the model (judged on the tail of the nudge sentence, which
+#              the prompt does not contain)
 #   DISABLE    with DIRECTOR_DISABLE=1 none of the above happens
 # and, on OpenCode 2 only (one server hosts a plugin instance per project, and
 # every instance sees every project's events):
@@ -39,15 +42,25 @@
 #                       git@github.com:colinsurprenant/director.git); must map to
 #                       DIRECTOR_LIVE_HUB_PROJECT's repo key when that is set
 #
-# Isolation: everything lives in one scratch tree. OpenCode runs under a scratch
-# HOME and XDG_* dirs (no real config, data, state, cache or credentials are read
-# or written), against a scratch clone, with DIRECTOR_HUB pointing at a scratch
-# hub; the real ~/.director and ~/.config/opencode are never touched, and the
-# environment is cleared down to a minimal PATH, so `director` is NOT on PATH and
-# the plugin must resolve the binary through its baked fallback symlink (which
-# also exercises the installer's templating). OpenCode 2 runs always use
-# --standalone: its private server inherits this environment, where the shared
-# background service would run the plugin in someone else's.
+# Isolation, exactly. ISOLATED: OpenCode runs under a scratch HOME and XDG_* dirs
+# with a cleared environment (env -i, a minimal PATH, so `director` is NOT on PATH
+# and the plugin resolves the binary through its baked fallback symlink, which
+# also exercises the installer's templating), no credentials (a free model), a
+# scratch clone, and DIRECTOR_HUB pointing at a scratch hub: the real
+# ~/.config/opencode, ~/.local/*/opencode, ~/.cache/opencode, ~/.director and any
+# shared OpenCode service are neither read nor written (OpenCode 2 runs always use
+# --standalone, so its private server inherits this environment). THE AGENT is
+# confined by a permission ruleset in the scratch opencode.json that allows only
+# the one shell command the test needs (`echo director-live-ok`), reads inside the
+# clone, and nothing else: every other shell command, edit, webfetch, subagent and
+# external directory is denied (and on OpenCode 2 Code Mode, whose JavaScript can
+# fetch over the network, is off). The nudge tells the model to run
+# `director emit`, which is exactly what this stops. NOT ISOLATED: the model
+# provider is reached over the network, and the ruleset is OpenCode's own
+# enforcement, not an OS sandbox. The ruleset format differs per major
+# (`permission` object on 1.x, `permissions` array on 2.x) and was verified on
+# 1.18.3, 1.19.3 and 2.1.0: the allowed command ran and `id`, `cat`, `ls` and
+# external reads were refused.
 #
 # Exit codes: 0 the test ran (verdicts follow, FAIL included), 1 operational error.
 
@@ -204,6 +217,39 @@ env -i "${INSTALL_ENV[@]}" "$DIRECTOR" install --opencode >"$OUT/install.out" 2>
 PLUGIN="$XDG_ROOT/config/opencode/plugin/director.js"
 [ -f "$PLUGIN" ] || die "install wrote no plugin at $PLUGIN"
 
+# The agent's permission sandbox (see the header). The last matching rule wins on
+# both majors, so the catch-all deny comes first.
+if [ "$MAJOR" -ge 2 ]; then
+  cat >"$XDG_ROOT/config/opencode/opencode.json" <<'JSON'
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permissions": [
+    { "action": "*", "resource": "*", "effect": "deny" },
+    { "action": "read", "resource": "*", "effect": "allow" },
+    { "action": "glob", "resource": "*", "effect": "allow" },
+    { "action": "grep", "resource": "*", "effect": "allow" },
+    { "action": "external_directory", "resource": "*", "effect": "deny" },
+    { "action": "shell", "resource": "echo director-live-ok", "effect": "allow" }
+  ]
+}
+JSON
+else
+  cat >"$XDG_ROOT/config/opencode/opencode.json" <<'JSON'
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "*": "deny",
+    "read": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "list": "allow",
+    "bash": { "*": "deny", "echo director-live-ok": "allow" },
+    "external_directory": "deny"
+  }
+}
+JSON
+fi
+
 # ---------------------------------------------------------------------------
 # One OpenCode turn
 # ---------------------------------------------------------------------------
@@ -247,16 +293,20 @@ run_turn() {
 # ---------------------------------------------------------------------------
 # Scenario 1: Director enabled, nudge forced
 # ---------------------------------------------------------------------------
-# A free model sometimes answers without running the command, and a turn with no
-# tool call has nothing for the nudge to ride on: try once more, and report the
-# nudge as inconclusive rather than failed if it happens again.
-for attempt in 1 2; do
+# A free model sometimes answers without running the command, or paraphrases the
+# sentence it was asked to quote, and only text the plugin delivered can satisfy
+# the detectors (they match what the prompt does not contain): so a turn that
+# matched neither is tried again, up to three times. A turn with no tool call at
+# all has nothing for the nudge to ride on and is reported as inconclusive.
+ACK_RE='▸ Director: [^ ]+ · [0-9]+ open-item\(s\)'
+NUDGE_RE='emit it now with .director emit. while context is healthy'
+for attempt in 1 2 3; do
   log "turn 1 (attempt $attempt): Director enabled, DIRECTOR_FLUSH_NUDGE_EVERY=1"
   rm -rf -- "$HUB/fleet" "$HUB/health" "$CLONE/.director"
   run_turn enabled "$CLONE" "DIRECTOR_FLUSH_NUDGE_EVERY=1"
   cp -- "$HUB/health/hook.log" "$OUT/enabled.hook.log" 2>/dev/null || : >"$OUT/enabled.hook.log"
-  if grep -q 'posttooluse' "$OUT/enabled.hook.log"; then break; fi
-  log "the model made no tool call"
+  if grep -q -E -- "$ACK_RE" "$OUT/enabled.out" && grep -q -E -- "$NUDGE_RE" "$OUT/enabled.out"; then break; fi
+  log "the model's output did not show both the injection and the nudge"
 done
 # The second turn clears the hub: keep the archived row as evidence first.
 ARCHIVED=""
@@ -349,13 +399,19 @@ loaded() {
   if load_failed; then return 1; fi
   if [ "$MAJOR" -ge 2 ]; then load_logged; else contains 'sessionstart.*ok=true' "$OUT/enabled.hook.log"; fi
 }
-injected() { contains '▸ Director:' "$OUT/enabled.out"; }
-nudged() { contains 'Director: context is accumulating' "$OUT/enabled.out" && contains 'flush nudge fired' "$OUT/enabled.hook.log"; }
+# The detectors (ACK_RE, NUDGE_RE above) match text the PROMPT does not contain, so
+# a model that merely quotes its instructions cannot pass them: the
+# acknowledgement line the digest asks the model to open with (workstream handle
+# and open-item count), and the tail of the real nudge sentence
+# (internal/hook/posttooluse.go flushNudgeText).
+has() { grep -q -E -- "$1" "$2" 2>/dev/null; }
+injected() { has "$ACK_RE" "$OUT/enabled.out"; }
+nudged() { has "$NUDGE_RE" "$OUT/enabled.out" && contains 'flush nudge fired' "$OUT/enabled.hook.log"; }
 row_seen() { [ "${ROW_SEEN_enabled:-0}" -eq 1 ]; }
 stop_archived() { [ -n "$ARCHIVED" ] && contains '"status":"done"' "$ARCHIVED" && contains 'stop.*ok=true' "$OUT/enabled.hook.log"; }
 disable_quiet() {
-  ! contains '▸ Director:' "$OUT/disabled.out" \
-    && ! contains 'Director: context is accumulating' "$OUT/disabled.out" \
+  ! has "$ACK_RE" "$OUT/disabled.out" \
+    && ! has "$NUDGE_RE" "$OUT/disabled.out" \
     && [ ! -s "$OUT/disabled.hook.log" ] \
     && [ "$DISABLED_LEFT_NOTHING" -eq 1 ] \
     && ! load_failed
@@ -375,10 +431,10 @@ scope_exact() {
   [ "${SCOPE_ROWS:-0}" -eq 2 ] \
     && grep -l "\"dir\":\"[^\"]*/clone\"" "$OUT"/scope-rows/*.json >/dev/null 2>&1 \
     && grep -l "\"dir\":\"[^\"]*/clone2\"" "$OUT"/scope-rows/*.json >/dev/null 2>&1 \
-    && contains '▸ Director:' "$OUT/scopeA.out" && contains '▸ Director:' "$OUT/scopeB.out"
+    && has "$ACK_RE" "$OUT/scopeA.out" && has "$ACK_RE" "$OUT/scopeB.out"
 }
 # The client's DIRECTOR_DISABLE=1 must NOT have silenced the server's plugin.
-client_env_ignored() { contains '▸ Director:' "$OUT/clientenv.out"; }
+client_env_ignored() { has "$ACK_RE" "$OUT/clientenv.out"; }
 turns_ran() { [ "${RC_enabled:-1}" -eq 0 ] && [ "${RC_disabled:-1}" -eq 0 ]; }
 
 V_LOADED="$(verdict loaded)"
@@ -388,7 +444,7 @@ V_STOP="$(verdict stop_archived)"
 if grep -q 'posttooluse' "$OUT/enabled.hook.log"; then
   V_NUDGE="$(verdict nudged)"
 else
-  V_NUDGE="INCONCLUSIVE (the model made no tool call in either attempt)"
+  V_NUDGE="INCONCLUSIVE (the model made no tool call in any attempt)"
 fi
 V_DISABLE="$(verdict disable_quiet)"
 V_TURNS="$(verdict turns_ran)"
@@ -404,6 +460,12 @@ fi
 # /private, so both spellings appear in captured paths) and any user home path
 # for another: the model's own shell commands can print the real one.
 redact() { sed -E "s#(/private)?$ROOT#<scratch>#g; s#/(Users|home)/[^/[:space:]\`'\"]+#<home>#g"; }
+# matched <regex> <file>: ONLY the text the pattern matched, never the line or the
+# file around it. Model output is not copied into findings: models ignore the
+# "two lines" instruction, and the scratch hub holds a copy of a real project's
+# digest (CHARTER, open items) that a model echoing its context would publish.
+matched() { grep -o -E -- "$1" "$2" 2>/dev/null | head -n1 | redact; }
+count() { grep -c -E -- "$1" "$2" 2>/dev/null || true; }
 
 RUN_TS="$(canary_timestamp)"
 FINAL_DIR="${FINDINGS_DIR%/}/director-$(canary_run_stamp)-v$(printf '%s' "$VERSION" | tr -c 'A-Za-z0-9._-' '_')"
@@ -429,29 +491,30 @@ F="$STAGE/findings.md"
   printf '| CLIENT_ENV (OpenCode 2: a client DIRECTOR_DISABLE=1 does not reach a shared server; PASS = confirmed) | %s |\n' "$V_CLIENT_ENV"
   printf '| Both single-project turns exited 0 | %s |\n' "$V_TURNS"
   printf '\n## Evidence\n\n'
-  printf 'Enabled turn, model output:\n\n```\n'
-  head -c 1200 "$OUT/enabled.out" | redact || true
-  printf '\n```\n\nEnabled turn, hub health/hook.log (one line per hook outcome):\n\n```\n'
+  printf 'Enabled turn, text of the model output the detectors matched (nothing else of the output is recorded):\n\n```\n'
+  printf 'INJECTED: %s\n' "$(matched "$ACK_RE" "$OUT/enabled.out")"
+  printf 'NUDGE:    %s\n' "$(matched "$NUDGE_RE" "$OUT/enabled.out")"
+  printf '```\n\nEnabled turn, hub health/hook.log (one line per hook outcome):\n\n```\n'
   cut -c1-200 "$OUT/enabled.hook.log" | redact || true
   printf '```\n\nArchived fleet row:\n\n```\n'
   if [ -n "$ARCHIVED" ]; then redact <"$ARCHIVED"; else printf '(none)\n'; fi
   printf '\n```\n\nOpenCode plugin load lines:\n\n```\n'
   { grep -rh 'loading plugin\|failed to load plugin' "$OC_LOG_DIR" 2>/dev/null | grep -i 'director\|failed' | head -n 3 | redact | cut -c1-260; } || true
-  printf '```\n\nDisabled turn, model output:\n\n```\n'
-  head -c 600 "$OUT/disabled.out" | redact || true
-  printf '\n```\n\nDisabled turn, hub health/hook.log (empty means no hook ran):\n\n```\n'
+  printf '```\n\nDisabled turn: matches of the injection and nudge detectors in the model output: %s and %s.\nHub health/hook.log (empty means no hook ran):\n\n```\n' \
+    "$(count "$ACK_RE" "$OUT/disabled.out")" "$(count "$NUDGE_RE" "$OUT/disabled.out")"
   cut -c1-200 "$OUT/disabled.hook.log" | redact || true
   printf '```\n\n'
   if [ "$MAJOR" -ge 2 ]; then
     printf 'Shared server, two projects, hub health/hook.log (one SessionStart and one Stop per session; sessions are the 4th column):\n\n```\n'
     cut -c1-170 "$OUT/scope.hook.log" | redact || true
-    printf '```\n\nClient DIRECTOR_DISABLE=1 against that server, model output (the injection line present means the client variable did not reach the server):\n\n```\n'
-    head -c 600 "$OUT/clientenv.out" | redact || true
-    printf '\n```\n\n'
+    printf '```\n\nClient DIRECTOR_DISABLE=1 against that server, injection text matched in the model output (a match means the client variable did not reach the server):\n\n```\n'
+    printf 'INJECTED: %s\n' "$(matched "$ACK_RE" "$OUT/clientenv.out")"
+    printf '```\n\n'
   fi
   printf '## How it ran\n\n```\n'
   printf '# plugin: installed by `director install --opencode` into a scratch config dir\n'
   printf '# env: cleared (env -i) to PATH=/usr/bin:/bin:/usr/sbin:/sbin, scratch HOME and XDG_*, DIRECTOR_HUB=<scratch hub>\n'
+  printf '# agent sandbox: scratch opencode.json permission ruleset, only `echo director-live-ok` may run (see the script header)\n'
   printf '# director is not on PATH: the plugin resolves it through its baked fallback symlink\n'
   printf '# opencode = the binary under test (version above)\n'
   if [ "$MAJOR" -ge 2 ]; then printf '# shared-server turns: opencode serve --hostname 127.0.0.1 --port 0, then opencode run --server <url> -m %s in two clones\n' "$MODEL"; fi
@@ -459,12 +522,9 @@ F="$STAGE/findings.md"
   printf '# prompt: %s\n' "$PROMPT"
   printf '```\n'
 } >"$F"
-redact <"$OUT/enabled.hook.log" >"$STAGE/enabled.hook.log"
-redact <"$OUT/enabled.out" >"$STAGE/enabled.out.txt"
-redact <"$OUT/disabled.out" >"$STAGE/disabled.out.txt"
+cut -c1-200 "$OUT/enabled.hook.log" | redact >"$STAGE/enabled.hook.log"
 if [ "$MAJOR" -ge 2 ] && [ -f "$OUT/scope.hook.log" ]; then
-  redact <"$OUT/scope.hook.log" >"$STAGE/scope.hook.log"
-  redact <"$OUT/clientenv.out" >"$STAGE/clientenv.out.txt" 2>/dev/null || true
+  cut -c1-200 "$OUT/scope.hook.log" | redact >"$STAGE/scope.hook.log"
 fi
 mv -- "$STAGE" "$FINAL_DIR"
 

@@ -21,12 +21,12 @@
   },
   "opencode": {
     "version": "2.1.0",
-    "last_run": "2026-10-21T14:16:15Z",
-    "results": "hack/canary/opencode/findings/run-20261021-141559-v2.1.0"
+    "last_run": "2026-10-21T15:51:48Z",
+    "results": "hack/canary/opencode/findings/run-20261021-155130-v2.1.0"
   },
   "opencode-v1": {
     "version": "1.18.3",
-    "last_run": "2026-10-21T14:15:38Z",
-    "results": "hack/canary/opencode/findings/run-20261021-141524-v1.18.3"
+    "last_run": "2026-10-21T15:52:03Z",
+    "results": "hack/canary/opencode/findings/run-20261021-155149-v1.18.3"
   }
 }

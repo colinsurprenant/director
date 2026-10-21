@@ -28,6 +28,8 @@
 #                         a free model that needs no auth)
 #   CANARY_HARNESS_KEY    the last-tested.json key this run records under
 #                         (default: opencode for major 2, opencode-v1 for major 1)
+#   CANARY_PATH           PATH for the --isolate environment
+#                         (default: /usr/bin:/bin:/usr/sbin:/sbin)
 #
 # OpenCode 2 runs always use --standalone: without it `opencode run` talks to the
 # shared background service, which would run the canary plugin inside that
@@ -39,24 +41,34 @@
 #   1  operational error (setup failed, unexpected condition)
 #   2  auth-blocked (no provider configured / provider auth failed)
 #
-# Sandboxing: the probe never WRITES to ~/.config/opencode. The canary plugin
-# is copied into a throwaway workspace's .opencode/plugin/ dir, which both
-# majors load project-locally with no registration. Without --isolate full
-# isolation is not possible: the global config is still read (a globally
-# installed Director plugin — this machine dogfoods Director — also loads, but
-# is inert evidence-wise: the canary tokens exist only in canary.js, so nothing
-# else can produce them), and OpenCode records the canary sessions in its real
-# data dir, since auth lives there too. Only the workspace itself is sandboxed.
-# With --isolate nothing outside the temp dirs is read or written, at the cost
-# of having no credentials (use a free model).
+# Sandboxing: the probe never WRITES to ~/.config/opencode. Without --isolate the
+# canary plugin is copied into a throwaway workspace's .opencode/plugin/ dir,
+# which both majors load project-locally with no registration, and full isolation
+# is not possible: the global config is still read (a globally installed Director
+# plugin — this machine dogfoods Director — also loads, but is inert
+# evidence-wise: the canary tokens are generated per run and exist only in the
+# plugin's environment, so nothing else can produce them), and OpenCode records
+# the canary sessions in its real data dir, since auth lives there too. Only the
+# workspace itself is sandboxed. With --isolate OpenCode runs under `env -i` with
+# a minimal PATH (CANARY_PATH overrides it), a scratch HOME and XDG dirs, so no
+# real config, data, auth or OPENCODE_* variable is read or written, at the cost
+# of having no credentials (use a free model); the plugin is then installed in
+# the scratch config dir instead of the workspace, out of the agent's working
+# directory.
+#
+# Verdicts are keyed on per-run random tokens, so the agent cannot produce one
+# from a file or from memory. If a tool result a turn produced nevertheless
+# CARRIES a token (the recorder checks before it appends its own text, e.g. the
+# agent grepped it out of a file), the verdicts are INVALID, not YES.
 
 set -euo pipefail
+unset CDPATH
 
 # ---------------------------------------------------------------------------
 # Location + shared lib
 # ---------------------------------------------------------------------------
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CANARY_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"        # hack/canary
+SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+CANARY_DIR="$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd)"        # hack/canary
 PLUGIN_SRC="$SCRIPT_DIR/plugin/canary.js"
 FINDINGS_DIR="$SCRIPT_DIR/findings"
 LAST_TESTED="$CANARY_DIR/last-tested.json"
@@ -149,16 +161,29 @@ log "results dir: $RESULTS_DIR"
 # ---------------------------------------------------------------------------
 WORKSPACE="$(mktemp -d "${TMPDIR:-/tmp}/canary-opencode-ws.XXXXXX")"
 ISO_ROOT=""
-OC_ENV=()
+
+# Per-run random tokens, handed to the plugin through its environment only: no
+# file the agent can read carries them. (od + tr, not a tr | head pipe, which
+# would die of SIGPIPE under pipefail.)
+rand_hex() { od -An -N4 -tx1 /dev/urandom | tr -d ' \n' | tr 'a-f' 'A-F'; }
+RUN_TOKEN="CANARY-TOKEN-$(rand_hex)"
+RUN_PTU_TOKEN="CANARY-PTU-$(rand_hex)"
+
+OC_ENV=(env "CANARY_TOKEN=$RUN_TOKEN" "CANARY_PTU_TOKEN=$RUN_PTU_TOKEN")
 if [ "$ISOLATE" -eq 1 ]; then
   ISO_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/canary-opencode-iso.XXXXXX")"
-  mkdir -p "$ISO_ROOT/home" "$ISO_ROOT/config" "$ISO_ROOT/data" "$ISO_ROOT/state" "$ISO_ROOT/cache"
-  OC_ENV=(env
+  mkdir -p "$ISO_ROOT/home" "$ISO_ROOT/config/opencode/plugin" "$ISO_ROOT/data" "$ISO_ROOT/state" "$ISO_ROOT/cache"
+  OC_ENV=(env -i
+    "PATH=${CANARY_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
     "HOME=$ISO_ROOT/home"
     "XDG_CONFIG_HOME=$ISO_ROOT/config"
     "XDG_DATA_HOME=$ISO_ROOT/data"
     "XDG_STATE_HOME=$ISO_ROOT/state"
     "XDG_CACHE_HOME=$ISO_ROOT/cache"
+    "CANARY_RESULTS_DIR=$RESULTS_DIR"
+    "CANARY_TOKEN=$RUN_TOKEN"
+    "CANARY_PTU_TOKEN=$RUN_PTU_TOKEN"
+    "TERM=dumb"
     OPENCODE_DISABLE_CLAUDE_CODE=1
     OPENCODE_DISABLE_AUTOUPDATE=1
     OPENCODE_DISABLE_EXTERNAL_SKILLS=1)
@@ -200,9 +225,14 @@ log "workspace: $WORKSPACE"
   git commit -q -m "canary: initial commit"
 ) || die "failed to initialise temp git repo" 1
 
-mkdir -p "$WORKSPACE/.opencode/plugin"
-cp "$PLUGIN_SRC" "$WORKSPACE/.opencode/plugin/canary.js"
-log "wrote $WORKSPACE/.opencode/plugin/canary.js"
+if [ "$ISOLATE" -eq 1 ]; then
+  PLUGIN_DST="$ISO_ROOT/config/opencode/plugin/canary.js"
+else
+  mkdir -p "$WORKSPACE/.opencode/plugin"
+  PLUGIN_DST="$WORKSPACE/.opencode/plugin/canary.js"
+fi
+cp "$PLUGIN_SRC" "$PLUGIN_DST"
+log "wrote $PLUGIN_DST"
 
 # ---------------------------------------------------------------------------
 # Timeout wrapper (timeout / gtimeout if present, else run bare with a note).
@@ -237,7 +267,7 @@ Would run (turn 1, injection probe), cwd=$WORKSPACE:
 Would run (turn 2, tool-loop probe), cwd=$WORKSPACE:
   ${OC_ENV[*]:-} $OPENCODE_BIN run ${RUN_ARGS[*]:-} "$TURN2_PROMPT"
 
-Canary plugin: $WORKSPACE/.opencode/plugin/canary.js
+Canary plugin: $PLUGIN_DST
 Results dir:   $RESULTS_DIR
 EOF
   rmdir "$RESULTS_DIR" 2>/dev/null || true
@@ -283,21 +313,34 @@ log "turn 2 exit: $T2_RC"
 # ---------------------------------------------------------------------------
 # Analyze
 # ---------------------------------------------------------------------------
-contains() { grep -q "$1" "$2" 2>/dev/null; }
+contains() { grep -q -- "$1" "$2" 2>/dev/null; }
 
-# The sentinel values exist ONLY in the plugin's injected text, never in a
-# prompt, so a match in either turn's output is proof of injection. A failed
-# turn cannot prove absence: report INVALID rather than a false-red NO.
+# The sentinel values are random per run and exist ONLY in the plugin's injected
+# text, never in a prompt or a file, so a match in either turn's output is proof
+# of injection, unless a tool result carried one (the recorder logs that as
+# tool.output.carried-token, checked before it appends its own text): then the
+# agent could have read it somewhere, and the verdict is INVALID. A failed turn
+# cannot prove absence either: INVALID rather than a false-red NO.
+TOOL_LEAKS=0
+if [ -f "$RESULTS_DIR/fired.log" ]; then
+  TOOL_LEAKS="$(grep -c ' tool.output.carried-token$' "$RESULTS_DIR/fired.log" || true)"
+fi
+LEAK_NOTE="INVALID (a tool output carried a token, $TOOL_LEAKS time(s): the agent may have read it from a file; see fired.log)"
+
 TOKEN_INJECTED="NO"
-if contains "CANARY-TOKEN-OC6D33E9" "$RESULTS_DIR/turn1.out.txt" \
-   || contains "CANARY-TOKEN-OC6D33E9" "$RESULTS_DIR/turn2.out.txt"; then
+if [ "$TOOL_LEAKS" -gt 0 ]; then
+  TOKEN_INJECTED="$LEAK_NOTE"
+elif contains "$RUN_TOKEN" "$RESULTS_DIR/turn1.out.txt" \
+   || contains "$RUN_TOKEN" "$RESULTS_DIR/turn2.out.txt"; then
   TOKEN_INJECTED="YES"
 elif [ "$T1_RC" -ne 0 ]; then
   TOKEN_INJECTED="INVALID (turn 1 failed, rc=$T1_RC; see turn1.err)"
 fi
 
 PTU_INJECTED="NO"
-if contains "CANARY-PTU-OC2F8B15" "$RESULTS_DIR/turn2.out.txt"; then
+if [ "$TOOL_LEAKS" -gt 0 ]; then
+  PTU_INJECTED="$LEAK_NOTE"
+elif contains "$RUN_PTU_TOKEN" "$RESULTS_DIR/turn2.out.txt"; then
   PTU_INJECTED="YES"
 elif [ "$T2_RC" -ne 0 ]; then
   PTU_INJECTED="INVALID (turn 2 failed, rc=$T2_RC; see turn2.err)"

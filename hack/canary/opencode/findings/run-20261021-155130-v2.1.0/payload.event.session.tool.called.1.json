@@ -1,0 +1,14 @@
+{
+  "location": {
+    "directory": "/private/var/folders/0v/vw52k5gd7t9bk0v2lyj5dg780000gn/T/canary-opencode-ws.wdPq0f"
+  },
+  "data": {
+    "sessionID": "ses_ea0d6ca95ffeIBrJSEDN3nJ19O",
+    "assistantMessageID": "msg_15f293655001WbD5O6EnpLyU6r",
+    "id": "call-cda2e831-de04-47a1-bd84-ac52597634e5",
+    "input": {
+      "command": "echo canary-shell-ok"
+    },
+    "executed": false
+  }
+}
