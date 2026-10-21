@@ -528,12 +528,16 @@ func TestRunOpenCodeVersion(t *testing.T) {
 	fake := func(t *testing.T, script string) {
 		t.Helper()
 		dir := t.TempDir()
-		if script != "" {
-			if err := os.WriteFile(filepath.Join(dir, "opencode"), []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {
-				t.Fatal(err)
-			}
+		if script == "" {
+			// Missing binary: the scratch dir alone, so a real opencode installed in
+			// /bin or /usr/bin cannot answer the probe.
+			t.Setenv("PATH", dir)
+			return
 		}
-		// /bin and /usr/bin carry sleep and friends but no real opencode.
+		if err := os.WriteFile(filepath.Join(dir, "opencode"), []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		// /bin and /usr/bin carry sleep and friends for the stand-in scripts.
 		t.Setenv("PATH", dir+string(os.PathListSeparator)+"/bin"+string(os.PathListSeparator)+"/usr/bin")
 	}
 
