@@ -69,7 +69,7 @@ unset CDPATH
 
 SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CANARY_DIR="$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd)"
-REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
+REPO_ROOT="$(CDPATH='' cd -- "$CANARY_DIR/../.." && pwd)"
 FINDINGS_DIR="$SCRIPT_DIR/findings"
 
 # shellcheck source=../lib.sh
@@ -129,9 +129,53 @@ if [ "$MAJOR" -ge 2 ]; then RUN_ARGS=(run --standalone -m "$MODEL"); fi
 TMP_BASE="${TMPDIR:-/tmp}"
 TMP_BASE="${TMP_BASE%/}"
 ROOT="$(mktemp -d "$TMP_BASE/director-live.XXXXXX")"
+
+# The processes this script starts in the background: the model turn in flight
+# (TURN_PID, set by run_turn) and the shared server (SERVER_PID). They outlive the
+# script unless it stops them, and the scratch tree must not be removed from under
+# them.
+TURN_PID=""
 SERVER_PID=""
+
+# tree_pids <pid> prints the pid and every process below it, deepest first: the
+# model turn is an opencode client whose private server and tool shells are its
+# children, so signalling the client alone would orphan them.
+tree_pids() {
+  local pid="$1" child
+  for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+    tree_pids "$child"
+  done
+  printf '%s\n' "$pid"
+}
+
+# stop_tree <pid> terminates a background job and its descendants: TERM, a short
+# wait (up to three seconds), then KILL for whatever is left, then reap the job.
+stop_tree() {
+  local pid="${1:-}" pids p waited=0 alive
+  [ -n "$pid" ] || return 0
+  pids="$(tree_pids "$pid")"
+  for p in $pids; do kill -TERM "$p" 2>/dev/null || true; done
+  while [ "$waited" -lt 15 ]; do
+    alive=0
+    for p in $pids; do
+      if kill -0 "$p" 2>/dev/null; then alive=1; fi
+    done
+    [ "$alive" -eq 0 ] && break
+    sleep 0.2
+    waited=$((waited + 1))
+  done
+  for p in $pids; do kill -KILL "$p" 2>/dev/null || true; done
+  wait "$pid" 2>/dev/null || true
+}
+
+CLEANED=0
 cleanup() {
-  if [ -n "$SERVER_PID" ]; then kill "$SERVER_PID" 2>/dev/null || true; fi
+  [ "$CLEANED" -eq 0 ] || return 0
+  CLEANED=1
+  stop_tree "$TURN_PID"
+  TURN_PID=""
+  stop_tree "$SERVER_PID"
+  SERVER_PID=""
   if [ "$KEEP" -eq 1 ]; then
     log "keeping scratch tree: $ROOT"
     return 0
@@ -144,6 +188,10 @@ cleanup() {
   esac
 }
 trap cleanup EXIT
+# A trapped signal is acted on once the current builtin returns (wait is
+# interrupted at once); exiting runs the EXIT trap, which does the stopping.
+trap 'log "interrupted"; exit 130' INT
+trap 'log "terminated"; exit 143' TERM
 
 HOME_DIR="$ROOT/home"
 XDG_ROOT="$ROOT/xdg"
@@ -161,22 +209,24 @@ if [ -n "${DIRECTOR_BIN_SRC:-}" ]; then
 else
   canary_have go || die "go not found: set DIRECTOR_BIN_SRC to a prebuilt director binary"
   log "building director from $REPO_ROOT"
-  ( cd -- "$REPO_ROOT" && go build -o "$DIRECTOR" ./cmd/director ) || die "go build failed"
+  # go stamps version control by running git itself, so it too must not see GIT_*.
+  ( cd -- "$REPO_ROOT" && canary_without_git_env go build -o "$DIRECTOR" ./cmd/director ) || die "go build failed"
 fi
 chmod -- +x "$DIRECTOR"
 
 # Scratch clone: a git repo whose origin maps it to the hub project.
 ORIGIN="${DIRECTOR_LIVE_ORIGIN:-git@github.com:colinsurprenant/director.git}"
 mkdir -p -- "$CLONE"
+# Every scratch git command runs under canary_scratch_git (see lib.sh): an
+# exported GIT_DIR, GIT_WORK_TREE or GIT_CONFIG_* must not send them to a real repo.
 (
-  cd -- "$CLONE"
-  git init -q
-  git config user.email "director-live@example.invalid"
-  git config user.name "Director Live"
-  printf '# Director live test clone\n' >README.md
-  git add README.md
-  git commit -q -m "director-live: initial commit"
-  git remote add origin "$ORIGIN"
+  canary_scratch_git -C "$CLONE" init -q
+  canary_scratch_git -C "$CLONE" config user.email "director-live@example.invalid"
+  canary_scratch_git -C "$CLONE" config user.name "Director Live"
+  printf '# Director live test clone\n' >"$CLONE/README.md"
+  canary_scratch_git -C "$CLONE" add README.md
+  canary_scratch_git -C "$CLONE" commit -q -m "director-live: initial commit"
+  canary_scratch_git -C "$CLONE" remote add origin "$ORIGIN"
 ) || die "failed to initialise the scratch clone"
 
 # Everything the director binary and OpenCode see, with nothing inherited.
@@ -269,21 +319,24 @@ live_row_seen() {
 TURN_ARGS=("${RUN_ARGS[@]}")
 run_turn() {
   local tag="$1" dir="$2"; shift 2
-  local seen=0 waited=0 pid rc=0
+  local seen=0 waited=0 pid rc=0 capped=0
   ( cd -- "$dir" && exec env -i "${SCRATCH_ENV[@]}" "$@" "$OPENCODE_BIN" "${TURN_ARGS[@]}" "$PROMPT" ) \
     </dev/null >"$OUT/$tag.out" 2>"$OUT/$tag.err" &
   pid=$!
+  TURN_PID="$pid"
   while kill -0 "$pid" 2>/dev/null; do
     if live_row_seen; then seen=1; fi
     sleep 0.2
     waited=$((waited + 1))
     if [ "$waited" -gt $((TURN_CAP * 5)) ]; then
-      log "turn $tag exceeded ${TURN_CAP}s; killing"
-      kill "$pid" 2>/dev/null || true
+      log "turn $tag exceeded ${TURN_CAP}s; stopping it"
+      stop_tree "$pid"
+      capped=1
       break
     fi
   done
-  wait "$pid" || rc=$?
+  if [ "$capped" -eq 1 ]; then rc=124; else wait "$pid" || rc=$?; fi
+  TURN_PID=""
   eval "ROW_SEEN_$tag=$seen"
   eval "RC_$tag=$rc"
   # Hooks the server outlives its client for (the detached Stop) need a moment.
@@ -310,7 +363,14 @@ for attempt in 1 2 3; do
 done
 # The second turn clears the hub: keep the archived row as evidence first.
 ARCHIVED=""
-ARCHIVED_SRC="$(find "$HUB/fleet/archive" -type f -name '*--ses_*.json' 2>/dev/null | head -n1 || true)"
+ARCHIVED_SRC=""
+# No archive dir just means nothing was archived (a verdict, not an error); any
+# other failure to read an existing one must stop the run loudly, so the matches
+# are collected whole (no pipe into head, no hidden stderr).
+if [ -d "$HUB/fleet/archive" ]; then
+  ARCHIVED_LIST="$(find "$HUB/fleet/archive" -type f -name '*--ses_*.json')"
+  ARCHIVED_SRC="${ARCHIVED_LIST%%$'\n'*}"
+fi
 if [ -n "$ARCHIVED_SRC" ]; then
   ARCHIVED="$OUT/enabled.row.json"
   cp -- "$ARCHIVED_SRC" "$ARCHIVED"
@@ -341,14 +401,13 @@ if [ "$MAJOR" -ge 2 ]; then
   CLONE2="$ROOT/clone2"
   mkdir -p -- "$CLONE2"
   (
-    cd -- "$CLONE2"
-    git init -q
-    git config user.email "director-live@example.invalid"
-    git config user.name "Director Live"
-    printf '# Director live test clone 2\n' >README.md
-    git add README.md
-    git commit -q -m "director-live: initial commit"
-    git remote add origin "git@github.com:colinsurprenant/director-live-other.git"
+    canary_scratch_git -C "$CLONE2" init -q
+    canary_scratch_git -C "$CLONE2" config user.email "director-live@example.invalid"
+    canary_scratch_git -C "$CLONE2" config user.name "Director Live"
+    printf '# Director live test clone 2\n' >"$CLONE2/README.md"
+    canary_scratch_git -C "$CLONE2" add README.md
+    canary_scratch_git -C "$CLONE2" commit -q -m "director-live: initial commit"
+    canary_scratch_git -C "$CLONE2" remote add origin "git@github.com:colinsurprenant/director-live-other.git"
   ) || die "failed to initialise the second scratch clone"
   ( cd -- "$CLONE2" && env -i "${SCRATCH_ENV[@]}" "$DIRECTOR" adopt >/dev/null ) || die "director adopt (second clone) failed"
   rm -rf -- "$HUB/fleet" "$HUB/health"
@@ -373,13 +432,15 @@ if [ "$MAJOR" -ge 2 ]; then
     run_turn scopeA "$CLONE" "OPENCODE_PASSWORD=$SERVER_PW"
     run_turn scopeB "$CLONE2" "OPENCODE_PASSWORD=$SERVER_PW"
     cp -- "$HUB/health/hook.log" "$OUT/scope.hook.log" 2>/dev/null || : >"$OUT/scope.hook.log"
-    SCOPE_ROWS="$(find "$HUB/fleet/archive" -type f -name '*--ses_*.json' 2>/dev/null | wc -l | tr -d ' ')"
+    SCOPE_ROWS=0
     mkdir -p -- "$OUT/scope-rows"
-    find "$HUB/fleet/archive" -type f -name '*--ses_*.json' -exec cp -- {} "$OUT/scope-rows/" \; 2>/dev/null || true
+    if [ -d "$HUB/fleet/archive" ]; then
+      SCOPE_ROWS="$(find "$HUB/fleet/archive" -type f -name '*--ses_*.json' | wc -l | tr -d ' ')"
+      find "$HUB/fleet/archive" -type f -name '*--ses_*.json' -exec cp -- {} "$OUT/scope-rows/" \;
+    fi
     # A client-side DIRECTOR_DISABLE=1 against the same server.
     run_turn clientenv "$CLONE2" "OPENCODE_PASSWORD=$SERVER_PW" "DIRECTOR_DISABLE=1"
-    kill "$SERVER_PID" 2>/dev/null || true
-    wait "$SERVER_PID" 2>/dev/null || true
+    stop_tree "$SERVER_PID"
     SERVER_PID=""
   fi
 fi

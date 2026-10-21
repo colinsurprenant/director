@@ -214,15 +214,16 @@ trap cleanup EXIT
 
 log "workspace: $WORKSPACE"
 
-# Minimal git repo: some harnesses behave differently outside a repo.
+# Minimal git repo: some harnesses behave differently outside a repo. Under
+# canary_scratch_git, so an exported GIT_DIR (a git hook, say) cannot send these
+# commands to a real repository.
 (
-  cd "$WORKSPACE"
-  git init -q
-  git config user.email "canary@example.invalid"
-  git config user.name "Canary Probe"
-  printf '# Canary workspace\n\nThrowaway repo for the OpenCode live-contract canary.\n' >README.md
-  git add README.md
-  git commit -q -m "canary: initial commit"
+  canary_scratch_git -C "$WORKSPACE" init -q
+  canary_scratch_git -C "$WORKSPACE" config user.email "canary@example.invalid"
+  canary_scratch_git -C "$WORKSPACE" config user.name "Canary Probe"
+  printf '# Canary workspace\n\nThrowaway repo for the OpenCode live-contract canary.\n' >"$WORKSPACE/README.md"
+  canary_scratch_git -C "$WORKSPACE" add README.md
+  canary_scratch_git -C "$WORKSPACE" commit -q -m "canary: initial commit"
 ) || die "failed to initialise temp git repo" 1
 
 if [ "$ISOLATE" -eq 1 ]; then
@@ -402,7 +403,7 @@ canary_findings_header "$FINDINGS_MD" "$HARNESS" "$AGENT_VERSION" "$RUN_TS"
 # ---------------------------------------------------------------------------
 # Record version into last-tested.json (relative results path from repo root)
 # ---------------------------------------------------------------------------
-REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || echo "$CANARY_DIR")"
+REPO_ROOT="$(CDPATH='' cd -- "$CANARY_DIR/../.." && pwd)"
 RESULTS_REL="${RESULTS_DIR#"$REPO_ROOT"/}"
 canary_record_version "$LAST_TESTED" "$HARNESS_KEY" "$AGENT_VERSION" "$RUN_TS" "$RESULTS_REL"
 
