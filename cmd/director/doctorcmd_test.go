@@ -401,6 +401,61 @@ func TestDoctorOpenCode2WithDefaultExportIsOK(t *testing.T) {
 	}
 }
 
+// TestDoctorOpenCode2PhraseIsNotADefaultExport: the words "export default"
+// elsewhere in the file (a comment, a string literal, the baked install path) are
+// not a default export, so a v1-shaped plugin that merely mentions them still
+// fails on OpenCode 2.
+func TestDoctorOpenCode2PhraseIsNotADefaultExport(t *testing.T) {
+	for name, extra := range map[string]string{
+		"line comment":      "// OpenCode 2 wants export default { id, setup } and we do not have it\n",
+		"block comment":     "/*\n * export default { id, setup }\n */\n",
+		"quoted path":       `const hooks = "/Users/x/export default/director/hooks"` + "\n",
+		"trailing phrase":   `const v1 = true // export default later` + "\n",
+		"after other code":  `const x = 1; export default {}` + "\n",
+		"indented in block": "if (false) {\n  export default {}\n}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			in, pluginPath := opencodeFixture(t, "opencode v2.1.0")
+			f, err := os.OpenFile(pluginPath, os.O_APPEND|os.O_WRONLY, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.WriteString("\n" + extra); err != nil {
+				t.Fatal(err)
+			}
+			f.Close()
+
+			rep := diagnose(in)
+			if lv := levelOf(t, rep, "opencode hooks"); lv != levelFail {
+				t.Errorf("a file that only mentions the phrase must still FAIL on OpenCode 2, got %v: %s", lv, opencodeDetail(t, rep))
+			}
+		})
+	}
+
+	// And the forms that ARE a default export at line start.
+	for name, line := range map[string]string{
+		"object":   "export default { id: \"director\", setup: DirectorPlugin }\n",
+		"function": "export default async function setup() {}\n",
+		"crlf":     "export default {}\r\n",
+		"spaced":   "export   default {}\n",
+	} {
+		t.Run("accepts "+name, func(t *testing.T) {
+			in, pluginPath := opencodeFixture(t, "opencode v2.1.0")
+			f, err := os.OpenFile(pluginPath, os.O_APPEND|os.O_WRONLY, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.WriteString("\n" + line); err != nil {
+				t.Fatal(err)
+			}
+			f.Close()
+			if lv := levelOf(t, diagnose(in), "opencode hooks"); lv != levelOK {
+				t.Errorf("a default export at line start must pass on OpenCode 2, got %v", lv)
+			}
+		})
+	}
+}
+
 // TestDoctorOpenCodeVersionUnknownSkipsShapeCheck: the shape check adds failures
 // only on positive evidence. No probe, opencode missing or failing, or output
 // that does not parse all leave the check exactly as it was.
@@ -439,8 +494,18 @@ func TestParseOpenCodeVersion(t *testing.T) {
 	}{
 		{"opencode v2.1.0\n", "2.1.0", 2, true},
 		{"1.14.7\n", "1.14.7", 1, true},
+		{"1.19.3", "1.19.3", 1, true},
 		{"v10.2.1", "10.2.1", 10, true},
+		{"  opencode v2.1.0  \r\n", "2.1.0", 2, true},
 		{"opencode v2.0.0-beta.3", "2.0.0", 2, true},
+		// Wrapper output ahead of the real line, or a version that is not OpenCode's.
+		{"node v22.0.0\nopencode v1.14.7", "1.14.7", 1, true},
+		{"shim 1.0.0\nopencode v2.1.0", "2.1.0", 2, true},
+		{"node v22.0.0\n1.14.7\n", "1.14.7", 1, true},
+		{"requires runtime >=20.0.0", "", 0, false},
+		{"error: node 18.0.0 is too old, need 20.0.0\n", "", 0, false},
+		{"node v22.0.0", "", 0, false},
+		{"opencode v2.1.0 (build 3.4.5)", "", 0, false},
 		{"", "", 0, false},
 		{"opencode dev", "", 0, false},
 		{"2.1", "", 0, false},

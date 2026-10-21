@@ -521,24 +521,39 @@ func opencodeHooksCheck(in doctorInputs) (check, bool) {
 	}
 }
 
-// opencodeSemver finds the first semantic version in `opencode --version`
-// output: OpenCode 1 prints a bare semver, OpenCode 2 prints "opencode v2.1.0".
-var opencodeSemver = regexp.MustCompile(`\d+\.\d+\.\d+`)
+// opencodeVersionLine matches a line that is ENTIRELY an OpenCode version:
+// OpenCode 1 prints a bare semver, OpenCode 2 prints "opencode v2.1.0". Anchoring
+// the whole line (not searching for a semver anywhere) keeps wrapper and error
+// output from being misread: `node v22.0.0` ahead of the real line, or "requires
+// runtime >=20.0.0", carry versions that are not OpenCode's. A pre-release or
+// build suffix is allowed so a beta still reads as its major.
+var opencodeVersionLine = regexp.MustCompile(`(?i)^(?:opencode\s+)?v?(\d+)\.(\d+)\.(\d+)(?:[-+][0-9a-z.+-]*)?$`)
 
 // parseOpenCodeVersion extracts the version and its major from `opencode
-// --version` output. ok is false for anything without a semver, which callers
-// treat as "cannot tell" rather than as a failure.
+// --version` output: the first line that is entirely a version wins. ok is false
+// when no line is, which callers treat as "cannot tell" rather than as a failure.
 func parseOpenCodeVersion(out string) (version string, major int, ok bool) {
-	version = opencodeSemver.FindString(out)
-	if version == "" {
-		return "", 0, false
+	for _, line := range strings.Split(out, "\n") {
+		m := opencodeVersionLine.FindStringSubmatch(strings.TrimSpace(line))
+		if m == nil {
+			continue
+		}
+		major, err := strconv.Atoi(m[1])
+		if err != nil {
+			return "", 0, false
+		}
+		return m[1] + "." + m[2] + "." + m[3], major, true
 	}
-	major, err := strconv.Atoi(version[:strings.IndexByte(version, '.')])
-	if err != nil {
-		return "", 0, false
-	}
-	return version, major, true
+	return "", 0, false
 }
+
+// opencodeDefaultExport matches a default export at the start of a line, the form
+// OpenCode 2 loads. The bare phrase is not enough: it also appears in comments
+// and string literals, and the baked install path is embedded in the file. The
+// plugin is Director's own managed file and the dual-shape plugin that fixes #89
+// declares `export default {`, so `export { x as default }` is deliberately not
+// accepted: a form Director never writes is not evidence the plugin loads.
+var opencodeDefaultExport = regexp.MustCompile(`(?m)^export\s+default\b`)
 
 // opencodeVersionTimeout bounds the `opencode --version` probe. doctor is off the
 // hot path, but a wedged binary must not hang it; a var so a test can shorten it.
@@ -569,8 +584,8 @@ func runOpenCodeVersion() string {
 // it requires, and "" otherwise. OpenCode 2 refuses a plugin without
 // `export default { id, setup }`, so the v1-shaped plugin never loads there and
 // Director silently does nothing while every other check reads healthy (#89).
-// The check is the managed file's own text (a default export), not a version
-// pin on Director, so the dual-shape plugin that fixes this keeps passing it.
+// The check is the managed file's own text (a default export at the start of a
+// line, opencodeDefaultExport), not a version pin on Director, so the dual-shape plugin that fixes this keeps passing it.
 // Any inability to tell (no probe, opencode missing or unparsable, an unreadable
 // plugin) skips the check: it adds failures only on positive evidence.
 func opencodePluginShapeFailure(in doctorInputs, plugin []byte, readErr error) string {
@@ -578,7 +593,7 @@ func opencodePluginShapeFailure(in doctorInputs, plugin []byte, readErr error) s
 		return ""
 	}
 	version, major, ok := parseOpenCodeVersion(in.opencodeVersion())
-	if !ok || major < 2 || bytes.Contains(plugin, []byte("export default")) {
+	if !ok || major < 2 || opencodeDefaultExport.Match(plugin) {
 		return ""
 	}
 	return fmt.Sprintf(
