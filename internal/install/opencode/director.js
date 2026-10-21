@@ -194,40 +194,60 @@ function runOne(bin, event, payload, detached, signal) {
     }
     const timer = setTimeout(kill, hookTimeoutMs)
     const onAbort = kill
-    signal?.addEventListener("abort", onAbort, { once: true })
-    if (signal?.aborted) kill()
-    child.on("error", (err) => {
-      // ENOENT/EACCES mean "try the next candidate" — the bash shims' `command
-      // -v` tier only matches executables, so a missing or non-executable PATH
-      // entry falls through to the symlink there too. Anything else means the
-      // binary exists but failed — degrade, don't retry.
-      const code = err && err.code
-      finish(code === "ENOENT" || code === "EACCES" ? false : true, null)
-    })
-    // A child that dies before reading its stdin surfaces an async EPIPE on the
-    // stream — swallowed by Bun today, fatal under Node. The no-op listener
-    // makes the cardinal rule hold by construction, not by runtime lenience.
-    child.stdin.on("error", () => {})
-    // Decode as UTF-8 with a real StringDecoder so a multi-byte codepoint split
-    // across chunk boundaries can't become U+FFFD in the injected digest.
-    child.stdout.setEncoding("utf8")
-    child.stdout.on("data", (d) => {
-      stdout += d
-    })
-    child.on("close", () => {
-      let control = null
-      const line = stdout.trim()
-      if (line !== "") {
-        try {
-          control = JSON.parse(line)
-        } catch {}
-      }
-      finish(true, control)
-    })
+    // Everything below touches the child, whose shape is the runtime's to
+    // decide, and runOne must never reject (an executor that throws rejects its
+    // promise, and would strand the timer and the abort listener): whatever
+    // throws, the child is ended and the hook degrades. OpenCode 1's callers
+    // share this helper, and this is the only thing that changes for them: a
+    // failure that used to reject (and was swallowed by their own try/catch) now
+    // resolves as "spawned, no control".
     try {
-      child.stdin.write(JSON.stringify(payload))
-      child.stdin.end()
-    } catch {}
+      signal?.addEventListener("abort", onAbort, { once: true })
+      if (signal?.aborted) kill()
+      child.on("error", (err) => {
+        // ENOENT/EACCES mean "try the next candidate" — the bash shims' `command
+        // -v` tier only matches executables, so a missing or non-executable PATH
+        // entry falls through to the symlink there too. Anything else means the
+        // binary exists but failed — degrade, don't retry.
+        const code = err && err.code
+        finish(code === "ENOENT" || code === "EACCES" ? false : true, null)
+      })
+      // spawn hands back a child WITHOUT stdio when it cannot start one at all
+      // (EMFILE/ENFILE, no descriptors left), and its 'error' event follows.
+      // Nothing started, and the failure is not ENOENT/EACCES, so it is reported
+      // like any other "exists but failed": spawned, degrade, no retry against the
+      // next candidate (which would only add pressure on a starved machine).
+      if (!child.stdin || !child.stdout) {
+        finish(true, null)
+        return
+      }
+      // A child that dies before reading its stdin surfaces an async EPIPE on the
+      // stream — swallowed by Bun today, fatal under Node. The no-op listener
+      // makes the cardinal rule hold by construction, not by runtime lenience.
+      child.stdin.on("error", () => {})
+      // Decode as UTF-8 with a real StringDecoder so a multi-byte codepoint split
+      // across chunk boundaries can't become U+FFFD in the injected digest.
+      child.stdout.setEncoding("utf8")
+      child.stdout.on("data", (d) => {
+        stdout += d
+      })
+      child.on("close", () => {
+        let control = null
+        const line = stdout.trim()
+        if (line !== "") {
+          try {
+            control = JSON.parse(line)
+          } catch {}
+        }
+        finish(true, control)
+      })
+      try {
+        child.stdin.write(JSON.stringify(payload))
+        child.stdin.end()
+      } catch {}
+    } catch {
+      kill()
+    }
   })
 }
 
@@ -692,15 +712,25 @@ async function setup(ctx) {
           const source = epoch.regrounding ? "compact" : "startup"
           epoch.regrounding = false
           const fetch = link(call, epoch.ctl.signal)
-          const fetched = runHook("sessionstart", { ...payload("SessionStart", sid), source }, { signal: fetch.signal }).then(
-            (control) => {
+          // (declared apart so the body can compare against it without ever
+          // touching an uninitialized binding when runHook throws synchronously)
+          let fetched
+          fetched = (async () => {
+            let control = null
+            try {
+              control = await runHook("sessionstart", { ...payload("SessionStart", sid), source }, { signal: fetch.signal })
+            } catch {
+              // runHook does not reject, but if anything ever makes it (or the call
+              // itself) throw, that is a failed fetch like any other, not an
+              // unhandled rejection handed to every waiter.
+            } finally {
               fetch.release()
-              if (!fetch.signal.aborted) return additionalContext(control)
-              if (epoch.text === fetched) epoch.text = undefined
-              if (source === "compact" && live(epoch)) epoch.regrounding = true
-              return ""
-            },
-          )
+            }
+            if (!fetch.signal.aborted) return additionalContext(control)
+            if (epoch.text === fetched) epoch.text = undefined
+            if (source === "compact" && live(epoch)) epoch.regrounding = true
+            return ""
+          })()
           epoch.text = fetched
         }
       }
@@ -771,12 +801,15 @@ async function setup(ctx) {
     // or fails (the host drops slow consumers) is re-subscribed with backoff: a
     // permanently dead subscription would silently stop every Stop and compaction
     // re-ground. The host's re-subscription has no replay cursor, so the events of
-    // the gap are LOST (a move, a delete, a compaction): every epoch is ended
-    // before the new subscription starts.
+    // the gap are LOST (a move, a delete, a compaction): every epoch is ended the
+    // moment the stream drops, and again before the new subscription starts (hooks
+    // keep creating epochs during the unobserved gap).
     const consume = async () => {
       let delay = 500
       let resubscribing = false
       while (!abort.signal.aborted) {
+        // Epochs made during the unobserved gap (hooks keep running while the
+        // stream is down) are ended too, before the new subscription starts.
         if (resubscribing) forgetAll()
         try {
           for await (const event of ctx.event.subscribe({ signal: abort.signal })) {
@@ -786,6 +819,10 @@ async function setup(ctx) {
             } catch {}
           }
         } catch {}
+        // The gap begins NOW: from here events are lost, so what was cached before
+        // it is already suspect, and a fetch still in flight must not answer (and
+        // inject) during the backoff.
+        forgetAll()
         await sleep(delay, abort.signal)
         delay = Math.min(delay * 2, 30_000)
         resubscribing = true

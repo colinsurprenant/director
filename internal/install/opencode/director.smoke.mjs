@@ -11,6 +11,7 @@
 // (hack/canary/opencode).
 
 import assert from "node:assert/strict"
+import { EventEmitter, getEventListeners } from "node:events"
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
@@ -101,7 +102,33 @@ assert.notEqual(fastSource, source, "hookTimeoutMs declaration not found: update
 const fastPath = join(dirname(pluginPath), "director.fast.mjs")
 writeFileSync(fastPath, fastSource)
 
+// The stub-spawn copy: the plugin's spawn goes through globalThis.__spawnStub when a
+// case sets one, so a case can hand it a child that real spawn only returns under
+// resource exhaustion.
+const stubSource = source.replace(
+  'import { spawn } from "node:child_process"',
+  'import { spawn as realSpawn } from "node:child_process"\nconst spawn = (...args) => (globalThis.__spawnStub ?? realSpawn)(...args)',
+)
+assert.notEqual(stubSource, source, "the spawn import was not found: update this smoke test with the plugin")
+const stubPath = join(dirname(pluginPath), "director.stubspawn.mjs")
+writeFileSync(stubPath, stubSource)
+
 const load = (path, tag = "") => import(pathToFileURL(path).href + (tag ? "?" + tag : ""))
+
+// recordControllers makes every AbortController created while it is active
+// observable, so a case can count the abort listeners that outlive their call.
+function recordControllers() {
+  const Real = globalThis.AbortController
+  const made = []
+  globalThis.AbortController = class extends Real {
+    constructor() {
+      super()
+      made.push(this)
+    }
+  }
+  return { made, restore: () => (globalThis.AbortController = Real) }
+}
+const abortListeners = (made) => made.reduce((n, ctl) => n + getEventListeners(ctl.signal, "abort").length, 0)
 
 // A controllable event stream: push() feeds the subscriber, and aborting the
 // subscription's signal ends it, as the real one does.
@@ -952,6 +979,143 @@ testSpawn("a setup that fails part-way leaves its earlier hooks inert", async ()
   assert.equal(state.subscribed, 0, "and no stream was ever opened")
   const hooks = await plugin.server({ directory: HERE, client: { session: { get: async () => ({}) } } })
   assert.ok(Object.keys(hooks).length > 0, "the failed instance released the latch")
+})
+
+testSpawn("a SessionStart that would answer inside the reconnect backoff is killed and injects nothing", async () => {
+  nodeOptions("ok")
+  process.env.FAKE_DIRECTOR_DELAY_MS = "250" // well inside the 500 ms backoff
+  try {
+    const before = calls().length
+    const { default: plugin } = await load(pluginPath, "backoff-window")
+    let subscribes = 0
+    let fail = null
+    const { ctx, state } = fakeCtx(
+      { ses_p: top("ses_p") },
+      {
+        event: {
+          subscribe: ({ signal }) => {
+            subscribes++
+            if (subscribes === 1) {
+              return { [Symbol.asyncIterator]: () => ({ next: () => new Promise((_, reject) => { fail = () => reject(new Error("overflow")) }) }) }
+            }
+            return channel(signal).iterable
+          },
+        },
+      },
+    )
+    const cleanup = await plugin.setup(ctx)
+    const event = { sessionID: "ses_p", system: [] }
+    const pending = state.hooks["session.context"](event)
+    await tick(100) // the child is up and sleeping
+    fail() // the stream drops; the session may move in the gap, and nothing will say so
+    assert.equal(await settles(pending, 1000), "released")
+    assert.deepEqual(event.system, [], "a fetch from before the drop must not inject during the backoff")
+    await tick(800)
+    assert.equal(sessionstarts(before, "ses_p"), 0, "the child was killed when the stream dropped")
+    cleanup()
+  } finally {
+    delete process.env.FAKE_DIRECTOR_DELAY_MS
+  }
+})
+
+test("a spawn that returns a child with no stdio degrades without rejecting or retrying, and leaks no listeners", async () => {
+  delete process.env.NODE_OPTIONS
+  delete process.env.DIRECTOR_BIN // two candidates: a retry against the second would show as a second spawn
+  const { default: plugin } = await load(stubPath, "no-stdio")
+  const unhandled = []
+  const onUnhandled = (e) => unhandled.push(e)
+  process.on("unhandledRejection", onUnhandled)
+  let spawns = 0
+  globalThis.__spawnStub = () => {
+    spawns++
+    const child = new EventEmitter()
+    child.stdin = null
+    child.stdout = null
+    child.kill = () => {}
+    queueMicrotask(() => child.emit("error", Object.assign(new Error("spawn EMFILE"), { code: "EMFILE" })))
+    return child
+  }
+  const rec = recordControllers()
+  try {
+    const { ctx, state } = fakeCtx({ ses_top: top("ses_top") })
+    const cleanup = await plugin.setup(ctx)
+    const event = { sessionID: "ses_top", system: [] }
+    await state.hooks["session.context"](event)
+    assert.deepEqual(event.system, [])
+    const result = { content: "out" }
+    await state.hooks["tool.execute.after"]({ sessionID: "ses_top", tool: "shell", status: "completed", result })
+    assert.equal(result.content, "out")
+    assert.equal(spawns, 2, "one spawn per hook: EMFILE is not ENOENT/EACCES, so no second candidate is tried")
+    // OpenCode 1's half, on its own module instance, goes through the same helper.
+    const { default: v1plugin } = await load(stubPath, "no-stdio-v1")
+    const hooks = await v1plugin.server({ directory: HERE, client: { session: { get: async () => ({ data: top("ses_1") }) } } })
+    const output = { parts: [], message: { id: "msg_1" } }
+    await hooks["chat.message"]({ sessionID: "ses_1" }, output)
+    assert.deepEqual(output.parts, [])
+    // Counted BEFORE the unload: ending the epochs fires (and so removes) the
+    // listeners a leak would have left on them. The first controller is the
+    // instance's, which the fake stream legitimately listens on.
+    assert.equal(abortListeners(rec.made.slice(1)), 0, "no abort listener may outlive its call")
+    // A child whose stdio is half there (no setEncoding) throws while being wired, and
+    // no 'error' event follows to clean up after it: the helper must still resolve.
+    globalThis.__spawnStub = () => {
+      spawns++
+      const child = new EventEmitter()
+      child.stdin = { on() {}, write() {}, end() {} }
+      child.stdout = {}
+      child.kill = () => {}
+      return child
+    }
+    state.channel.push({ type: "session.compaction.ended", data: { sessionID: "ses_top" } }) // drops the cached "" so the next request fetches again
+    await tick(50)
+    const wired = { sessionID: "ses_top", system: [] }
+    await state.hooks["session.context"](wired)
+    assert.deepEqual(wired.system, [])
+    assert.equal(abortListeners(rec.made.slice(1)), 0, "a throw while wiring the child must not strand its abort listener either")
+    cleanup()
+  } finally {
+    rec.restore()
+    delete globalThis.__spawnStub
+    process.off("unhandledRejection", onUnhandled)
+  }
+  assert.deepEqual(unhandled, [])
+})
+
+test("a fetch that throws counts as a failed fetch and leaves no abort listener behind", async () => {
+  const { default: plugin } = await load(pluginPath, "throwing-fetch")
+  const unhandled = []
+  const onUnhandled = (e) => unhandled.push(e)
+  process.on("unhandledRejection", onUnhandled)
+  const rec = recordControllers()
+  const realEnv = process.env
+  try {
+    const { ctx, state } = fakeCtx({ ses_top: top("ses_top") })
+    const cleanup = await plugin.setup(ctx)
+    // runHook reads DIRECTOR_BIN first thing; making that throw is a fetch that throws.
+    Object.defineProperty(process, "env", {
+      value: new Proxy(realEnv, {
+        get: (target, key) => {
+          if (key === "DIRECTOR_BIN") throw new Error("env exploded")
+          return Reflect.get(target, key)
+        },
+      }),
+      configurable: true,
+      writable: true,
+    })
+    try {
+      const event = { sessionID: "ses_top", system: [] }
+      await state.hooks["session.context"](event)
+      assert.deepEqual(event.system, [])
+    } finally {
+      Object.defineProperty(process, "env", { value: realEnv, configurable: true, writable: true })
+    }
+    assert.equal(abortListeners(rec.made.slice(1)), 0, "the fetch's link must be released on the throwing path too")
+    cleanup()
+  } finally {
+    rec.restore()
+    process.off("unhandledRejection", onUnhandled)
+  }
+  assert.deepEqual(unhandled, [])
 })
 
 testSpawn("a slow binary is cut off at the deadline without rejecting", async () => {
