@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -183,6 +184,9 @@ func TestRepoKeyAloneWritesIgnore(t *testing.T) {
 // TestResolveUnwritableDirectorDirFailsOpen: a .director/ that cannot take the
 // ignore file never fails identity resolution.
 func TestResolveUnwritableDirectorDirFailsOpen(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod permission bits do not block file creation on Windows")
+	}
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores directory modes")
 	}
