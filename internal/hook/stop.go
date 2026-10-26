@@ -24,7 +24,9 @@ import (
 // when ALL of:
 //   - stop_hook_active == false      (never block on a re-entrant Stop — loop guard)
 //   - the last assistant turn LOOKS like it made a decision/open-item/handoff
-//     (a simple, tunable keyword signal — see decisionLikeSignals)
+//     (a simple, tunable keyword signal — see decisionLikeSignals). On Claude
+//     Code the text judged is the Stop payload's last_assistant_message, because
+//     the transcript lags the turn (see emitGuardVerdict)
 //   - no `director emit`/`resolve` actually ran this turn — detected from the
 //     tool_use blocks (the real tool call), not the prose, so a real emit is seen
 //     even when unnarrated and a prose-only mention isn't mistaken for one
@@ -50,19 +52,20 @@ var decisionLikeSignals = []string{
 	"we'll use",
 	"going with",
 	"the plan is",
-	"next step",
-	"next steps",
-	"follow-up",
-	"follow up",
 	"to do later",
 	"handing off",
-	"handoff",
 	"for the next session",
 	"picking up where",
 	"open question",
 	"still need to",
 	// "we should" was dropped: it matches ordinary discussion far too often (a
 	// false-positive source). Re-add only with real-transcript evidence.
+	//
+	// "handoff", "next step", "next steps", "follow-up" and "follow up" were
+	// dropped on measurement: a 2026-10-26 replay of 2,645 turns with the final
+	// text visible had the old list blocking 6.9% of turns and this list about
+	// 1.2%, because those phrases matched ordinary summaries. Re-add only with
+	// real-transcript evidence.
 }
 
 // wrapUpSignals are the explicit escape hatch: if the last turn says the session
@@ -97,7 +100,12 @@ var emitInvocationSignals = []string{
 // time, exactly when an ad-hoc handoff is likeliest, and a bare `--type handoff`
 // template would teach the implicit shape that retires every older position of
 // the workstream — contradicting the protocol and the ceremony.
-const emitGuardReason = "Director emit-guard: this turn looks like it produced a decision, open loop, or handoff, but no `director emit` ran. Emit the missing event now via `director emit --type <decision|open-item|handoff|note> ...` so the next session inherits it. A handoff needs `--refs <your-resume-point-ulid[,...]>` (from your injected ground truth; omit only if it showed none for your workstream). If you intentionally have nothing to record, say \"wrap up\" to skip this check."
+//
+// The lag sentence is load-bearing too: the transcript is written
+// asynchronously, so a `director emit` this turn can be missing from it at Stop
+// (about 0.2% of emit turns, measured). Without that sentence the block invites
+// a second copy of the event into the append-only log.
+const emitGuardReason = "Director emit-guard: this turn looks like it produced a decision, open loop, or handoff, but no `director emit` shows in the transcript. If you already ran `director emit` or `director resolve` this turn, the transcript can lag behind: do not emit the same event again, just say so and stop. Otherwise emit what is missing via `director emit --type <decision|open-item|handoff|note> ...` so the next session inherits it. A handoff needs `--refs <your-resume-point-ulid[,...]>` (from your injected ground truth; omit only if it showed none for your workstream). If you intentionally have nothing to record, say \"wrap up\" to skip this check."
 
 // handleStop runs the emit-guard and, ONLY when the stop is actually allowed,
 // marks the fleet row done (bookkeeping). Archival is bound to the allow paths
@@ -129,19 +137,29 @@ func handleStop(in Input, out io.Writer, hub string) error {
 	//
 	// Everything else in this handler still runs on Copilot, per-turn fleet
 	// archiving included.
-	if agentFlavor(in) == "copilot" {
+	flavor := agentFlavor(in)
+	if flavor == "copilot" {
 		markFleetDone(in, EventStop, hub)
 		logSuccess(hub, EventStop, in.SessionID, "copilot flavor — emit-guard skipped (it needs a Claude Code transcript)")
 		return nil
 	}
 
-	block, reason := emitGuardVerdict(in.TranscriptPath)
+	// last_assistant_message is trusted as the judged text on the Claude Code
+	// flavor only: that is where it was verified (CC 2.1.310). Codex sends one too,
+	// but its guard stays on the transcript path as before (its rollouts hold no
+	// assistant records, so it is inert), and the OpenCode adapter has no
+	// transcript at all.
+	payloadText := ""
+	if flavor == "claude" {
+		payloadText = string(in.LastAssistantMessage)
+	}
+	block, reason, source := emitGuardVerdict(in.TranscriptPath, payloadText)
 	if !block {
 		// The stop is allowed → the turn is over → archive the row. SessionEnd
 		// reaps whatever survives this (a session that exits without an allowed
 		// Stop), so archiving here is per-turn bookkeeping, not the last word.
 		markFleetDone(in, EventStop, hub)
-		logSuccess(hub, EventStop, in.SessionID, "emit-guard allow")
+		logSuccess(hub, EventStop, in.SessionID, "emit-guard allow (text: "+source+")")
 		return nil
 	}
 
@@ -151,7 +169,7 @@ func handleStop(in Input, out io.Writer, hub string) error {
 	if err := writeStopBlock(out, reason); err != nil {
 		return fmt.Errorf("write stop block: %w", err)
 	}
-	logSuccess(hub, EventStop, in.SessionID, "emit-guard block — nudging missing emit (row kept live)")
+	logSuccess(hub, EventStop, in.SessionID, "emit-guard block (text: "+source+") — nudging missing emit (row kept live)")
 	return nil
 }
 
@@ -181,39 +199,67 @@ func markFleetDone(in Input, event, hub string) {
 	}
 }
 
-// emitGuardVerdict applies the conservative heuristic to the transcript tail and
-// returns whether to block plus the correction reason. It is fail-OPEN: any
-// trouble reading or parsing the transcript yields (false, "") — allow the stop.
-// A guard that can't read confidently must not block (§13 t5 spirit: never trap
-// a session on our own uncertainty).
+// Where the judged text came from, for the hook.log line only (forensics: which
+// path produced a verdict).
+const (
+	textSourcePayload    = "payload"    // the Stop payload's last_assistant_message
+	textSourceTranscript = "transcript" // the transcript's last assistant text in the turn
+	textSourceNone       = "none"       // the guard never reached a verdict on any text
+)
+
+// emitGuardVerdict applies the conservative heuristic and returns whether to
+// block, the correction reason, and where the judged text came from. It is
+// fail-OPEN: any trouble reading or parsing the transcript yields a plain
+// allow, a transcript with no parseable record at all included (a payload trigger
+// cannot arm the guard when no emit could be detected). A guard that can't read
+// confidently must not block (§13 t5 spirit: never trap a session on our own
+// uncertainty).
+//
+// Claude Code writes the transcript asynchronously, so at Stop the turn's final
+// assistant record is usually not on disk yet and the transcript's last text is
+// the PREVIOUS message. When payloadText (the Stop payload's
+// last_assistant_message) is non-empty it is the text checked for decision-like
+// and wrap-up signals instead; empty falls back to the transcript's text. Emit
+// detection always reads the transcript: a `director emit` tool_use lands in it
+// before the turn's final text does, and the payload carries no tool calls. The
+// caller passes payloadText only for the flavor where the field was verified.
 //
 // The Copilot flavor never reaches here at all: handleStop skips the guard
 // before this point rather than relying on the parser to conclude nothing from
 // Copilot's events.jsonl (see the comment on that gate).
-func emitGuardVerdict(transcriptPath string) (block bool, reason string) {
+func emitGuardVerdict(transcriptPath, payloadText string) (block bool, reason, source string) {
 	if strings.TrimSpace(transcriptPath) == "" {
-		return false, ""
+		return false, "", textSourceNone
 	}
-	turn, emitInvoked, err := lastAssistantTurn(transcriptPath)
-	if err != nil || turn == "" {
-		return false, ""
+	turn, emitInvoked, sawRecord, err := lastAssistantTurn(transcriptPath)
+	if err != nil || !sawRecord {
+		// Unreadable, or readable but holding no parseable record: either way emit
+		// detection is impossible, so a payload trigger must not arm the guard.
+		return false, "", textSourceNone
+	}
+	source = textSourceTranscript
+	if strings.TrimSpace(payloadText) != "" {
+		turn, source = payloadText, textSourcePayload
+	}
+	if turn == "" {
+		return false, "", source
 	}
 	lower := strings.ToLower(turn)
 
 	// Escape hatch: an explicit wrap-up stands the guard down unconditionally.
 	if containsAny(lower, wrapUpSignals) {
-		return false, ""
+		return false, "", source
 	}
 	// An actual `director emit`/`resolve` ran in this turn (detected from the
 	// tool_use blocks, not prose) → the model already wrote → allow.
 	if emitInvoked {
-		return false, ""
+		return false, "", source
 	}
 	// Looks like coordination-worthy state was produced but not written → block.
 	if containsAny(lower, decisionLikeSignals) {
-		return true, emitGuardReason
+		return true, emitGuardReason, source
 	}
-	return false, ""
+	return false, "", source
 }
 
 // lastAssistantTurn streams the transcript JSONL and returns, for the CURRENT turn
@@ -228,11 +274,13 @@ func emitGuardVerdict(transcriptPath string) (block bool, reason string) {
 // The CC transcript is one JSON object per line: an assistant record has
 // type=="assistant"; a human message is a type=="user" record whose content is not
 // a tool_result. We tolerate unknown shapes (a line that doesn't parse is skipped)
-// — fail-open.
-func lastAssistantTurn(path string) (text string, emitInvoked bool, err error) {
+// — fail-open. sawRecord is false when no line parsed into a typed record at all
+// (an empty or all-garbage file): the caller cannot then tell whether an emit ran,
+// which is no basis for a verdict.
+func lastAssistantTurn(path string) (text string, emitInvoked, sawRecord bool, err error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return "", false, fmt.Errorf("open transcript: %w", err)
+		return "", false, false, fmt.Errorf("open transcript: %w", err)
 	}
 	defer f.Close()
 
@@ -247,6 +295,9 @@ func lastAssistantTurn(path string) (text string, emitInvoked bool, err error) {
 		var rec transcriptRecord
 		if err := json.Unmarshal(raw, &rec); err != nil {
 			continue // tolerate a non-JSON / partial line
+		}
+		if rec.Type != "" {
+			sawRecord = true
 		}
 		switch rec.Type {
 		case "user":
@@ -266,9 +317,9 @@ func lastAssistantTurn(path string) (text string, emitInvoked bool, err error) {
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return "", false, fmt.Errorf("scan transcript: %w", err)
+		return "", false, false, fmt.Errorf("scan transcript: %w", err)
 	}
-	return text, emitInvoked, nil
+	return text, emitInvoked, sawRecord, nil
 }
 
 // maxTranscriptLineBytes bounds one transcript line for the scanner. A single

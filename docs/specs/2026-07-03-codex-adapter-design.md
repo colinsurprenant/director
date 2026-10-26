@@ -114,6 +114,10 @@ mirroring CC uninstall.
   (payload-first, transcript-fallback), which would light the emit-guard up on
   Codex without a rollout parser. CC's payload lacks the field, so CC behavior
   is untouched.
+  *Note, 2026-10-26:* that last claim no longer holds. Claude Code does send
+  `last_assistant_message` on Stop (verified live on CC 2.1.310), and the guard
+  now judges it on the Claude Code flavor only, because the transcript lags the
+  turn. Codex still takes the transcript path (arming it needs a rollout reader).
 - **Handoff nudge**: inert on Codex (context-fill signal is derived from CC
   usage records in the transcript). Stays inert in v1 of the adapter; a rollout
   usage reader is a later calibration item, not adapter scope.
