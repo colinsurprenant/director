@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/colinsurprenant/director/internal/fleet"
 )
 
 // Hook event names. These are the suffixes the hidden `director _hook <event>`
@@ -42,15 +44,10 @@ const (
 // adopt.maxFileBytes).
 const maxHookStdinBytes = 8 << 20 // 8 MiB
 
-// manualUUID is the fleet-row session id used when no CC session id is available
-// (a manual or odd invocation). It mirrors cmd/director's sessionUUID fallback so
-// the hook and CLI surfaces key a workstream's rows identically.
-const manualUUID = "manual"
-
 // sessionUUID resolves the fleet-row session id for a hook invocation. CC supplies
 // it in the stdin payload (in.SessionID); if that's absent we fall back to the
 // CLAUDE_CODE_SESSION_ID env var — the SAME value the CLI's sessionUUID reads — so
-// a hook and a hand-run CLI verb resolve the same row; only then to manualUUID.
+// a hook and a hand-run CLI verb resolve the same row; only then to fleet.ManualUUID.
 // This is the single uuid-resolution rule shared by every handler.
 func sessionUUID(in Input) string {
 	if in.SessionID != "" {
@@ -59,7 +56,7 @@ func sessionUUID(in Input) string {
 	if v := os.Getenv("CLAUDE_CODE_SESSION_ID"); v != "" {
 		return v
 	}
-	return manualUUID
+	return fleet.ManualUUID
 }
 
 // Input is the typed projection of CC's hook stdin JSON. Only the fields

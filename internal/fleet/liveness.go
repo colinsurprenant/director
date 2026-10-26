@@ -41,12 +41,13 @@ type Liveness struct {
 	Handle     string    `json:"handle,omitempty"`   // newest-heartbeat session
 	Heartbeat  time.Time `json:"heartbeat"`          // newest across the workstream's rows
 	Sessions   int       `json:"sessions"`           // live rows collapsed into this entry
-	// ActiveSessions counts the rows whose OWN heartbeat is younger than the idle
-	// TTL — the concurrent-session signal. > 1 means several sessions are working
-	// this workstream (same checkout) right now, so their handoffs interleave
-	// under one label. Distinct from Sessions, which also counts stale rows an
-	// ungracefully-killed session left behind (neither its Stop nor its SessionEnd
-	// ever archived them).
+	// ActiveSessions counts the session rows whose OWN heartbeat is younger than
+	// the idle TTL — the concurrent-session signal. > 1 means several sessions are
+	// working this workstream (same checkout) right now, so their handoffs
+	// interleave under one label. Distinct from Sessions, which also counts stale
+	// rows an ungracefully-killed session left behind (neither its Stop nor its
+	// SessionEnd ever archived them) and the adopt/manual rows, which are not
+	// sessions (IsSessionUUID).
 	ActiveSessions int `json:"active_sessions"`
 }
 
@@ -121,8 +122,10 @@ func List(hub string, now time.Time, idleAfter, dormantAfter time.Duration, bran
 		}
 		// Freshness of THIS row, not the collapsed newest: the concurrency signal
 		// is "how many sessions are heartbeating right now". A future-dated
-		// heartbeat clamps to fresh, matching derive().
-		if age := now.Sub(hb); age < idleAfter {
+		// heartbeat clamps to fresh, matching derive(). The adopt/manual rows stay
+		// in the grouping and state above (an adopted repo with no session must
+		// still show in status) but are not sessions, so they never count here.
+		if age := now.Sub(hb); age < idleAfter && IsSessionUUID(row.UUID) {
 			a.active++
 		}
 	}
@@ -149,10 +152,12 @@ func List(hub string, now time.Time, idleAfter, dormantAfter time.Duration, bran
 // collapsed entries can't provide: the SessionStart hook uses it to count the
 // OTHER sessions live on this checkout (excluding its own uuid), so the signal
 // stays precise even for a session that never registered a row (a throwaway's
-// uuid simply matches nothing). A row's lifetime bounds what "live" can mean
-// here: Stop archives it at each allowed turn end and SessionEnd reaps it when the
-// session exits, so a fresh row is a session mid-turn or a recent ungraceful death
-// — never a sibling idling at its prompt.
+// uuid simply matches nothing). The adopt and manual rows are skipped: they are
+// not sessions (IsSessionUUID), so a fresh one must not read as a sibling.
+// A row's lifetime bounds what "live" can mean here: Stop archives it at each
+// allowed turn end and SessionEnd reaps it when the session exits, so a fresh
+// row is a session mid-turn or a recent ungraceful death — never a sibling
+// idling at its prompt.
 // Corrupt rows and unparseable heartbeats are skipped with List's leniency — a
 // concurrency hint must never fail a session start. A missing fleet dir yields
 // an empty result, not an error.
@@ -171,7 +176,7 @@ func LiveSessions(hub, workstream string, now time.Time, within time.Duration) (
 			continue
 		}
 		row, err := readRow(filepath.Join(dir, e.Name()))
-		if err != nil || row.Workstream != workstream {
+		if err != nil || row.Workstream != workstream || !IsSessionUUID(row.UUID) {
 			continue
 		}
 		hb, err := time.Parse(heartbeatLayout, row.Heartbeat)

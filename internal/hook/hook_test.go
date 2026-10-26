@@ -2433,6 +2433,12 @@ func TestSessionStartConcurrentSessionNote(t *testing.T) {
 		t.Fatalf("seed note: %v", err)
 	}
 
+	// An adopted repo carries a fresh adopt row (not a session) before any session
+	// starts; it must not read as a sibling for the first session.
+	if err := fleet.Register(hub, fleet.Row{Workstream: ws.ID, UUID: fleet.AdoptUUID, RepoKey: ws.RepoKey, Handle: ws.ID}, time.Now()); err != nil {
+		t.Fatalf("register adopt row: %v", err)
+	}
+
 	// First session: no sibling rows yet — no marker, no note.
 	inA := `{"session_id":"s-one","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
 	var outA bytes.Buffer
@@ -2474,7 +2480,8 @@ func TestSessionStartConcurrentSessionNote(t *testing.T) {
 // session's fresh row still counts as a sibling and the note appears. Deliberate:
 // the throwaway inherits the same working tree, so the interleave warning is
 // true for it too. (Corollary, accepted: a hand-run CLI registration under the
-// manual uuid would be excluded here — the fallback ids collide by design.)
+// manual uuid is not a session, so it never counts as a sibling at all, whoever
+// is starting.)
 func TestSessionStartConcurrentNoteForThrowaway(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "") // pin the manual fallback, whatever ran the suite
 
