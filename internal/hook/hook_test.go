@@ -510,8 +510,9 @@ func TestSessionStartCodexCommandNames(t *testing.T) {
 	if strings.Contains(got, "## Resume point") {
 		t.Errorf("no handoff for this workstream, so no resume point should be injected:\n%s", got)
 	}
-	// Codex alone is told the one dir to grant, resolved for this project.
-	if want := "`codex --add-dir '" + filepath.Join(hub, "projects", ws.RepoKey) + "'`"; !strings.Contains(got, want) {
+	// Codex alone is told the one dir to grant, resolved for this project. Match
+	// the decoded context: a Windows path's backslashes are JSON-escaped in got.
+	if want := "`codex --add-dir '" + filepath.Join(hub, "projects", ws.RepoKey) + "'`"; !strings.Contains(injectedContext(t, got), want) {
 		t.Errorf("codex session should be told its project dir via %s:\n%s", want, got)
 	}
 
