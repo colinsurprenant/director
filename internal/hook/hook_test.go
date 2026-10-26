@@ -510,6 +510,10 @@ func TestSessionStartCodexCommandNames(t *testing.T) {
 	if strings.Contains(got, "## Resume point") {
 		t.Errorf("no handoff for this workstream, so no resume point should be injected:\n%s", got)
 	}
+	// Codex alone is told the one dir to grant, resolved for this project.
+	if want := "`codex --add-dir '" + filepath.Join(hub, "projects", ws.RepoKey) + "'`"; !strings.Contains(got, want) {
+		t.Errorf("codex session should be told its project dir via %s:\n%s", want, got)
+	}
 
 	// The same start with a CC-shaped transcript path keeps the CC names.
 	inCC := `{"session_id":"s-cc","transcript_path":"/Users/u/.claude/projects/x/transcript.jsonl","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
@@ -519,6 +523,9 @@ func TestSessionStartCodexCommandNames(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "/director:complete") {
 		t.Errorf("CC session should keep CC command names:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "--add-dir") {
+		t.Errorf("the add-dir line is Codex-only, but a CC session got it:\n%s", out.String())
 	}
 }
 
@@ -2543,6 +2550,7 @@ func TestProtocolCommandNamesPerFlavor(t *testing.T) {
 		{"copilot", "$director-complete", "$director-handoff", []string{"/director:", "/director-"}},
 		{"opencode", "/director-complete", "/director-handoff", []string{"/director:", "$director-"}},
 	}
+	hub := t.TempDir()
 	for _, c := range cases {
 		got := commandNamesFor(emitProtocol, c.flavor)
 		for _, want := range []string{c.complete, c.handoff} {
@@ -2554,6 +2562,69 @@ func TestProtocolCommandNamesPerFlavor(t *testing.T) {
 			if strings.Contains(got, bad) {
 				t.Errorf("flavor %q protocol carries a wrong-namespace %q:\n%s", c.flavor, bad, got)
 			}
+		}
+
+		// The assembled protocol: Codex alone gains the add-dir line; every other
+		// flavor's text is byte-identical to the namespaced emitProtocol.
+		full := protocolFor(hub, "widget-key", c.flavor)
+		if c.flavor != "codex" {
+			if full != got {
+				t.Errorf("flavor %q protocol must stay byte-identical to the namespaced emitProtocol, got:\n%s", c.flavor, full)
+			}
+			continue
+		}
+		if !strings.HasPrefix(full, got) {
+			t.Errorf("codex protocol must extend the namespaced emitProtocol, not rewrite it:\n%s", full)
+		}
+		note := strings.TrimPrefix(full, got)
+		if want := "`codex --add-dir '" + filepath.Join(hub, "projects", "widget-key") + "'`"; !strings.Contains(note, want) {
+			t.Errorf("codex note should name the project dir via %s, got %q", want, note)
+		}
+		if !strings.Contains(note, "execpolicy allow rule") {
+			t.Errorf("codex note should warn off an execpolicy allow rule, got %q", note)
+		}
+		if strings.Count(note, "\n") != 1 || !strings.HasSuffix(note, "\n") {
+			t.Errorf("codex note must be exactly one line, got %q", note)
+		}
+	}
+
+	// A relative DIRECTOR_HUB must still yield an absolute path: the flag is
+	// typed in a shell whose cwd is not the hook's.
+	rel := protocolFor(filepath.Join("rel", "hub"), "widget-key", "codex")
+	wantAbs, err := filepath.Abs(filepath.Join("rel", "hub", "projects", "widget-key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rel, "`codex --add-dir '"+wantAbs+"'`") {
+		t.Errorf("a relative hub should resolve to the absolute %s in:\n%s", wantAbs, rel)
+	}
+
+	// An apostrophe in the path would end the single quote early: it is escaped
+	// the POSIX way (close, escaped quote, reopen).
+	apos := protocolFor(filepath.Join("/Users", "o'brien", ".director"), "widget-key", "codex")
+	aposAbs, err := filepath.Abs(filepath.Join("/Users", "o'brien", ".director", "projects", "widget-key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantQuoted := "'" + strings.ReplaceAll(aposAbs, "'", `'\''`) + "'"
+	if !strings.Contains(apos, "`codex --add-dir "+wantQuoted+"`") || !strings.Contains(apos, `o'\''brien`) {
+		t.Errorf("an apostrophe in the path should be POSIX-escaped inside the quotes, want %s in:\n%s", wantQuoted, apos)
+	}
+}
+
+// TestShellSingleQuote pins the one quoting rule behind every path Director
+// prints for a human to paste into a shell.
+func TestShellSingleQuote(t *testing.T) {
+	for in, want := range map[string]string{
+		"/Users/u/.director":   `'/Users/u/.director'`,
+		"/Users/a b/.director": `'/Users/a b/.director'`,
+		"/Users/o'brien/hub":   `'/Users/o'\''brien/hub'`,
+		"it's a 'quoted' path": `'it'\''s a '\''quoted'\'' path'`,
+		"$HOME/`x`":            `'$HOME/` + "`x`" + `'`,
+		"":                     `''`,
+	} {
+		if got := ShellSingleQuote(in); got != want {
+			t.Errorf("ShellSingleQuote(%q) = %s, want %s", in, got, want)
 		}
 	}
 }

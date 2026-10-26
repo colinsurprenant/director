@@ -197,6 +197,20 @@ Codex-specific notes:
   and reaps its row like Claude Code). On Codex the liveness row registers at session start and only a
   turn end archives it, so a row still live when the session exits, gracefully or not, ages out by TTL
   instead (OpenCode's case differs slightly; see below).
+- **Grant the project's log dir, or every emit asks for approval.** `director emit` appends to
+  `<hub>/projects/<key>/log.ndjson`, and the hub (`~/.director` by default, or your `DIRECTOR_HUB` value) sits outside Codex's
+  workspace-write sandbox, so each emit stops on an approval prompt. Launch Codex with
+  `codex --add-dir <hub>/projects/<key>`: that grants only the one directory outside the checkout an emit writes.
+  This holds under Codex's default `on-request` approvals.
+  `<key>` is the project's repo key. Run `director render` in the repo and read the key at the end of its
+  first line, or `ls <hub>/projects`; the protocol Codex receives at session
+  start also names the exact path. Two cautions. `-c sandbox_workspace_write.writable_roots=[...]`
+  replaces the writable roots you already configured instead of adding to them, so `--add-dir` is the
+  safer flag. And do not add a `director` allow rule to Codex's execpolicy (`rules/*.rules` under your Codex home: `~/.codex`, or `CODEX_HOME` when set):
+  a matched allow rule runs the command outside the sandbox, so any Codex agent, a read-only
+  reviewer included, could then write the log. `director doctor` warns when Codex's own check
+  (`codex execpolicy check`), run over your user rules dir, says `director emit`, `director resolve` or `director promote`
+  is allowed. It does not see project-level `.codex/rules` or managed policy.
 - Codex exposes no session id to shell commands, so a hand-run `director done` (including
   `$director-complete`'s final step) may report "row not found" there, not a failure: the Stop hook
   archives the session's row at turn end, and everything durable was already written. Targeted
@@ -527,7 +541,7 @@ new handoff carries no `--refs` (a workstream's first).
 
 Start with **`director doctor`**: it checks the whole install chain (binary resolution, Claude Code,
 Codex, OpenCode (including whether an OpenCode 2 host can load the plugin), and Copilot CLI hooks, shims present, the hub's sandbox write grant, hub writable) and names the broken link, exiting non-zero when coordination
-would not fire; it also warns on a `DIRECTOR_DISABLE` left set. The table covers the specifics.
+would not fire; it also warns on a `DIRECTOR_DISABLE` left set, and when Codex's execpolicy, checked over your user rules dir, allows `director emit`, `director resolve` or `director promote`. The table covers the specifics.
 
 | Symptom | Cause & fix |
 |---|---|
