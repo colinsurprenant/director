@@ -20,12 +20,6 @@ import (
 	"github.com/colinsurprenant/director/internal/identity"
 )
 
-// adoptUUID is the stable fleet-row session id for adoption. Adoption is not a
-// live session, so it reuses one fixed id (mirroring the CLI's "manual" fallback)
-// rather than minting a fresh UUID per run — that keeps re-adopting idempotent:
-// it refreshes the same row's heartbeat instead of spawning row churn.
-const adoptUUID = "adopt"
-
 // charterFile is the per-project living source of record (§5.1): goal, non-goals,
 // risk-line. It lives beside the repo's LOG under projects/<repoKey>/.
 const charterFile = "CHARTER.md"
@@ -95,7 +89,7 @@ func Adopt(hub, dir string) (Result, error) {
 
 	row := fleet.Row{
 		Workstream: ws.ID,
-		UUID:       adoptUUID,
+		UUID:       fleet.AdoptUUID,
 		RepoKey:    ws.RepoKey,
 		Handle:     ws.ID,
 	}

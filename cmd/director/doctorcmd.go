@@ -88,6 +88,8 @@ type doctorInputs struct {
 	hooksDir                string                // where the shims live
 	binPath                 string                // the install symlink tier (<hooks root>/bin/director)
 	codexHooks              string                // ~/.codex/hooks.json
+	codexRulesDir           string                // $CODEX_HOME/rules, else ~/.codex/rules: the user execpolicy dir Codex reads ("" skips the allow-rule check)
+	codexExecpolicyCheck    execpolicyRunner      // stdout of `codex execpolicy check`, "" when unavailable; nil skips the allow-rule check
 	opencodePlugin          string                // ~/.config/opencode/plugin/director.js
 	opencodeVersion         func() string         // stdout of `opencode --version`, "" when unavailable; nil skips the OpenCode 2 shape check
 	copilotHooks            string                // ~/.copilot/hooks/director.json
@@ -151,6 +153,10 @@ func doctorInputsFromEnv() (doctorInputs, error) {
 	if err != nil {
 		return doctorInputs{}, err
 	}
+	codexRulesDir, err := install.DefaultCodexRulesDir()
+	if err != nil {
+		return doctorInputs{}, err
+	}
 	opencodePlugin, err := install.DefaultOpenCodePluginPath()
 	if err != nil {
 		return doctorInputs{}, err
@@ -196,6 +202,8 @@ func doctorInputsFromEnv() (doctorInputs, error) {
 		hooksDir:                hooksDir,
 		binPath:                 binPath,
 		codexHooks:              codexHooks,
+		codexRulesDir:           codexRulesDir,
+		codexExecpolicyCheck:    runCodexExecpolicyCheck,
 		opencodePlugin:          opencodePlugin,
 		opencodeVersion:         runOpenCodeVersion,
 		copilotHooks:            copilotHooks,
@@ -230,6 +238,9 @@ func diagnose(in doctorInputs) doctorReport {
 	}
 	if codexPresent {
 		r.checks = append(r.checks, codexCheck)
+		if c, ok := codexRulesCheck(in); ok {
+			r.checks = append(r.checks, c)
+		}
 	}
 	if opencodePresent {
 		r.checks = append(r.checks, opencodeCheck)

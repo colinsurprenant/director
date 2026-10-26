@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/colinsurprenant/director/internal/fleet"
 )
 
 // Hook event names. These are the suffixes the hidden `director _hook <event>`
@@ -42,15 +44,10 @@ const (
 // adopt.maxFileBytes).
 const maxHookStdinBytes = 8 << 20 // 8 MiB
 
-// manualUUID is the fleet-row session id used when no CC session id is available
-// (a manual or odd invocation). It mirrors cmd/director's sessionUUID fallback so
-// the hook and CLI surfaces key a workstream's rows identically.
-const manualUUID = "manual"
-
 // sessionUUID resolves the fleet-row session id for a hook invocation. CC supplies
 // it in the stdin payload (in.SessionID); if that's absent we fall back to the
 // CLAUDE_CODE_SESSION_ID env var — the SAME value the CLI's sessionUUID reads — so
-// a hook and a hand-run CLI verb resolve the same row; only then to manualUUID.
+// a hook and a hand-run CLI verb resolve the same row; only then to fleet.ManualUUID.
 // This is the single uuid-resolution rule shared by every handler.
 func sessionUUID(in Input) string {
 	if in.SessionID != "" {
@@ -59,7 +56,7 @@ func sessionUUID(in Input) string {
 	if v := os.Getenv("CLAUDE_CODE_SESSION_ID"); v != "" {
 		return v
 	}
-	return manualUUID
+	return fleet.ManualUUID
 }
 
 // Input is the typed projection of CC's hook stdin JSON. Only the fields
@@ -80,6 +77,11 @@ type Input struct {
 	// never block when true, or we create an infinite stop→block→stop loop.
 	StopHookActive bool `json:"stop_hook_active"`
 
+	// Stop: the final assistant message of the turn ("" when absent, null, or not
+	// a string). The transcript lags the turn, so the emit-guard judges this text
+	// instead when it is present (see emitGuardVerdict).
+	LastAssistantMessage lenientString `json:"last_assistant_message"`
+
 	// PostToolUse: the name of the tool that just ran. v1 captures only tool_name —
 	// it's all the nudge gate needs. CC also sends tool_input/tool_response, but we
 	// leave them unmodeled (json.Unmarshal ignores unmapped fields) rather than carry
@@ -99,6 +101,22 @@ type Input struct {
 	// detection doesn't depend on heuristics. CC and the Codex shims never set
 	// it; absent means "detect from the payload" (see agentFlavor).
 	Agent string `json:"agent"`
+}
+
+// lenientString decodes a JSON string and reads any other JSON value (null, an
+// object, an array, a number, a bool) as "" with no error. A field Director only
+// optionally uses must not be able to fail the whole payload parse, which would
+// turn the Stop hook into a no-op and skip its fleet bookkeeping: the wire shape
+// is not ours to control (Copilot's Stop payload is not captured).
+type lenientString string
+
+func (s *lenientString) UnmarshalJSON(b []byte) error {
+	var v string
+	if err := json.Unmarshal(b, &v); err != nil {
+		v = ""
+	}
+	*s = lenientString(v)
+	return nil
 }
 
 // parseInput decodes CC's stdin JSON into an Input. A malformed or empty body is

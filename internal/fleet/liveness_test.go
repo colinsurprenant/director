@@ -182,6 +182,40 @@ func TestLivenessCountsActiveSessions(t *testing.T) {
 	}
 }
 
+// TestLivenessActiveSessionsIgnoresNonSessionRows: the adopt and manual rows are
+// fresh but are not sessions, so one real session beside them reads 1 (no
+// concurrency marker) while the rows still feed Sessions and the grouping. A
+// workstream with only an adopt row stays listed and active, with 0 sessions.
+func TestLivenessActiveSessionsIgnoresNonSessionRows(t *testing.T) {
+	hub := t.TempDir()
+	now := fixedTime
+	registerAt(t, hub, "ws-shared", "u-a", "@a", now.Add(-1*time.Minute))
+	registerAt(t, hub, "ws-shared", AdoptUUID, "@adopt", now.Add(-2*time.Minute))
+	registerAt(t, hub, "ws-shared", ManualUUID, "@manual", now.Add(-3*time.Minute))
+	registerAt(t, hub, "ws-adopted", AdoptUUID, "@adopt", now.Add(-1*time.Minute))
+
+	got, _, err := List(hub, now, idleTTL, dormantTTL, alive)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d entries, want 2 (non-session rows still group): %+v", len(got), got)
+	}
+	shared, adopted := got[1], got[0] // sorted: ws-adopted, ws-shared
+	if shared.Workstream != "ws-shared" || adopted.Workstream != "ws-adopted" {
+		t.Fatalf("unexpected order: %+v", got)
+	}
+	if shared.Sessions != 3 {
+		t.Errorf("sessions = %d, want 3 (adopt/manual rows still collapse into the entry)", shared.Sessions)
+	}
+	if shared.ActiveSessions != 1 {
+		t.Errorf("active sessions = %d, want 1 (adopt/manual rows are not sessions)", shared.ActiveSessions)
+	}
+	if adopted.State != StateActive || adopted.ActiveSessions != 0 {
+		t.Errorf("adopt-only workstream = %q/%d active, want active/0", adopted.State, adopted.ActiveSessions)
+	}
+}
+
 // TestLivenessActiveSessionsZeroWhenAllStale: leftovers from ungraceful exits
 // (rows never archived) age out of the concurrency signal even though the rows
 // still exist — Sessions counts them, ActiveSessions must read 0, never 2.
@@ -202,7 +236,8 @@ func TestLivenessActiveSessionsZeroWhenAllStale(t *testing.T) {
 
 // TestLiveSessions locks the per-row view behind the SessionStart concurrency
 // hint: only rows of the asked workstream with a heartbeat younger than the
-// window, uuids sorted, corrupt rows skipped, missing fleet dir empty-not-error.
+// window, uuids sorted, adopt/manual rows skipped, corrupt rows skipped, missing
+// fleet dir empty-not-error.
 func TestLiveSessions(t *testing.T) {
 	hub := t.TempDir()
 	now := fixedTime
@@ -210,6 +245,9 @@ func TestLiveSessions(t *testing.T) {
 	registerAt(t, hub, "ws-shared", "u-a", "@a", now.Add(-2*time.Minute))
 	registerAt(t, hub, "ws-shared", "u-stale", "@stale", now.Add(-20*time.Minute))
 	registerAt(t, hub, "ws-other", "u-o", "@o", now.Add(-1*time.Minute))
+	// Fresh adopt and manual rows are not sessions: they must not appear.
+	registerAt(t, hub, "ws-shared", AdoptUUID, "@adopt", now.Add(-1*time.Minute))
+	registerAt(t, hub, "ws-shared", ManualUUID, "@manual", now.Add(-1*time.Minute))
 	// A corrupt row must be skipped, never fail the listing.
 	if err := os.WriteFile(filepath.Join(hub, "fleet", "corrupt.json"), []byte("{not json"), 0o644); err != nil {
 		t.Fatal(err)
@@ -226,7 +264,7 @@ func TestLiveSessions(t *testing.T) {
 		t.Fatalf("LiveSessions: %v", err)
 	}
 	if len(got) != 2 || got[0] != "u-a" || got[1] != "u-b" {
-		t.Errorf("live sessions = %v, want [u-a u-b] (fresh rows of ws-shared only, sorted)", got)
+		t.Errorf("live sessions = %v, want [u-a u-b] (fresh session rows of ws-shared only, sorted)", got)
 	}
 
 	empty, err := LiveSessions(t.TempDir(), "ws-shared", now, idleTTL)

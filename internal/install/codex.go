@@ -26,6 +26,10 @@ import (
 const (
 	codexHooksPathEnv = "DIRECTOR_CODEX_HOOKS_PATH"
 	codexSkillsDirEnv = "DIRECTOR_CODEX_SKILLS_DIR"
+
+	// codexHomeEnv is Codex's own variable for its config home; only the rules
+	// dir lookup (DefaultCodexRulesDir) reads it.
+	codexHomeEnv = "CODEX_HOME"
 )
 
 // codexEntries is the managed set for Codex. Unlike the CC set there is no
@@ -51,6 +55,29 @@ func DefaultCodexHooksPath() (string, error) {
 		return "", fmt.Errorf("install: resolve home dir: %w", err)
 	}
 	return filepath.Join(home, ".codex", "hooks.json"), nil
+}
+
+// DefaultCodexRulesDir resolves the user-layer execpolicy directory Codex reads
+// its *.rules files from: $CODEX_HOME/rules, else ~/.codex/rules. This is Codex's
+// own resolution, not Director's install override (DIRECTOR_CODEX_HOOKS_PATH only
+// moves where Director writes hooks.json, which says nothing about where Codex
+// looks). In the Codex source (codex-rs): find_codex_home (core/src/config/mod.rs,
+// delegating to the codex_utils_home_dir crate) returns CODEX_HOME when set, else
+// ~/.codex; load_exec_policy (core/src/exec_policy.rs) joins each config layer's
+// folder with its rules dir name ("rules") and loads that dir's *.rules files, the
+// user layer's folder being that home (default_policy_path does the same join for
+// default.rules). This returns only that user-layer dir: Codex also loads
+// project-layer .codex/rules dirs, which doctor does not check. An empty
+// CODEX_HOME counts as unset.
+func DefaultCodexRulesDir() (string, error) {
+	if h := strings.TrimSpace(os.Getenv(codexHomeEnv)); h != "" {
+		return filepath.Join(h, "rules"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("install: resolve home dir: %w", err)
+	}
+	return filepath.Join(home, ".codex", "rules"), nil
 }
 
 // DefaultCodexSkillsDir resolves the user-global agent-skills directory Codex

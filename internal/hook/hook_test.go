@@ -510,6 +510,11 @@ func TestSessionStartCodexCommandNames(t *testing.T) {
 	if strings.Contains(got, "## Resume point") {
 		t.Errorf("no handoff for this workstream, so no resume point should be injected:\n%s", got)
 	}
+	// Codex alone is told the one dir to grant, resolved for this project. Match
+	// the decoded context: a Windows path's backslashes are JSON-escaped in got.
+	if want := "`codex --add-dir '" + filepath.Join(hub, "projects", ws.RepoKey) + "'`"; !strings.Contains(injectedContext(t, got), want) {
+		t.Errorf("codex session should be told its project dir via %s:\n%s", want, got)
+	}
 
 	// The same start with a CC-shaped transcript path keeps the CC names.
 	inCC := `{"session_id":"s-cc","transcript_path":"/Users/u/.claude/projects/x/transcript.jsonl","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
@@ -519,6 +524,9 @@ func TestSessionStartCodexCommandNames(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "/director:complete") {
 		t.Errorf("CC session should keep CC command names:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "--add-dir") {
+		t.Errorf("the add-dir line is Codex-only, but a CC session got it:\n%s", out.String())
 	}
 }
 
@@ -757,6 +765,11 @@ func TestEmitGuardBlocksDecisionWithoutEmit(t *testing.T) {
 	if !strings.Contains(got, "--refs") {
 		t.Errorf("block reason should carry the handoff's --refs contract, got %q", got)
 	}
+	// The transcript lags the turn, so a block can land on a turn that DID emit;
+	// the reason must say not to emit that event a second time.
+	if !strings.Contains(got, "do not emit the same event again") {
+		t.Errorf("block reason should warn against a duplicate emit when the transcript lags, got %q", got)
+	}
 }
 
 // TestEmitGuardAllowsWhenEmitted verifies the guard stands down when the turn
@@ -941,6 +954,291 @@ func TestEmitGuardMissingTranscriptAllows(t *testing.T) {
 	}
 	if out.Len() != 0 {
 		t.Fatalf("expected allow on missing transcript, output %q", out.String())
+	}
+}
+
+// stopInputWithMessage is stopInput plus a Stop payload last_assistant_message;
+// lastMsgJSON is the raw JSON value (a quoted string, or null), so a test can
+// send either.
+func stopInputWithMessage(cwd, transcript, lastMsgJSON string) string {
+	return `{"session_id":"s-real","cwd":` + jsonString(cwd) +
+		`,"transcript_path":` + jsonString(transcript) +
+		`,"hook_event_name":"Stop","stop_hook_active":false` +
+		`,"last_assistant_message":` + lastMsgJSON + `}`
+}
+
+// runStop dispatches one Stop payload and returns its stdout.
+func runStop(t *testing.T, hub, payload string) string {
+	t.Helper()
+	var out bytes.Buffer
+	if code := Dispatch(EventStop, strings.NewReader(payload), &out, hub); code != 0 {
+		t.Fatalf("stop exit code = %d, want 0", code)
+	}
+	return out.String()
+}
+
+// TestEmitGuardJudgesPayloadOverStaleTranscript: CC writes the transcript
+// asynchronously, so at Stop its last text is the PREVIOUS message. The payload's
+// last_assistant_message is the text judged on the Claude Code flavor, in both
+// directions: a trigger in the payload blocks even when the stale transcript text
+// is plain, and a plain payload allows even when the stale transcript text would
+// have blocked. hook.log names the source, after the byte-stable prefixes.
+func TestEmitGuardJudgesPayloadOverStaleTranscript(t *testing.T) {
+	repo := gitRepo(t, "widget", "main")
+
+	t.Run("trigger in payload blocks", func(t *testing.T) {
+		hub := t.TempDir()
+		transcript := writeTranscript(t, userLine("make the call"), assistantLine("Reading the files now."))
+		out := runStop(t, hub, stopInputWithMessage(repo, transcript, jsonString("I've decided to use NDJSON for the log.")))
+		if !strings.Contains(out, `"decision":"block"`) {
+			t.Fatalf("a trigger in the payload should block despite a plain transcript tail, got %q", out)
+		}
+		if !strings.Contains(readHealth(t, hub), "emit-guard block (text: payload)") {
+			t.Errorf("hook.log should record the payload as the text source:\n%s", readHealth(t, hub))
+		}
+	})
+
+	t.Run("plain payload allows", func(t *testing.T) {
+		hub := t.TempDir()
+		transcript := writeTranscript(t, userLine("make the call"), assistantLine("I've decided to use NDJSON for the log."))
+		out := runStop(t, hub, stopInputWithMessage(repo, transcript, jsonString("Done, the tests pass.")))
+		if out != "" {
+			t.Fatalf("a plain payload should allow even when the stale transcript text would block, got %q", out)
+		}
+		if !strings.Contains(readHealth(t, hub), "emit-guard allow (text: payload)") {
+			t.Errorf("hook.log should record the payload as the text source:\n%s", readHealth(t, hub))
+		}
+	})
+
+	t.Run("trigger in payload with an emit in the transcript allows", func(t *testing.T) {
+		hub := t.TempDir()
+		transcript := writeTranscript(t,
+			userLine("make the call"),
+			assistantToolUseLine("Recording it.", `director emit --type decision "use ndjson"`))
+		out := runStop(t, hub, stopInputWithMessage(repo, transcript, jsonString("I've decided to use NDJSON for the log.")))
+		if out != "" {
+			t.Fatalf("an emit in the transcript should still suppress the nudge, got %q", out)
+		}
+	})
+
+	t.Run("wrap-up in payload stands the guard down", func(t *testing.T) {
+		hub := t.TempDir()
+		transcript := writeTranscript(t, userLine("make the call"), assistantLine("Reading the files now."))
+		out := runStop(t, hub, stopInputWithMessage(repo, transcript, jsonString("I've decided on NDJSON. Wrapping up, nothing to emit.")))
+		if out != "" {
+			t.Fatalf("the wrap-up escape must be read from the payload too, got %q", out)
+		}
+	})
+}
+
+// TestEmitGuardEmptyPayloadFallsBackToTranscript: an absent, empty or null
+// last_assistant_message leaves the guard on the transcript's text, as before
+// the field was read.
+func TestEmitGuardEmptyPayloadFallsBackToTranscript(t *testing.T) {
+	repo := gitRepo(t, "widget", "main")
+	transcript := writeTranscript(t, assistantLine("I've decided to use NDJSON for the log."))
+
+	for name, payload := range map[string]string{
+		"absent": stopInput(repo, transcript, false),
+		"empty":  stopInputWithMessage(repo, transcript, `""`),
+		"null":   stopInputWithMessage(repo, transcript, `null`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			hub := t.TempDir()
+			out := runStop(t, hub, payload)
+			if !strings.Contains(out, `"decision":"block"`) {
+				t.Fatalf("an empty payload should fall back to the transcript text and block, got %q", out)
+			}
+			if !strings.Contains(readHealth(t, hub), "emit-guard block (text: transcript)") {
+				t.Errorf("hook.log should record the transcript as the text source:\n%s", readHealth(t, hub))
+			}
+		})
+	}
+}
+
+// TestEmitGuardPayloadIgnoredOutsideClaudeCode: the payload text is trusted on
+// the Claude Code flavor only. A Codex rollout path keeps the transcript
+// behavior (a rollout holds no assistant records, so the guard is inert), and
+// Copilot never reaches the guard at all, trigger payload or not.
+func TestEmitGuardPayloadIgnoredOutsideClaudeCode(t *testing.T) {
+	repo := gitRepo(t, "widget", "main")
+	trigger := jsonString("I've decided to use NDJSON for the log.")
+
+	t.Run("codex rollout path", func(t *testing.T) {
+		hub := t.TempDir()
+		rollout := filepath.Join(t.TempDir(), ".codex", "sessions", "rollout-abc.jsonl")
+		if err := os.MkdirAll(filepath.Dir(rollout), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(rollout, []byte(`{"type":"session_meta","payload":{"id":"abc"}}`+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		out := runStop(t, hub, stopInputWithMessage(repo, rollout, trigger))
+		if out != "" {
+			t.Fatalf("the codex guard must stay inert (payload ignored), got %q", out)
+		}
+		if !strings.Contains(readHealth(t, hub), "emit-guard allow (text: transcript)") {
+			t.Errorf("a codex stop should be judged on the transcript path:\n%s", readHealth(t, hub))
+		}
+	})
+
+	t.Run("copilot", func(t *testing.T) {
+		t.Setenv(hookAgentEnv, "copilot")
+		hub := t.TempDir()
+		transcript := writeTranscript(t, userLine("go"))
+		out := runStop(t, hub, stopInputWithMessage(repo, transcript, trigger))
+		if out != "" {
+			t.Fatalf("copilot must skip the guard, payload or not, got %q", out)
+		}
+		if !strings.Contains(readHealth(t, hub), "emit-guard skipped") {
+			t.Errorf("the copilot skip should be visible in hook.log:\n%s", readHealth(t, hub))
+		}
+	})
+}
+
+// TestEmitGuardEmptyTranscriptPathAllowsDespitePayload: the empty-path allow
+// comes first, so a payload with a trigger cannot arm the guard when there is no
+// transcript to detect an emit from.
+func TestEmitGuardEmptyTranscriptPathAllowsDespitePayload(t *testing.T) {
+	hub := t.TempDir()
+	repo := gitRepo(t, "widget", "main")
+	out := runStop(t, hub, stopInputWithMessage(repo, "", jsonString("I've decided to use NDJSON for the log.")))
+	if out != "" {
+		t.Fatalf("an empty transcript path must allow, got %q", out)
+	}
+	if !strings.Contains(readHealth(t, hub), "emit-guard allow (text: none)") {
+		t.Errorf("hook.log should show no text was judged:\n%s", readHealth(t, hub))
+	}
+}
+
+// TestStopPayloadWithNonStringLastMessageStillParses: last_assistant_message is
+// optional input on a boundary Director does not control, so a value that is not
+// a string (an object, array, number, bool) must read as absent instead of
+// failing the whole parse. A failed parse would make the Stop hook a no-op and
+// leave the session's fleet row live forever.
+func TestStopPayloadWithNonStringLastMessageStillParses(t *testing.T) {
+	repo := gitRepo(t, "widget", "main")
+	ws := mustResolve(t, repo)
+
+	for name, val := range map[string]string{
+		"object": `{"text":"I've decided to use NDJSON for the log."}`,
+		"array":  `["I've decided to use NDJSON for the log."]`,
+		"number": `42`,
+		"bool":   `true`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			hub := t.TempDir()
+			ssIn := `{"session_id":"s-real","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
+			if code := Dispatch(EventSessionStart, strings.NewReader(ssIn), &bytes.Buffer{}, hub); code != 0 {
+				t.Fatalf("setup session start exit = %d", code)
+			}
+			if !fleetRowExists(t, hub, ws.ID) {
+				t.Fatal("fixture: expected a live fleet row before the stop")
+			}
+
+			transcript := writeTranscript(t, userLine("go"), assistantLine("Here is the file you asked for."))
+			out := runStop(t, hub, stopInputWithMessage(repo, transcript, val))
+			if out != "" {
+				t.Fatalf("a non-string last_assistant_message reads as absent, so the plain transcript text allows; got %q", out)
+			}
+			if fleetRowExists(t, hub, ws.ID) {
+				t.Error("the Stop must still run: the allowed turn end archives the row")
+			}
+			if !strings.Contains(readHealth(t, hub), "emit-guard allow (text: transcript)") {
+				t.Errorf("hook.log should show the guard ran on the transcript text:\n%s", readHealth(t, hub))
+			}
+		})
+	}
+}
+
+// TestParseInputLastAssistantMessage pins the lenient field decode directly:
+// strings are kept verbatim, everything else is "" with no error.
+func TestParseInputLastAssistantMessage(t *testing.T) {
+	for name, tc := range map[string]struct{ body, want string }{
+		"string": {`{"last_assistant_message":"done"}`, "done"},
+		"absent": {`{}`, ""},
+		"null":   {`{"last_assistant_message":null}`, ""},
+		"object": {`{"last_assistant_message":{"a":1}}`, ""},
+		"array":  {`{"last_assistant_message":["a"]}`, ""},
+		"number": {`{"last_assistant_message":7}`, ""},
+	} {
+		in, err := parseInput(strings.NewReader(tc.body))
+		if err != nil {
+			t.Errorf("%s: parseInput failed: %v", name, err)
+			continue
+		}
+		if string(in.LastAssistantMessage) != tc.want {
+			t.Errorf("%s: LastAssistantMessage = %q, want %q", name, in.LastAssistantMessage, tc.want)
+		}
+	}
+}
+
+// TestEmitGuardUnparseableTranscriptAllowsDespitePayload: a transcript that
+// exists but yields no parseable record (empty, or all malformed lines) gives no
+// way to tell whether an emit ran, so a trigger in the payload must not block.
+// The unreadable-transcript case already fails open; this is its readable twin.
+func TestEmitGuardUnparseableTranscriptAllowsDespitePayload(t *testing.T) {
+	repo := gitRepo(t, "widget", "main")
+	trigger := jsonString("I've decided to use NDJSON for the log.")
+
+	for name, lines := range map[string][]string{
+		"all malformed": {"not json at all", `{"type":"assistant","message":`},
+		"empty":         {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			hub := t.TempDir()
+			transcript := writeTranscript(t, lines...)
+			out := runStop(t, hub, stopInputWithMessage(repo, transcript, trigger))
+			if out != "" {
+				t.Fatalf("a transcript with no parseable record must fail open, got %q", out)
+			}
+			if !strings.Contains(readHealth(t, hub), "emit-guard allow (text: none)") {
+				t.Errorf("hook.log should show no text was judged:\n%s", readHealth(t, hub))
+			}
+		})
+	}
+}
+
+// TestDecisionLikeSignalsList locks the keyword list's membership: the phrases
+// dropped after the 2026-10-26 replay no longer trigger (they matched ordinary
+// summaries), every kept phrase still does. Run through emitGuardVerdict with
+// payload text over a transcript that carries no assistant text, the live shape
+// of the stale-transcript case.
+func TestDecisionLikeSignalsList(t *testing.T) {
+	transcript := writeTranscript(t, userLine("go"))
+
+	dropped := []string{
+		"Here is the handoff document.",
+		"The next step is to run the tests.",
+		"Next steps: update the docs.",
+		"I filed a follow-up for the flaky test.",
+		"We can follow up on that later.",
+	}
+	for _, text := range dropped {
+		if block, _, src := emitGuardVerdict(transcript, text); block || src != textSourcePayload {
+			t.Errorf("dropped keyword still triggers (block=%v, source=%s): %q", block, src, text)
+		}
+	}
+
+	kept := []string{
+		"I've decided to use NDJSON.",
+		"I have decided to use NDJSON.",
+		"Decision: use NDJSON.",
+		"Let's go with NDJSON.",
+		"We'll use NDJSON.",
+		"Going with NDJSON.",
+		"The plan is to ship it.",
+		"That is a to do later.",
+		"Handing off to the reviewer.",
+		"Left for the next session.",
+		"Picking up where we left off.",
+		"One open question remains.",
+		"We still need to wire it.",
+	}
+	for _, text := range kept {
+		if block, _, _ := emitGuardVerdict(transcript, text); !block {
+			t.Errorf("kept keyword no longer triggers: %q", text)
+		}
 	}
 }
 
@@ -2253,6 +2551,7 @@ func TestProtocolCommandNamesPerFlavor(t *testing.T) {
 		{"copilot", "$director-complete", "$director-handoff", []string{"/director:", "/director-"}},
 		{"opencode", "/director-complete", "/director-handoff", []string{"/director:", "$director-"}},
 	}
+	hub := t.TempDir()
 	for _, c := range cases {
 		got := commandNamesFor(emitProtocol, c.flavor)
 		for _, want := range []string{c.complete, c.handoff} {
@@ -2264,6 +2563,69 @@ func TestProtocolCommandNamesPerFlavor(t *testing.T) {
 			if strings.Contains(got, bad) {
 				t.Errorf("flavor %q protocol carries a wrong-namespace %q:\n%s", c.flavor, bad, got)
 			}
+		}
+
+		// The assembled protocol: Codex alone gains the add-dir line; every other
+		// flavor's text is byte-identical to the namespaced emitProtocol.
+		full := protocolFor(hub, "widget-key", c.flavor)
+		if c.flavor != "codex" {
+			if full != got {
+				t.Errorf("flavor %q protocol must stay byte-identical to the namespaced emitProtocol, got:\n%s", c.flavor, full)
+			}
+			continue
+		}
+		if !strings.HasPrefix(full, got) {
+			t.Errorf("codex protocol must extend the namespaced emitProtocol, not rewrite it:\n%s", full)
+		}
+		note := strings.TrimPrefix(full, got)
+		if want := "`codex --add-dir '" + filepath.Join(hub, "projects", "widget-key") + "'`"; !strings.Contains(note, want) {
+			t.Errorf("codex note should name the project dir via %s, got %q", want, note)
+		}
+		if !strings.Contains(note, "execpolicy allow rule") {
+			t.Errorf("codex note should warn off an execpolicy allow rule, got %q", note)
+		}
+		if strings.Count(note, "\n") != 1 || !strings.HasSuffix(note, "\n") {
+			t.Errorf("codex note must be exactly one line, got %q", note)
+		}
+	}
+
+	// A relative DIRECTOR_HUB must still yield an absolute path: the flag is
+	// typed in a shell whose cwd is not the hook's.
+	rel := protocolFor(filepath.Join("rel", "hub"), "widget-key", "codex")
+	wantAbs, err := filepath.Abs(filepath.Join("rel", "hub", "projects", "widget-key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rel, "`codex --add-dir '"+wantAbs+"'`") {
+		t.Errorf("a relative hub should resolve to the absolute %s in:\n%s", wantAbs, rel)
+	}
+
+	// An apostrophe in the path would end the single quote early: it is escaped
+	// the POSIX way (close, escaped quote, reopen).
+	apos := protocolFor(filepath.Join("/Users", "o'brien", ".director"), "widget-key", "codex")
+	aposAbs, err := filepath.Abs(filepath.Join("/Users", "o'brien", ".director", "projects", "widget-key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantQuoted := "'" + strings.ReplaceAll(aposAbs, "'", `'\''`) + "'"
+	if !strings.Contains(apos, "`codex --add-dir "+wantQuoted+"`") || !strings.Contains(apos, `o'\''brien`) {
+		t.Errorf("an apostrophe in the path should be POSIX-escaped inside the quotes, want %s in:\n%s", wantQuoted, apos)
+	}
+}
+
+// TestShellSingleQuote pins the one quoting rule behind every path Director
+// prints for a human to paste into a shell.
+func TestShellSingleQuote(t *testing.T) {
+	for in, want := range map[string]string{
+		"/Users/u/.director":   `'/Users/u/.director'`,
+		"/Users/a b/.director": `'/Users/a b/.director'`,
+		"/Users/o'brien/hub":   `'/Users/o'\''brien/hub'`,
+		"it's a 'quoted' path": `'it'\''s a '\''quoted'\'' path'`,
+		"$HOME/`x`":            `'$HOME/` + "`x`" + `'`,
+		"":                     `''`,
+	} {
+		if got := ShellSingleQuote(in); got != want {
+			t.Errorf("ShellSingleQuote(%q) = %s, want %s", in, got, want)
 		}
 	}
 }
@@ -2433,6 +2795,12 @@ func TestSessionStartConcurrentSessionNote(t *testing.T) {
 		t.Fatalf("seed note: %v", err)
 	}
 
+	// An adopted repo carries a fresh adopt row (not a session) before any session
+	// starts; it must not read as a sibling for the first session.
+	if err := fleet.Register(hub, fleet.Row{Workstream: ws.ID, UUID: fleet.AdoptUUID, RepoKey: ws.RepoKey, Handle: ws.ID}, time.Now()); err != nil {
+		t.Fatalf("register adopt row: %v", err)
+	}
+
 	// First session: no sibling rows yet — no marker, no note.
 	inA := `{"session_id":"s-one","cwd":` + jsonString(repo) + `,"hook_event_name":"SessionStart","source":"startup"}`
 	var outA bytes.Buffer
@@ -2474,7 +2842,8 @@ func TestSessionStartConcurrentSessionNote(t *testing.T) {
 // session's fresh row still counts as a sibling and the note appears. Deliberate:
 // the throwaway inherits the same working tree, so the interleave warning is
 // true for it too. (Corollary, accepted: a hand-run CLI registration under the
-// manual uuid would be excluded here — the fallback ids collide by design.)
+// manual uuid is not a session, so it never counts as a sibling at all, whoever
+// is starting.)
 func TestSessionStartConcurrentNoteForThrowaway(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "") // pin the manual fallback, whatever ran the suite
 

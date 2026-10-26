@@ -57,6 +57,44 @@ const emitProtocol = "## Director protocol\n" +
 	"Entries below are capped headlines: `director show <ulid>` prints one in full. Pull an area's decisions before touching it.\n" +
 	"At a workstream boundary, suggest `/director:handoff`: it checkpoints work that will resume (context filling up, session ending mid-task, a degraded session to reset); on a merged, clean worktree branch it runs `/director:complete` itself (also valid to run directly), before the branch or worktree is deleted. A finished one-shot task (a PR review, an investigation) takes a note, never a handoff: it plants a phantom resume point.\n"
 
+// codexAddDirNote is the one line only a Codex session's protocol carries. The
+// quoted-heredoc emit is a shell redirect, so Codex's execpolicy sees one opaque
+// `bash -lc` script that no `director` prefix rule can match, and the hub sits
+// outside workspace-write's writable roots: every emit escalates to an approval
+// prompt. Outside the checkout an emit writes only the project's log dir (inside
+// it, a checkout with no persisted identity also gets a .director/, writable under
+// workspace-write anyway), so that is the one directory to grant (`codex
+// --add-dir`). An execpolicy allow rule for director is the wrong fix: a matched
+// allow runs the command OUTSIDE the sandbox, which let a read-only dispatched
+// agent write the log. %s is the project dir, already
+// shell-quoted (ShellSingleQuote) so a hub path with spaces or an apostrophe
+// survives the shell it is pasted into.
+const codexAddDirNote = "If `director emit` asks for approval, tell the human to relaunch Codex with `codex --add-dir %s` (the only dir outside the checkout an emit writes); never add an execpolicy allow rule for director.\n"
+
+// ShellSingleQuote returns s as one POSIX shell word: wrapped in single quotes,
+// with each embedded single quote written as close-quote, backslash-quote,
+// reopen-quote. It is the one quoting rule for any path Director prints for a
+// human to paste into a shell (the Codex --add-dir line here and in doctor).
+func ShellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// protocolFor is the write-side protocol as the starting agent sees it: the
+// command names rewritten to its namespace (commandNamesFor), plus on Codex the
+// add-dir line naming this project's absolute log dir. Every other flavor's text
+// is exactly the namespaced emitProtocol, unchanged.
+func protocolFor(hub, repoKey, flavor string) string {
+	p := commandNamesFor(emitProtocol, flavor)
+	if flavor != "codex" {
+		return p
+	}
+	dir := filepath.Join(hub, "projects", repoKey)
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs // DIRECTOR_HUB may be relative; the flag needs a path that holds from any cwd
+	}
+	return p + fmt.Sprintf(codexAddDirNote, ShellSingleQuote(dir))
+}
+
 // handleSessionStart derives identity, refreshes the fleet row, and writes the
 // Ground-Truth injection. It degrades gracefully at every step: a fleet write
 // failure still injects context; an identity failure means there is nothing to
@@ -192,7 +230,8 @@ func utf16Units(s string) int {
 // nudge/concurrency failure (both fail-open, never blocking the injection);
 // uuid is this session's fleet-row key, used to exclude its own row from the
 // concurrent-session count. flavor switches the protocol/nudge command names
-// to the starting agent's namespace (see commandNamesFor).
+// to the starting agent's namespace (see commandNamesFor) and, on Codex, adds
+// the protocol's add-dir line (see protocolFor).
 func buildGroundTruth(hub, repoKey, workstreamID, sessionID, uuid, flavor string) (string, error) {
 	store := event.NewStore(hub, repoKey)
 	events, err := store.ReadAll()
@@ -211,7 +250,7 @@ func buildGroundTruth(hub, repoKey, workstreamID, sessionID, uuid, flavor string
 	// must not run it twice.
 	var protocol, nudge, banner, concurrent, resume string
 	if managed {
-		protocol = commandNamesFor(emitProtocol, flavor)
+		protocol = protocolFor(hub, repoKey, flavor)
 		n, err := closeOutNudge(hub, repoKey, workstreamID, proj, time.Now().UTC())
 		if err != nil {
 			// Fail open: the nudge is advisory — a fleet read problem must never

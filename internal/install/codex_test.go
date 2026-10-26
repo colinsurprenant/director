@@ -340,3 +340,32 @@ func TestInstallCodexRefusesMalformed(t *testing.T) {
 		t.Fatal("InstallCodex on malformed hooks.json should refuse, got nil")
 	}
 }
+
+// TestDefaultCodexRulesDir: the execpolicy dir is the one Codex reads, from its
+// own CODEX_HOME (else ~/.codex), never from Director's hooks-path override.
+func TestDefaultCodexRulesDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
+	t.Setenv(codexHooksPathEnv, filepath.Join(t.TempDir(), "elsewhere", "hooks.json"))
+
+	t.Setenv(codexHomeEnv, "")
+	got, err := DefaultCodexRulesDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(home, ".codex", "rules"); got != want {
+		t.Errorf("unset CODEX_HOME = %q, want %q (the hooks-path override must not move it)", got, want)
+	}
+
+	t.Setenv(codexHomeEnv, "   ")
+	if got, _ := DefaultCodexRulesDir(); got != filepath.Join(home, ".codex", "rules") {
+		t.Errorf("blank CODEX_HOME should read as unset, got %q", got)
+	}
+
+	custom := t.TempDir()
+	t.Setenv(codexHomeEnv, custom)
+	if got, _ := DefaultCodexRulesDir(); got != filepath.Join(custom, "rules") {
+		t.Errorf("CODEX_HOME = %q should give %q, got %q", custom, filepath.Join(custom, "rules"), got)
+	}
+}

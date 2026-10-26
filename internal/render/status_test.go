@@ -60,8 +60,8 @@ func TestStatusBlockedOn(t *testing.T) {
 
 // TestStatusMarksConcurrentSessions: several sessions heartbeating one
 // workstream at once render as "active ×N" — the same-checkout hygiene signal —
-// while stale leftover rows don't inflate the count and a lone session keeps
-// the bare state.
+// while stale leftover rows and the adopt/manual rows (not sessions) don't
+// inflate the count and a lone session keeps the bare state.
 func TestStatusMarksConcurrentSessions(t *testing.T) {
 	hub := t.TempDir()
 	seedProject(t, hub, "repo1", nil)
@@ -77,8 +77,16 @@ func TestStatusMarksConcurrentSessions(t *testing.T) {
 	mk("u-a", time.Minute)
 	mk("u-b", 2*time.Minute)
 	mk("u-stale", IdleAfter+time.Hour) // never archived; must not count
+	mk(fleet.ManualUUID, time.Minute)  // a hand-run registration is not a session; must not count
 
 	registerRow(t, hub, "ws2", "repo1", time.Minute) // lone session, bare state
+	// An adopt row beside the lone session is not a second session, so ws2 keeps
+	// the bare state instead of reading active ×2.
+	if err := fleet.Register(hub, fleet.Row{
+		Workstream: "ws2", UUID: fleet.AdoptUUID, RepoKey: "repo1", Handle: "@ws2",
+	}, statusNow.Add(-time.Minute)); err != nil {
+		t.Fatalf("register ws2/adopt: %v", err)
+	}
 
 	// ws3: only stale leftovers — the whole workstream reads idle, and an idle
 	// line never carries the marker (ActiveSessions is 0 there by definition).

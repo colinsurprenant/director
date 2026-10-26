@@ -56,6 +56,30 @@ type Row struct {
 // carries no status — liveness is derived, not stored.
 const StatusDone = "done"
 
+// Fixed row ids for the two writers whose row is not a running session. Row has
+// no kind field, so the uuid string is the only marker that tells them apart
+// from a real session's row; every writer and IsSessionUUID share these.
+const (
+	// AdoptUUID is the row `director adopt` registers. Adoption is not a live
+	// session, so it reuses one fixed id: re-adopting refreshes the same row's
+	// heartbeat instead of spawning row churn.
+	AdoptUUID = "adopt"
+	// ManualUUID is the row `director register` and `director heartbeat` write
+	// when CLAUDE_CODE_SESSION_ID is unset (a hand-run invocation). Hooks never
+	// register under it: a payload with no session id is skipped as a throwaway
+	// (isThrowawaySession), and the hook's own fallback to this id only names the
+	// row it excludes or archives.
+	ManualUUID = "manual"
+)
+
+// IsSessionUUID reports whether a row with this uuid stands for a running
+// session. The adopt and manual rows keep a workstream visible in the cockpit
+// but are not sessions, so concurrency counting (LiveSessions and the active
+// count in List) skips them while grouping and state derivation keep them.
+func IsSessionUUID(uuid string) bool {
+	return uuid != AdoptUUID && uuid != ManualUUID
+}
+
 // Register creates or refreshes the row file for row's (workstream, uuid),
 // stamping its heartbeat from now. The caller fills Workstream, UUID, Handle,
 // and the identity fields; the heartbeat is stamped here — like Heartbeat and
