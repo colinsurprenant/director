@@ -473,7 +473,7 @@ There are exactly four event kinds: `decision`, `open-item` (the home for "docum
 no `blocker` kind and `done` is fleet-liveness only. Two `--refs` pairings and one flag carry reserved meaning: a
 `note` emitted with `--conclude <handoff-ulid>` **concludes** that handoff (that is how `/director:complete` stops a
 finished workstream from offering a dead resume point; a note's `--refs` may not name a handoff, `emit` refuses it
-and writes nothing), a `handoff` whose refs name same-workstream
+and writes nothing, so cite the ULID in the note's body instead; `--conclude` is solely that close-out), a `handoff` whose refs name same-workstream
 `handoff`(s) **supersedes** exactly those positions and nothing else, so a position it never named
 survives instead of being silently overwritten, and a `decision` whose refs name `decision`(s)
 **supersedes** them, dropping them from the digest's active decisions (any decision, any workstream,
@@ -485,7 +485,9 @@ this on purpose; for any other note the line says how to restore the positions (
 each `--refs` naming only that one ULID and re-emitting its body, emitted from that workstream; never one
 handoff naming several, which merges separate positions), and a note that concludes nothing prints nothing.
 A note carrying `--refs` or `--conclude` is refused when the log cannot be read, because a wrong guess would
-silently retire positions.
+silently retire positions (to record it anyway, drop the flag and cite the ULIDs in the body; to conclude, fix
+the log first). Flags go before the body: `emit` refuses one placed after it, and refuses `--refs` or
+`--conclude` given twice.
 Your job is to **review**: read `status`/`brief`,
 answer the escalations, edit CHARTERs to steer, not to relay.
 

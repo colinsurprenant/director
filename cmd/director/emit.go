@@ -25,10 +25,24 @@ func runEmit(args []string) int {
 	fs.StringVar(&area, "area", "", "subsystem/path tag")
 	fs.StringVar(&risk, "risk", "", "low|escalate (decisions and open-items)")
 	fs.StringVar(&to, "to", "", "addressed-to handle (optional)")
-	fs.StringVar(&refs, "refs", "", "comma-separated ULIDs this references/supersedes; a handoff ref naming a same-workstream handoff SUPERSEDES that position (see /director:handoff), a decision ref naming a decision SUPERSEDES it (it leaves the digest's active decisions); a note's refs may not name a handoff (use --conclude)")
-	fs.StringVar(&conclude, "conclude", "", "note only: comma-separated handoff ULIDs this note CONCLUDES (see /director:complete); each is retired from the digest's resume points together with every older position of its workstream")
+	// refs and conclude are once-only: the stdlib string flag keeps the LAST
+	// value, so a repeated --conclude would silently drop the first handoff.
+	fs.Var(&onceValue{name: "refs", dst: &refs}, "refs", "comma-separated ULIDs this references/supersedes; a handoff ref naming a same-workstream handoff SUPERSEDES that position (see /director:handoff), a decision ref naming a decision SUPERSEDES it (it leaves the digest's active decisions); a note's refs may not name a handoff: cite its ULID in the note's body instead")
+	fs.Var(&onceValue{name: "conclude", dst: &conclude}, "conclude", "note only, and only the /director:complete close-out of a finished workstream: comma-separated handoff ULIDs this note CONCLUDES; each is retired from the digest's resume points together with every older position of its workstream, a parallel session's included")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	// Go's flag parsing stops at the first non-flag, so a flag written after the
+	// body ("emit --type note - --conclude H") lands in fs.Args() and would be
+	// swallowed into the body (or, after a "-", leave stdin unread), with exit 0
+	// and the flag's effect silently lost. Only a token that IS one of this
+	// FlagSet's flags is refused: a quoted body that merely contains "--refs" is
+	// one token and passes.
+	for _, tok := range fs.Args() {
+		if name := misplacedFlag(fs, tok); name != "" {
+			failf("emit: flag %s comes after the body; flags must come before the body (or the stdin `-`)\n", name)
+			return 2
+		}
 	}
 	body := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if pos := fs.Args(); len(pos) == 1 && pos[0] == "-" {
@@ -354,14 +368,15 @@ func confirmNoteConcluded(store *event.Store, ev event.Event, wsID string) {
 func vetNoteRefs(store *event.Store, refs, conclude []string) (int, error) {
 	events, err := store.ReadAll()
 	if err != nil {
-		flags := "--refs"
-		switch {
-		case len(refs) > 0 && len(conclude) > 0:
-			flags = "--refs/--conclude"
-		case len(conclude) > 0:
-			flags = "--conclude"
+		var flags []string
+		if len(refs) > 0 {
+			flags = append(flags, "--refs")
 		}
-		return 1, fmt.Errorf("cannot read this project's log to vet the note's %s (%v); refusing to append, since a handoff ULID there silently retires resume points", flags, err)
+		if len(conclude) > 0 {
+			flags = append(flags, "--conclude")
+		}
+		list := strings.Join(flags, " and ")
+		return 1, fmt.Errorf("cannot read this project's log to vet the note's %s (%v); refusing to append, since a handoff ULID there silently retires resume points. To record the note now, drop %s and cite the ULIDs in its body; to conclude, fix the log first (a parse error above names the bad line)", list, err, list)
 	}
 
 	named := make(map[string]bool, len(refs)+len(conclude))
@@ -371,11 +386,20 @@ func vetNoteRefs(store *event.Store, refs, conclude []string) (int, error) {
 	for _, c := range conclude {
 		named[c] = true
 	}
+	// An id is a handoff if ANY line carrying it is one: the fold's rule
+	// (fold.go:268 sets handoffWS on every handoff line; :288 reads it for a note
+	// ref), and a log can hold a reused id (the fold documents it), so the last
+	// line's kind is not the fold's answer. kind is only for naming a non-handoff.
+	isHandoff := make(map[string]bool, len(named))
 	kind := make(map[string]event.Kind, len(named))
 	for _, e := range events {
-		if named[e.ID] {
+		if !named[e.ID] {
+			continue
+		}
+		if _, seen := kind[e.ID]; !seen {
 			kind[e.ID] = e.Type
 		}
+		isHandoff[e.ID] = isHandoff[e.ID] || e.Type == event.KindHandoff
 	}
 
 	concluding := make(map[string]bool, len(conclude))
@@ -384,21 +408,66 @@ func vetNoteRefs(store *event.Store, refs, conclude []string) (int, error) {
 		switch k, found := kind[c]; {
 		case !found:
 			return 2, fmt.Errorf("--conclude id %s is not in this project's log; it must name a handoff (copy it from the digest's handoffs, or director render)", c)
-		case k != event.KindHandoff:
+		case !isHandoff[c]:
 			return 2, fmt.Errorf("--conclude id %s is not a handoff (kind: %s); --conclude takes handoff ULIDs only (cross-link anything else with --refs)", c, k)
 		}
 	}
 
 	var offending []string
 	for _, r := range refs {
-		if kind[r] == event.KindHandoff && !concluding[r] {
+		if isHandoff[r] && !concluding[r] {
 			offending = append(offending, r)
 		}
 	}
 	if len(offending) > 0 {
-		return 2, fmt.Errorf("a note's --refs cannot name a handoff (%s): naming one concludes it, retiring that resume point and every older one of its workstream, and concluding is --conclude <ULID> (the /director:complete close-out). If the handoff is only a cross-link, mention its ULID in the note's body instead", strings.Join(offending, ", "))
+		// The cross-link remedy leads on purpose: an agent that only wants the
+		// write to go through will take the first remedy offered, and swapping in
+		// --conclude is the destructive one.
+		return 2, fmt.Errorf("a note's --refs cannot name a handoff (%s): naming one concludes it. To cross-link, drop it from --refs and cite its ULID in the note's body. --conclude <ULID> is solely the /director:complete close-out of a finished workstream, and it retires every older position of that workstream, a parallel session's included", strings.Join(offending, ", "))
 	}
 	return 0, nil
+}
+
+// onceValue is a string flag that refuses a second occurrence. The stdlib
+// string flag keeps the last value, which for --conclude means a repeated flag
+// silently concludes only the final handoff; failing at parse makes the
+// one-comma-separated-list rule loud (exit 2).
+type onceValue struct {
+	name string
+	dst  *string
+	set  bool
+}
+
+func (o *onceValue) String() string {
+	if o == nil || o.dst == nil {
+		return ""
+	}
+	return *o.dst
+}
+
+func (o *onceValue) Set(v string) error {
+	if o.set {
+		return fmt.Errorf("--%s given twice; pass one comma-separated list", o.name)
+	}
+	o.set = true
+	*o.dst = v
+	return nil
+}
+
+// misplacedFlag returns the flag part (-name or --name, without any =value) of
+// a positional token that is exactly one of fs's flags, and "" for any other
+// token.
+func misplacedFlag(fs *flag.FlagSet, tok string) string {
+	bare := strings.TrimPrefix(strings.TrimPrefix(tok, "-"), "-")
+	if bare == tok { // no leading dash
+		return ""
+	}
+	name, _, _ := strings.Cut(bare, "=")
+	if fs.Lookup(name) == nil {
+		return ""
+	}
+	flagPart, _, _ := strings.Cut(tok, "=")
+	return flagPart
 }
 
 // canonicalIDs splits a comma-separated flag value (--refs or --conclude, named

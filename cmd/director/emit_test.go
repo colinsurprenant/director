@@ -833,10 +833,16 @@ func TestRunEmitNoteRefsRefuseHandoffs(t *testing.T) {
 			if code != 2 {
 				t.Errorf("%s: exit = %d, want 2 (usage)", name, code)
 			}
-			for _, want := range []string{h, "a note's --refs cannot name a handoff", "--conclude", "/director:complete", "mention its ULID in the note's body"} {
+			for _, want := range []string{h, "a note's --refs cannot name a handoff", "--conclude", "/director:complete", "cite its ULID in the note's body", "a parallel session's included"} {
 				if !strings.Contains(stderr, want) {
 					t.Errorf("%s: stderr lost %q:\n%s", name, want, stderr)
 				}
+			}
+			// The harmless remedy must come first: an agent that only wants the
+			// write to go through takes the first remedy offered, and --conclude
+			// is the destructive one.
+			if cite, conc := strings.Index(stderr, "cite its ULID in the note's body"), strings.Index(stderr, "--conclude <ULID>"); cite < 0 || conc < 0 || cite > conc {
+				t.Errorf("%s: the cross-link remedy must precede --conclude (cite@%d, conclude@%d):\n%s", name, cite, conc, stderr)
 			}
 		}
 		if got := resumeStack(t); !reflect.DeepEqual(got, []string{h}) {
@@ -866,6 +872,43 @@ func TestRunEmitNoteRefsRefuseHandoffs(t *testing.T) {
 		emitRefused(t, "--type", "note", "--area", "x", "--refs", hA, "correction, linking my handoff")
 		if got := resumeStack(t); !reflect.DeepEqual(got, []string{hB, hA}) {
 			t.Errorf("stack = %v, want both positions [%s %s]", got, hB, hA)
+		}
+	})
+
+	// Refusal is by KIND, not by whether the position is live: naming a retired
+	// handoff still sets the fold's conclusion mark, which retires every older
+	// live position of its workstream.
+	t.Run("a superseded handoff in a note's refs is refused too", func(t *testing.T) {
+		emitRepo(t)
+		old, _ := emitCapture(t, "--type", "handoff", "--area", "x", "older position")
+		live, _ := emitCapture(t, "--type", "handoff", "--area", "x", "--refs", old, "newer position, supersedes the older")
+
+		_, stderr := emitRefused(t, "--type", "note", "--area", "x", "--refs", old, "links the superseded position")
+		if !strings.Contains(stderr, "("+old+")") {
+			t.Errorf("stderr must name %s:\n%s", old, stderr)
+		}
+		if got := resumeStack(t); !reflect.DeepEqual(got, []string{live}) {
+			t.Errorf("stack = %v, want [%s]", got, live)
+		}
+	})
+
+	t.Run("another workstream's handoff in a note's refs is refused", func(t *testing.T) {
+		repo := emitRepo(t)
+		mine, _ := emitCapture(t, "--type", "handoff", "--area", "x", "the main checkout's position")
+		_, mainWS := foldStacks(t)
+
+		wtDir := filepath.Join(t.TempDir(), "proj-feature")
+		gitRun(t, repo, "worktree", "add", "-q", "-b", "feature", wtDir)
+		t.Chdir(wtDir)
+		if _, wtWS := foldStacks(t); wtWS == mainWS {
+			t.Fatalf("setup: worktree shares workstream %s", mainWS)
+		}
+		_, stderr := emitRefused(t, "--type", "note", "--area", "x", "--refs", mine, "from the worktree, linking the main checkout's handoff")
+		if !strings.Contains(stderr, "("+mine+")") {
+			t.Errorf("stderr must name %s:\n%s", mine, stderr)
+		}
+		if stacks, _ := foldStacks(t); !reflect.DeepEqual(stacks[mainWS], []string{mine}) {
+			t.Errorf("main checkout's stack = %v, want [%s]", stacks[mainWS], mine)
 		}
 	})
 
@@ -1032,18 +1075,21 @@ func TestRunEmitConclude(t *testing.T) {
 			args []string
 			want string
 		}{
-			"on a decision":       {[]string{"--type", "decision", "--risk", "low", "--conclude", h, "d"}, "--conclude is valid only with --type note"},
-			"on an open-item":     {[]string{"--type", "open-item", "--risk", "low", "--conclude", h, "o"}, "--conclude is valid only with --type note"},
-			"on a handoff":        {[]string{"--type", "handoff", "--conclude", h, "h"}, "--conclude is valid only with --type note"},
-			"empty on a decision": {[]string{"--type", "decision", "--risk", "low", "--conclude", "", "d"}, "--conclude is valid only with --type note"},
-			"an open-item id":     {[]string{"--type", "note", "--conclude", item, "n"}, "is not a handoff (kind: open-item)"},
-			"a decision id":       {[]string{"--type", "note", "--conclude", dec, "n"}, "is not a handoff (kind: decision)"},
-			"a note id":           {[]string{"--type", "note", "--conclude", n, "n"}, "is not a handoff (kind: note)"},
-			"an unknown id":       {[]string{"--type", "note", "--conclude", unknown, "n"}, "is not in this project's log"},
-			"a good id and a bad": {[]string{"--type", "note", "--conclude", h + "," + item, "n"}, "is not a handoff (kind: open-item)"},
-			"a malformed id":      {[]string{"--type", "note", "--conclude", "not-a-ulid", "n"}, `invalid --conclude id "not-a-ulid"`},
-			"an empty value":      {[]string{"--type", "note", "--conclude", "", "n"}, "--conclude needs at least one handoff ULID"},
-			"only separators":     {[]string{"--type", "note", "--conclude", " , ", "n"}, "--conclude needs at least one handoff ULID"},
+			"on a decision":                     {[]string{"--type", "decision", "--risk", "low", "--conclude", h, "d"}, "--conclude is valid only with --type note"},
+			"on an open-item":                   {[]string{"--type", "open-item", "--risk", "low", "--conclude", h, "o"}, "--conclude is valid only with --type note"},
+			"on a handoff":                      {[]string{"--type", "handoff", "--conclude", h, "h"}, "--conclude is valid only with --type note"},
+			"empty on a decision":               {[]string{"--type", "decision", "--risk", "low", "--conclude", "", "d"}, "--conclude is valid only with --type note"},
+			"an open-item id":                   {[]string{"--type", "note", "--conclude", item, "n"}, "is not a handoff (kind: open-item)"},
+			"a decision id":                     {[]string{"--type", "note", "--conclude", dec, "n"}, "is not a handoff (kind: decision)"},
+			"a note id":                         {[]string{"--type", "note", "--conclude", n, "n"}, "is not a handoff (kind: note)"},
+			"an unknown id":                     {[]string{"--type", "note", "--conclude", unknown, "n"}, "is not in this project's log"},
+			"a good id and a bad":               {[]string{"--type", "note", "--conclude", h + "," + item, "n"}, "is not a handoff (kind: open-item)"},
+			"a malformed id":                    {[]string{"--type", "note", "--conclude", "not-a-ulid", "n"}, `invalid --conclude id "not-a-ulid"`},
+			"an empty value":                    {[]string{"--type", "note", "--conclude", "", "n"}, "--conclude needs at least one handoff ULID"},
+			"only separators":                   {[]string{"--type", "note", "--conclude", " , ", "n"}, "--conclude needs at least one handoff ULID"},
+			"after a stdin body":                {[]string{"--type", "note", "--area", "x", "-", "--conclude", h}, "flag --conclude comes after the body"},
+			"after a positional body":           {[]string{"--type", "note", "--area", "x", "wrapped up", "--conclude=" + h}, "flag --conclude comes after the body"},
+			"a single-dash flag after the body": {[]string{"--type", "note", "--area", "x", "wrapped up", "-refs", item}, "flag -refs comes after the body"},
 		} {
 			code, stderr := emitRefused(t, tc.args...)
 			if code != 2 {
@@ -1091,6 +1137,13 @@ func TestRunEmitNoteRefsFailClosed(t *testing.T) {
 			if !strings.Contains(stderr, "cannot read this project's log to vet the note's "+name) {
 				t.Errorf("%s: stderr must say the log could not be read:\n%s", name, stderr)
 			}
+			// The refusal must leave a way forward: the harmless option, and the one
+			// that needs the log fixed first.
+			for _, want := range []string{"drop " + name + " and cite the ULIDs in its body", "to conclude, fix the log first", "names the bad line"} {
+				if !strings.Contains(stderr, want) {
+					t.Errorf("%s: stderr lacks the next step %q:\n%s", name, want, stderr)
+				}
+			}
 		}
 
 		// A note with no refs has nothing to vet, and still lands.
@@ -1132,6 +1185,156 @@ func TestRunEmitNoteRefsFailClosed(t *testing.T) {
 			t.Errorf("the refused note appended to the log (err = %v):\nbefore: %q\nafter:  %q", err, before, after)
 		}
 	})
+}
+
+// TestRunEmitFlagAfterBody: Go's flag parsing stops at the first non-flag, so a
+// flag written after the body used to be swallowed into it ("- --conclude H"
+// became the literal body, stdin was left unread, the exit was 0, and nothing
+// was concluded). A positional token that IS one of emit's flags is refused;
+// a body that merely contains flag text is one token and stays a body.
+func TestRunEmitFlagAfterBody(t *testing.T) {
+	emitRepo(t)
+	for name, tc := range map[string]struct {
+		words []string
+		body  string
+	}{
+		"flags inside a quoted body":           {[]string{"ran with --refs and --conclude in prose"}, "ran with --refs and --conclude in prose"},
+		"a dashed word after the body starts":  {[]string{"dropped to", "-5", "degrees"}, "dropped to -5 degrees"},
+		"an undefined flag-like word after it": {[]string{"output was", "--verbose"}, "output was --verbose"},
+	} {
+		newID, _ := emitCapture(t, append([]string{"--type", "note", "--area", "x"}, tc.words...)...)
+		shown, _ := captureStreams(t, func() { runShow([]string{newID}) })
+		if !strings.Contains(shown, tc.body) {
+			t.Errorf("%s: show = %q, want the body %q verbatim", name, shown, tc.body)
+		}
+	}
+}
+
+// TestRunEmitRepeatedFlag: the stdlib string flag keeps the LAST value, so a
+// repeated --conclude silently concluded only the final handoff. Both list flags
+// fail at parse instead.
+func TestRunEmitRepeatedFlag(t *testing.T) {
+	emitRepo(t)
+	item, _ := emitCapture(t, "--type", "open-item", "--area", "x", "--risk", "low", "a loose end")
+	h1, _ := emitCapture(t, "--type", "handoff", "--area", "x", "one position")
+	h2, _ := emitCapture(t, "--type", "handoff", "--area", "x", "--refs", h1, "another position")
+
+	for name, args := range map[string][]string{
+		"--conclude": {"--type", "note", "--area", "x", "--conclude", h1, "--conclude", h2, "twice"},
+		"--refs":     {"--type", "note", "--area", "x", "--refs", item, "--refs", item, "twice"},
+	} {
+		code, stderr := emitRefused(t, args...)
+		if code != 2 {
+			t.Errorf("%s: exit = %d, want 2", name, code)
+		}
+		if want := name + " given twice; pass one comma-separated list"; !strings.Contains(stderr, want) {
+			t.Errorf("%s: stderr lacks %q:\n%s", name, want, stderr)
+		}
+	}
+	if got := resumeStack(t); !reflect.DeepEqual(got, []string{h2}) {
+		t.Errorf("stack = %v, want [%s] untouched", got, h2)
+	}
+}
+
+// TestRunEmitNoteRefsClassifyLikeTheFold: an id is a handoff if ANY line
+// carrying it is one (fold.go:268), and the fold tolerates a reused id. The
+// gate follows that rule, not the kind of the id's last line, so a note cannot
+// slip a handoff past it through a duplicate-id log.
+func TestRunEmitNoteRefsClassifyLikeTheFold(t *testing.T) {
+	emitRepo(t)
+	h, _ := emitCapture(t, "--type", "handoff", "--area", "x", "the live position")
+	hub, ws, err := resolveContext()
+	if err != nil {
+		t.Fatalf("resolveContext: %v", err)
+	}
+	store := event.NewStore(hub, ws.RepoKey)
+	// A later NOTE line reusing the handoff's id (a hand-edited log, or one
+	// written before Append's duplicate guard).
+	dup, err := event.Marshal(event.Event{ID: h, SchemaVersion: event.SchemaVersion, Type: event.KindNote, Workstream: ws.ID, Area: "x", Body: "reuses the handoff's id"})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	f, err := os.OpenFile(store.Path(), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("open log: %v", err)
+	}
+	if _, err := f.Write(append(dup, '\n')); err != nil {
+		t.Fatalf("append duplicate: %v", err)
+	}
+	f.Close()
+
+	// The premise: the fold still reads that id as a handoff a note concludes.
+	events, err := store.ReadAll()
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	probe, err := id.New()
+	if err != nil {
+		t.Fatalf("id.New: %v", err)
+	}
+	folded := render.Fold(append(events, event.Event{ID: probe, SchemaVersion: event.SchemaVersion, Type: event.KindNote, Workstream: ws.ID, Refs: []string{h}, Body: "probe"}))
+	if r := folded.Retired[h]; r.Verb != render.VerbConcluded {
+		t.Fatalf("premise: fold Retired[%s] = %+v, want concluded", h, r)
+	}
+
+	if _, stderr := emitRefused(t, "--type", "note", "--area", "x", "--refs", h, "links the duplicated id"); !strings.Contains(stderr, "("+h+")") {
+		t.Errorf("--refs on the duplicated id must be refused naming %s:\n%s", h, stderr)
+	}
+	emitCapture(t, "--type", "note", "--area", "x", "--conclude", h, "concludes the duplicated id")
+	if got := resumeStack(t); len(got) != 0 {
+		t.Errorf("stack = %v, want the handoff concluded", got)
+	}
+}
+
+// TestCompleteCommandTemplateIsAcceptedByEmit runs the emit line the embedded
+// /director:complete command tells an agent to run through emit's real flag
+// parsing and gate, with its placeholders filled. If a later edit makes that
+// template something emit refuses (the way a handoff in a note's --refs is),
+// the close-out would break for every harness at once, and only a model would
+// notice. The embedded file is read from its source path: it is the single
+// source the four harness renderings copy.
+func TestCompleteCommandTemplateIsAcceptedByEmit(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "internal", "install", "commands", "complete.md"))
+	if err != nil {
+		t.Fatalf("read complete.md: %v", err)
+	}
+	var tmpl string
+	for _, span := range strings.Split(string(src), "`") {
+		if strings.HasPrefix(span, "director emit --type note") {
+			tmpl = span
+			break
+		}
+	}
+	if tmpl == "" {
+		t.Fatal("complete.md has no `director emit --type note ...` template line")
+	}
+
+	emitRepo(t)
+	h, _ := emitCapture(t, "--type", "handoff", "--area", "x", "the live position")
+	tmpl = strings.NewReplacer("<subsystem>", "x", "<handoff-ulid>", h).Replace(tmpl)
+	fields := strings.Fields(tmpl)
+	if len(fields) < 4 || fields[0] != "director" || fields[1] != "emit" || fields[len(fields)-1] != "-" {
+		t.Fatalf("template %q is not `director emit <flags> -`", tmpl)
+	}
+	if strings.Contains(tmpl, "<") {
+		t.Fatalf("template %q has a placeholder this test does not fill", tmpl)
+	}
+
+	orig := os.Stdin
+	t.Cleanup(func() { os.Stdin = orig })
+	r, w := mustPipe(t)
+	if _, err := w.WriteString("some-workstream complete: PR #1 merged\n"); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	os.Stdin = r
+	_, stderr := emitCapture(t, fields[2:]...)
+	if got := concludedLines(stderr); len(got) != 1 {
+		t.Errorf("the template must conclude the handoff, confirmation lines = %q", got)
+	}
+	if got := resumeStack(t); len(got) != 0 {
+		t.Errorf("stack = %v, want the position concluded", got)
+	}
 }
 
 // captureStreams runs fn with BOTH os.Stdout and os.Stderr redirected to pipes

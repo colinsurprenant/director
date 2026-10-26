@@ -74,11 +74,12 @@ func (s *Store) Append(ev Event) error {
 	// hand-crafted id, the single-writer shape the scan does catch; (2) a log
 	// that cannot be READ skips the check rather than failing the append —
 	// emission must survive a read-broken log (the emit-on-unreadable-log
-	// degradation the CLI already promises), and the fold's stable sort keeps
-	// even an undetected duplicate deterministic. The scan makes each append
-	// O(log-length) — Θ(n²) cumulatively — accepted deliberately: writes are
-	// human-rate and logs human-scale, and the snapshot design (§15.5) is the
-	// planned answer if that ever stops being true.
+	// degradation the CLI promises, except for a note carrying refs, which
+	// cmd/director's vetNoteRefs refuses before it reaches this append), and
+	// the fold's stable sort keeps even an undetected duplicate deterministic.
+	// The scan makes each append O(log-length) — Θ(n²) cumulatively — accepted
+	// deliberately: writes are human-rate and logs human-scale, and the
+	// snapshot design (§15.5) is the planned answer if that ever stops being true.
 	if dup, err := s.hasID(ev.ID); err == nil && dup {
 		return fmt.Errorf("store: refusing to append event %s: id already exists in %s", ev.ID, s.Path())
 	}
