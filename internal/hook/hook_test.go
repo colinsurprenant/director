@@ -333,6 +333,7 @@ func TestSessionStartInjectsGroundTruth(t *testing.T) {
 		"handoff refs supersede same-workstream handoffs":    "supersedes the named same-workstream handoffs",
 		"ref-less handoff retires every older position":      "a handoff without refs retires every older position of its workstream",
 		"a note's refs may not name a handoff":               "On a note, `--refs` naming a handoff is refused",
+		"the cross-link remedy leads":                        "is refused (cite its ULID in the body instead); `--conclude <ulid>`",
 		"concluding is explicit on the note":                 "`--conclude <ulid>` concludes it and every older position of its workstream",
 		"only complete concludes a handoff":                  "which only `/director:complete` may do",
 		"note refs on a decision retire nothing":             "a note's refs on a decision retire nothing",
