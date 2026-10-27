@@ -20,14 +20,29 @@ import (
 // reaches the log.
 func runEmit(args []string) int {
 	fs := flag.NewFlagSet("emit", flag.ContinueOnError)
-	var typ, area, risk, to, refs string
+	var typ, area, risk, to, refs, conclude string
 	fs.StringVar(&typ, "type", "", "event kind: decision|open-item|handoff|note")
 	fs.StringVar(&area, "area", "", "subsystem/path tag")
 	fs.StringVar(&risk, "risk", "", "low|escalate (decisions and open-items)")
 	fs.StringVar(&to, "to", "", "addressed-to handle (optional)")
-	fs.StringVar(&refs, "refs", "", "comma-separated ULIDs this references/supersedes; a handoff ref naming a same-workstream handoff SUPERSEDES that position (see /director:handoff), a note ref naming a handoff CONCLUDES it (see /director:complete), a decision ref naming a decision SUPERSEDES it (it leaves the digest's active decisions)")
+	// refs and conclude are once-only: the stdlib string flag keeps the LAST
+	// value, so a repeated --conclude would silently drop the first handoff.
+	fs.Var(&onceValue{name: "refs", dst: &refs}, "refs", "comma-separated ULIDs this references/supersedes; a handoff ref naming a same-workstream handoff SUPERSEDES that position (see /director:handoff), a decision ref naming a decision SUPERSEDES it (it leaves the digest's active decisions); a note's refs may not name a handoff: cite its ULID in the note's body instead")
+	fs.Var(&onceValue{name: "conclude", dst: &conclude}, "conclude", "note only, and only the /director:complete close-out of a finished workstream: comma-separated handoff ULIDs this note CONCLUDES, each a live resume point (a concluded or superseded one is refused); each is retired from the digest's resume points together with every older position of its workstream, a parallel session's included")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	// Go's flag parsing stops at the first non-flag, so a flag written after the
+	// body ("emit --type note - --conclude H") lands in fs.Args() and would be
+	// swallowed into the body (or, after a "-", leave stdin unread), with exit 0
+	// and the flag's effect silently lost. Only a token that IS one of this
+	// FlagSet's flags is refused: a quoted body that merely contains "--refs" is
+	// one token and passes.
+	for _, tok := range fs.Args() {
+		if name := misplacedFlag(fs, tok); name != "" {
+			failf("emit: flag %s comes after the body; flags must come before the body (or the stdin `-`)\n", name)
+			return 2
+		}
 	}
 	body := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if pos := fs.Args(); len(pos) == 1 && pos[0] == "-" {
@@ -55,9 +70,28 @@ func runEmit(args []string) int {
 		return 2
 	}
 
-	refList, err := canonicalRefs(refs)
+	// Whether the flag was PASSED, not whether it has a value: a --conclude that
+	// came out empty (an unset shell variable) must fail loudly, not degrade to a
+	// plain note that silently concludes nothing.
+	concludeSet := false
+	fs.Visit(func(f *flag.Flag) { concludeSet = concludeSet || f.Name == "conclude" })
+	if concludeSet && event.Kind(typ) != event.KindNote {
+		failf("emit: --conclude is valid only with --type note (it concludes a handoff's resume point), not --type %s\n", typ)
+		return 2
+	}
+
+	refList, err := canonicalIDs("--refs", refs)
 	if err != nil {
 		failf("emit: %v\n", err)
+		return 2
+	}
+	concludeList, err := canonicalIDs("--conclude", conclude)
+	if err != nil {
+		failf("emit: %v\n", err)
+		return 2
+	}
+	if concludeSet && len(concludeList) == 0 {
+		failf("emit: --conclude needs at least one handoff ULID\n")
 		return 2
 	}
 
@@ -67,6 +101,18 @@ func runEmit(args []string) int {
 		return 1
 	}
 	store := event.NewStore(hub, ws.RepoKey)
+	if event.Kind(typ) == event.KindNote && len(refList)+len(concludeList) > 0 {
+		if code, err := vetNoteRefs(store, refList, concludeList); err != nil {
+			failf("emit: %v\n", err)
+			return code
+		}
+	}
+	// The stored shape is the fold's own: a concluding note is a note whose refs
+	// name the handoff, exactly as before --conclude existed. The flag only moves
+	// the intent to the write site, where it can be checked. The two lists are
+	// disjoint here (vetNoteRefs refused a handoff in --refs and requires
+	// --conclude to name handoffs), so appending is the whole merge.
+	refList = append(refList, concludeList...)
 	ev, err := event.Emit(store, ws.ID, event.EmitParams{
 		Type:        event.Kind(typ),
 		Area:        area,
@@ -91,7 +137,7 @@ func runEmit(args []string) int {
 	case event.KindHandoff:
 		warnHandoffRefs(store, ev, refList)
 	case event.KindNote:
-		if len(refList) > 0 {
+		if len(concludeList) > 0 {
 			confirmNoteConcluded(store, ev, ws.ID)
 		}
 	}
@@ -226,36 +272,44 @@ func warnHandoffRefs(store *event.Store, ev event.Event, refList []string) {
 }
 
 // confirmNoteConcluded says which resume points a freshly-appended note just
-// retired, on stderr. A note whose --refs name a handoff CONCLUDES it, and the
-// fold's per-workstream high-water mark retires that handoff and every older one
-// of its workstream. /director:complete does that on purpose, but any other note
-// doing it silently drops live resume points, and nothing at the write says so.
+// retired, on stderr. A note whose refs name a handoff CONCLUDES it (--conclude
+// is how a note comes to name one), and the fold's per-workstream high-water mark
+// retires that handoff and every older one of its workstream. /director:complete
+// does that on purpose; the mark can still reach a sibling session's older
+// position the author never saw, and nothing at the write says so.
 //
 // The answer is the fold's, not a re-implementation of the high-water rule: the
 // positions live in the log minus this note and gone from the log with it are
 // exactly what the note concluded. Both folds read the same snapshot, so a
 // concurrent writer cannot be mistaken for this note's doing. A note that
-// retires no live position (refs naming open-items, decisions, notes, or
-// handoffs at or below a conclusion mark that already stands) prints nothing,
-// since notes cross-link constantly.
+// retires no live position prints nothing. Through emit the target was live at
+// the vet, so silence means a later write retired it in both folds (a
+// conclusion between the vet and the append, or a handoff superseding it before
+// this read); the line is best effort, and `director render` is the check.
 //
-// The line names whatever the fold retired, which can include an older LIVE
-// position even when the handoff the note named was itself already retired: the
-// fold sets the conclusion mark on ANY referenced handoff, retired or not
-// (fold.go:287-296), and the mark retires every older live position of its
-// workstream (fold.go:373). With R < A < B < C, A and B ref R, and C ref B, A and
-// C are live and B is retired; a note naming B still concludes A, and the line
-// says so (the retired-ref subtest of TestRunEmitNoteConclusionConfirms).
+// The line names whatever the fold retired, which includes older LIVE positions
+// of the target's workstream the author never named: the mark is a high-water
+// mark (fold.go:373), so concluding the newest position also concludes a
+// parallel session's older one. The target itself must be live (vetNoteRefs
+// refuses a retired one before the append): the fold would set the mark on ANY
+// referenced handoff, retired or not (fold.go:287-296), so with R < A < B < C, A
+// and B ref R, and C ref B, a note naming the retired B would conclude the live
+// A. Hand-written logs can still hold that shape and the fold still reads it so;
+// emit does not write it (the refusal subtest of TestRunEmitConclude).
 //
 // It is a confirmation, not an alarm, because the close-out case is legitimate;
-// the write stays a pure append and is never rejected. The recovery clause is
-// the fold's own behavior: a handoff whose --refs name a same-workstream handoff
-// is explicit and newer than the conclusion mark, so it is the live resume
-// point again (TestRunEmitNoteConclusionRecovery runs this through the fold).
-// That handoff must be emitted FROM the affected workstream: one emitted here
-// belongs to this workstream and cannot restore another's position. A read
-// failure prints nothing: without the log a handoff ref cannot be told from a
-// cross-link.
+// the note is already written. The recovery clause is the fold's own behavior: a
+// handoff whose --refs name a same-workstream handoff is explicit and newer than
+// the conclusion mark, so it is a live resume point again. The advice is one
+// restoring handoff PER position, each --refs naming only that one ULID and
+// re-emitting that position's body: one handoff naming several would merge
+// separate positions, which are separate sessions' resume points when the
+// concluded ones span chains (TestRunEmitNoteConclusionRecovery runs this
+// through the fold). Each handoff must be emitted FROM the affected workstream:
+// one emitted here belongs to this workstream and cannot restore another's
+// position. A read failure prints nothing; emit has already read the log to
+// vet the note's refs (vetNoteRefs), so a failure here is the log going away
+// mid-command.
 func confirmNoteConcluded(store *event.Store, ev event.Event, wsID string) {
 	events, err := store.ReadAll()
 	if err != nil {
@@ -289,33 +343,174 @@ func confirmNoteConcluded(store *event.Store, ev event.Event, wsID string) {
 	sort.Strings(affected)
 	for _, ws := range affected {
 		ids := concluded[ws]
-		restore := fmt.Sprintf("restore the position with a handoff whose --refs names %s", strings.Join(ids, ","))
+		restore := "restore each position with its own handoff"
 		if ws != wsID {
 			restore += ", emitted from that workstream's own worktree"
 		}
-		fmt.Fprintf(os.Stderr, "→ note concluded resume point(s) of %s: %s; they no longer surface as resumable. /director:complete does this on purpose; if this note was not a close-out, %s (director show <ULID> for its body).\n",
+		fmt.Fprintf(os.Stderr, "→ note concluded resume point(s) of %s: %s; they no longer surface as resumable. /director:complete does this on purpose; if this note was not a close-out, %s: --refs naming only that one ULID, its body re-emitted verbatim from director show <ULID>; never one handoff naming several, which would merge separate positions.\n",
 			ws, strings.Join(ids, ", "), restore)
 	}
 }
 
-// canonicalRefs splits a comma-separated --refs value, canonicalizes each ULID,
-// rejects malformed ones at the boundary, and de-duplicates (a repeated ref carries
-// no extra meaning — the fold uses set membership — so only distinct, well-formed
-// refs are stored).
-func canonicalRefs(refs string) ([]string, error) {
-	if strings.TrimSpace(refs) == "" {
+// vetNoteRefs is the write-site gate for a note's refs, run BEFORE the append so
+// a refusal leaves the log byte-identical. A note whose refs name a handoff
+// CONCLUDES it, and the fold's per-workstream high-water mark then retires every
+// older position of that workstream, a sibling session's included. Which events
+// are handoffs is only knowable from the log, and the shape (a ULID in --refs)
+// is identical for a harmless cross-link and for that retirement, so concluding
+// is explicit: --conclude names the handoffs to conclude (any workstream:
+// /director:complete concludes dead siblings' too) and each must be a CURRENTLY
+// LIVE resume point. A --refs that names a handoff is refused outright, even
+// when --conclude also names it: --conclude alone is the way. --refs naming
+// open-items, decisions, notes or ULIDs the log does not hold stays the ordinary
+// cross-link it always was.
+//
+// It fails CLOSED when the log cannot be read (exit 1): a wrong guess silently
+// destroys positions, and the cost of refusing is a retried emit. A missing or
+// empty log reads as no events, so there refs name nothing and the note passes
+// (--conclude cannot, since there is no handoff to name).
+//
+// The returned code follows runEmit's convention: 2 for misuse, 1 for the
+// unreadable log.
+func vetNoteRefs(store *event.Store, refs, conclude []string) (int, error) {
+	events, err := store.ReadAll()
+	if err != nil {
+		var flags []string
+		if len(refs) > 0 {
+			flags = append(flags, "--refs")
+		}
+		if len(conclude) > 0 {
+			flags = append(flags, "--conclude")
+		}
+		list := strings.Join(flags, " and ")
+		return 1, fmt.Errorf("cannot read this project's log to vet the note's %s (%v); refusing to append, since a handoff ULID there silently retires resume points. To record the note now, drop %s and cite the ULIDs in its body; to conclude, fix what the read error reports first", list, err, list)
+	}
+
+	named := make(map[string]bool, len(refs)+len(conclude))
+	for _, r := range refs {
+		named[r] = true
+	}
+	for _, c := range conclude {
+		named[c] = true
+	}
+	// An id is a handoff if ANY line carrying it is one: the fold's rule
+	// (fold.go:268 sets handoffWS on every handoff line; :288 reads it for a note
+	// ref), and a log can hold a reused id (the fold documents it), so the last
+	// line's kind is not the fold's answer. kind is only for naming a non-handoff.
+	isHandoff := make(map[string]bool, len(named))
+	kind := make(map[string]event.Kind, len(named))
+	for _, e := range events {
+		if !named[e.ID] {
+			continue
+		}
+		if _, seen := kind[e.ID]; !seen {
+			kind[e.ID] = e.Type
+		}
+		isHandoff[e.ID] = isHandoff[e.ID] || e.Type == event.KindHandoff
+	}
+
+	// The live resume points of EVERY workstream, from the same snapshot (no
+	// second read): a conclusion mark set on a handoff the fold already retired
+	// still retires every older live position of its workstream, so naming a
+	// retired B can conclude a live A (R < A < B < C, with A and B ref R and C
+	// ref B), and a stale or mis-copied ULID does the same. Requiring the target
+	// to be live itself means the mark lands on a position the author can see.
+	var live map[string]bool
+	if len(conclude) > 0 {
+		live = make(map[string]bool)
+		for _, stack := range render.Fold(events).ResumeHandoffs {
+			for _, h := range stack {
+				live[h.ID] = true
+			}
+		}
+	}
+
+	for _, c := range conclude {
+		switch k, found := kind[c]; {
+		case !found:
+			return 2, fmt.Errorf("--conclude id %s is not in this project's log; it must name a handoff (copy it from the digest's handoffs, or director render)", c)
+		case !isHandoff[c]:
+			return 2, fmt.Errorf("--conclude id %s is not a handoff (kind: %s); --conclude takes handoff ULIDs only (cross-link anything else with --refs)", c, k)
+		case !live[c]:
+			return 2, fmt.Errorf("--conclude id %s is not a live resume point (already concluded or superseded); conclude the NEWEST position from the digest's handoffs, or emit the note without --conclude if this close-out already ran", c)
+		}
+	}
+
+	var offending []string
+	for _, r := range refs {
+		if isHandoff[r] {
+			offending = append(offending, r)
+		}
+	}
+	if len(offending) > 0 {
+		// The cross-link remedy leads on purpose: an agent that only wants the
+		// write to go through will take the first remedy offered, and swapping in
+		// --conclude is the destructive one.
+		return 2, fmt.Errorf("a note's --refs cannot name a handoff (%s): naming one concludes it. To cross-link, drop it from --refs and cite its ULID in the note's body. --conclude <ULID> is solely the /director:complete close-out of a finished workstream, and it retires every older position of that workstream, a parallel session's included", strings.Join(offending, ", "))
+	}
+	return 0, nil
+}
+
+// onceValue is a string flag that refuses a second occurrence. The stdlib
+// string flag keeps the last value, which for --conclude means a repeated flag
+// silently concludes only the final handoff; failing at parse makes the
+// one-comma-separated-list rule loud (exit 2).
+type onceValue struct {
+	name string
+	dst  *string
+	set  bool
+}
+
+func (o *onceValue) String() string {
+	if o == nil || o.dst == nil {
+		return ""
+	}
+	return *o.dst
+}
+
+func (o *onceValue) Set(v string) error {
+	if o.set {
+		return fmt.Errorf("--%s given twice; pass one comma-separated list", o.name)
+	}
+	o.set = true
+	*o.dst = v
+	return nil
+}
+
+// misplacedFlag returns the flag part (-name or --name, without any =value) of
+// a positional token that is exactly one of fs's flags, and "" for any other
+// token.
+func misplacedFlag(fs *flag.FlagSet, tok string) string {
+	bare := strings.TrimPrefix(strings.TrimPrefix(tok, "-"), "-")
+	if bare == tok { // no leading dash
+		return ""
+	}
+	name, _, _ := strings.Cut(bare, "=")
+	if fs.Lookup(name) == nil {
+		return ""
+	}
+	flagPart, _, _ := strings.Cut(tok, "=")
+	return flagPart
+}
+
+// canonicalIDs splits a comma-separated flag value (--refs or --conclude, named
+// for the error), canonicalizes each ULID, rejects malformed ones at the boundary,
+// and de-duplicates (a repeated ref carries no extra meaning — the fold uses set
+// membership — so only distinct, well-formed refs are stored).
+func canonicalIDs(flagName, list string) ([]string, error) {
+	if strings.TrimSpace(list) == "" {
 		return nil, nil
 	}
 	var out []string
 	seen := make(map[string]bool)
-	for _, r := range strings.Split(refs, ",") {
+	for _, r := range strings.Split(list, ",") {
 		r = strings.TrimSpace(r)
 		if r == "" {
 			continue
 		}
 		c, err := id.Parse(r)
 		if err != nil {
-			return nil, fmt.Errorf("invalid --refs id %q: %w", r, err)
+			return nil, fmt.Errorf("invalid %s id %q: %w", flagName, r, err)
 		}
 		if seen[c] {
 			continue

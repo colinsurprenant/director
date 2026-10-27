@@ -92,11 +92,18 @@ the body.
 | `handoff` | current task · next action · hypotheses · dead ends (positional snapshot at a boundary) | `director emit --type handoff --area store --refs <the resume point ULID(s) you rehydrated from> -` + `Done: NDJSON append. Next: wire emit dispatch. Hypothesis: O_APPEND is line-atomic on POSIX. Dead end: fsync-per-line, 30x too slow` |
 | `note` | FYI / context for a parallel or future session; a finished task's outcome (a review verdict, an investigation result) | `director emit --type note --to @next-on-hooks --area hooks -` + `settings.json merge is _managedBy-tagged — don't strip GSD entries` |
 
-Three **reserved ref meanings**, all load-bearing:
+Two **reserved ref meanings** and one explicit flag, all load-bearing:
 
-- A `note` whose `--refs` names a **handoff** CONCLUDES it — that handoff (and the workstream's
-  older ones) leaves the digest's resume points, staying in the log. `/director:complete` uses
-  this to retire a dead workstream's last resume point; never ref a handoff from a note otherwise.
+- `director emit --type note --conclude <handoff-ulid>` CONCLUDES a **handoff** — that handoff
+  (and the workstream's older ones, a parallel session's included) leaves the digest's resume
+  points, staying in the log. Only `/director:complete` does this, to retire a dead workstream's
+  last resume point. `--conclude` takes ULIDs of handoffs that are still live resume points (a concluded or
+  superseded one is refused) and is valid only on a note. A note's
+  `--refs` may not name a handoff: `emit` refuses it and writes nothing, so cite the handoff's ULID
+  in the note's body when it is only a cross-link; never reach for `--conclude` to get past the
+  refusal. Put every flag before the body (or the stdin `-`) and give `--refs` and `--conclude` once
+  each (several ULIDs are one comma-separated list): `emit` refuses its own flags after the body
+  (anything else there becomes body text) and a repeated one.
 - A `handoff` whose `--refs` names same-workstream **handoff(s)** SUPERSEDES exactly those
   positions and nothing else (nothing older than them, nothing newer): retirement is set
   membership, so a position no handoff ever named still stands. Ref the resume point(s) you

@@ -470,18 +470,28 @@ perform for the model:
 
 There are exactly four event kinds: `decision`, `open-item` (the home for "documented, not dropped";
 `--risk escalate` is the "needs a human" subset that surfaces in `status`), `handoff`, and `note`. There is
-no `blocker` kind and `done` is fleet-liveness only. Three `--refs` pairings carry reserved meaning: a
-`note` whose refs name a `handoff` **concludes** it (that is how `/director:complete` stops a finished
-workstream from offering a dead resume point), a `handoff` whose refs name same-workstream
+no `blocker` kind and `done` is fleet-liveness only. Two `--refs` pairings and one flag carry reserved meaning: a
+`note` emitted with `--conclude <handoff-ulid>` **concludes** that handoff (that is how `/director:complete` stops a
+finished workstream from offering a dead resume point; a note's `--refs` may not name a handoff, `emit` refuses it
+and writes nothing, so cite the ULID in the note's body instead; `--conclude` is solely that close-out), a `handoff` whose refs name same-workstream
 `handoff`(s) **supersedes** exactly those positions and nothing else, so a position it never named
 survives instead of being silently overwritten, and a `decision` whose refs name `decision`(s)
 **supersedes** them, dropping them from the digest's active decisions (any decision, any workstream,
 no ordering check). A handoff carrying no such refs falls back to retiring
-every older position of its workstream. Because a note ref concludes a handoff and every older position
+every older position of its workstream. Because `--conclude` retires a handoff and every older position
 of its workstream, `director emit` confirms on stderr, per affected workstream, which resume points a note
-just concluded (`→ note concluded resume point(s) of <workstream>: <ULIDs>`). `/director:complete` does
-this on purpose; for any other note the line says how to restore the position (a handoff whose `--refs` names
-those ULIDs, emitted from that workstream), and a note that concludes nothing (or whose log cannot be read) prints nothing.
+just concluded (`→ note concluded resume point(s) of <workstream>: <ULIDs>`; best effort, since a concurrent
+write or a log read failing after the append can hide a position from it, so `director render` is the final
+check). `/director:complete` does
+this on purpose; for any other note the line says how to restore the positions (one handoff per position,
+each `--refs` naming only that one ULID and re-emitting its body, emitted from that workstream; never one
+handoff naming several, which merges separate positions). `--conclude` must name a handoff the digest still
+offers as a resume point: a concluded or superseded one is refused (a stale or mis-copied ULID would otherwise
+retire an older live position it never named), and `emit` writes nothing.
+A note whose `--refs` or `--conclude` names any ULID is refused when the log cannot be read, because a wrong guess would
+silently retire positions (to record it anyway, drop the flag and cite the ULIDs in the body; to conclude, fix
+what the read error reports first). Flags go before the body: `emit` refuses its own flags placed after it
+(anything else there becomes body text), and refuses `--refs` or `--conclude` given twice.
 Your job is to **review**: read `status`/`brief`,
 answer the escalations, edit CHARTERs to steer, not to relay.
 
