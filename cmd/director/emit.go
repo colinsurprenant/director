@@ -282,8 +282,10 @@ func warnHandoffRefs(store *event.Store, ev event.Event, refList []string) {
 // positions live in the log minus this note and gone from the log with it are
 // exactly what the note concluded. Both folds read the same snapshot, so a
 // concurrent writer cannot be mistaken for this note's doing. A note that
-// retires no live position prints nothing; through emit that needs a concurrent
-// conclusion landing between the vet and the append, since the target is live.
+// retires no live position prints nothing. Through emit the target was live at
+// the vet, so silence means a later write retired it in both folds (a
+// conclusion between the vet and the append, or a handoff superseding it before
+// this read); the line is best effort, and `director render` is the check.
 //
 // The line names whatever the fold retired, which includes older LIVE positions
 // of the target's workstream the author never named: the mark is a high-water
