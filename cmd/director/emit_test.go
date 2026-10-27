@@ -553,7 +553,7 @@ func TestRunEmitNoteConclusionConfirms(t *testing.T) {
 		}
 	})
 
-	t.Run("a conclusion that retires nothing new stays silent", func(t *testing.T) {
+	t.Run("refs that are not handoffs stay silent", func(t *testing.T) {
 		emitRepo(t)
 		item, _ := emitCapture(t, "--type", "open-item", "--area", "x", "--risk", "low", "a loose end")
 		dec, _ := emitCapture(t, "--type", "decision", "--area", "x", "--risk", "low", "a decision")
@@ -561,14 +561,13 @@ func TestRunEmitNoteConclusionConfirms(t *testing.T) {
 		old, _ := emitCapture(t, "--type", "handoff", "--area", "x", "older position")
 		live, _ := emitCapture(t, "--type", "handoff", "--area", "x", "--refs", old, "newer position, supersedes the older")
 
-		for name, flagAndValue := range map[string][2]string{
-			"an open-item (--refs)":                       {"--refs", item},
-			"a decision (--refs)":                         {"--refs", dec},
-			"a note (--refs)":                             {"--refs", note},
-			"several non-handoffs (--refs)":               {"--refs", item + "," + dec + "," + note},
-			"a handoff the fold had retired (--conclude)": {"--conclude", old},
+		for name, refs := range map[string]string{
+			"an open-item":         item,
+			"a decision":           dec,
+			"a note":               note,
+			"several non-handoffs": item + "," + dec + "," + note,
 		} {
-			_, stderr := emitCapture(t, "--type", "note", "--area", "x", flagAndValue[0], flagAndValue[1], "note naming "+name)
+			_, stderr := emitCapture(t, "--type", "note", "--area", "x", "--refs", refs, "note naming "+name)
 			if got := concludedLines(stderr); len(got) != 0 {
 				t.Errorf("a note naming %s concludes nothing and must be silent, got %q", name, got)
 			}
@@ -579,43 +578,33 @@ func TestRunEmitNoteConclusionConfirms(t *testing.T) {
 			t.Fatalf("setup: stack = %v, want [%s]", got, live)
 		}
 
-		// Concluding it for real prints; naming it again is then silent.
+		// Concluding it for real prints.
 		_, stderr := emitCapture(t, "--type", "note", "--area", "x", "--conclude", live, "close-out")
 		if got := concludedLines(stderr); len(got) != 1 {
 			t.Errorf("concluding the live position must print once, got %q", got)
 		}
-		_, stderr = emitCapture(t, "--type", "note", "--area", "x", "--conclude", live, "naming the concluded position again")
-		if got := concludedLines(stderr); len(got) != 0 {
-			t.Errorf("naming an already-concluded handoff retires nothing new and must be silent, got %q", got)
-		}
 	})
 
 	// The fold sets the conclusion mark on ANY referenced handoff, retired or not,
-	// and the mark retires every older live position. So a note naming an
-	// already-retired handoff can still conclude a live one, and the line says so.
-	t.Run("a note naming a retired handoff still concludes an older live position", func(t *testing.T) {
+	// and the mark retires every older live position: a note naming the retired B
+	// would conclude the live A, a position the author never named. --conclude
+	// must name a LIVE resume point, so emit refuses it before writing.
+	t.Run("a note naming a retired handoff is refused and the older live position survives", func(t *testing.T) {
 		emitRepo(t)
 		r, _ := emitCapture(t, "--type", "handoff", "--area", "x", "R, the shared starting position")
 		a, _ := emitCapture(t, "--type", "handoff", "--area", "x", "--refs", r, "A, session A position")
 		b, _ := emitCapture(t, "--type", "handoff", "--area", "x", "--refs", r, "B, session B position")
 		c, _ := emitCapture(t, "--type", "handoff", "--area", "x", "--refs", b, "C, consolidates B")
-		_, ws := foldStacks(t)
 		if got := resumeStack(t); !reflect.DeepEqual(got, []string{a, c}) {
 			t.Fatalf("setup: stack = %v, want [%s %s] (A and C live, B retired)", got, a, c)
 		}
 
-		_, stderr := emitCapture(t, "--type", "note", "--area", "x", "--conclude", b, "names B, which C already retired")
-		got := concludedLines(stderr)
-		if len(got) != 1 || !strings.Contains(got[0], "of "+ws+": "+a+";") {
-			t.Fatalf("confirmation lines = %q, want one line naming workstream %s and the live position %s", got, ws, a)
+		code, stderr := emitRefused(t, "--type", "note", "--area", "x", "--conclude", b, "names B, which C already retired")
+		if code != 2 || !strings.Contains(stderr, "--conclude id "+b+" is not a live resume point") {
+			t.Errorf("exit = %d, stderr = %q; want 2 and the not-a-live-resume-point refusal naming %s", code, stderr, b)
 		}
-		for _, other := range []string{b, c, r} {
-			if strings.Contains(got[0], other) {
-				t.Errorf("the line lists %s, which was not a live position this note retired: %q", other, got[0])
-			}
-		}
-		if got := resumeStack(t); !reflect.DeepEqual(got, []string{c}) {
-			t.Errorf("after the note the stack = %v, want only [%s]", got, c)
+		if got := resumeStack(t); !reflect.DeepEqual(got, []string{a, c}) {
+			t.Errorf("after the refused note the stack = %v, want [%s %s] untouched", got, a, c)
 		}
 	})
 
@@ -1057,6 +1046,37 @@ func TestRunEmitConclude(t *testing.T) {
 		emitCapture(t, "--type", "note", "--area", "x", "--conclude", theirs, "sibling complete")
 		if stacks, _ := foldStacks(t); len(stacks[siblingWS]) != 0 {
 			t.Errorf("sibling stack = %v, want it concluded from here", stacks[siblingWS])
+		}
+	})
+
+	// The target must be a handoff the digest still offers as a resume point. A
+	// retired one is a stale or mis-copied ULID, or a close-out that already ran,
+	// and the fold's high-water mark would still act on it.
+	t.Run("a target that is not a live resume point is refused", func(t *testing.T) {
+		emitRepo(t)
+		old, _ := emitCapture(t, "--type", "handoff", "--area", "x", "older position")
+		live, _ := emitCapture(t, "--type", "handoff", "--area", "x", "--refs", old, "newer position, supersedes the older")
+		wantMsg := "is not a live resume point (already concluded or superseded); conclude the NEWEST position from the digest's handoffs, or emit the note without --conclude if this close-out already ran"
+
+		// Superseded.
+		code, stderr := emitRefused(t, "--type", "note", "--area", "x", "--conclude", old, "superseded target")
+		if code != 2 || !strings.Contains(stderr, "--conclude id "+old+" "+wantMsg) {
+			t.Errorf("superseded: exit = %d, stderr = %q; want 2 and the refusal", code, stderr)
+		}
+		// One live and one retired in the same list: the whole note is refused.
+		code, stderr = emitRefused(t, "--type", "note", "--area", "x", "--conclude", live+","+old, "mixed list")
+		if code != 2 || !strings.Contains(stderr, "--conclude id "+old+" "+wantMsg) {
+			t.Errorf("mixed list: exit = %d, stderr = %q; want 2 and the refusal naming %s", code, stderr, old)
+		}
+		if got := resumeStack(t); !reflect.DeepEqual(got, []string{live}) {
+			t.Fatalf("setup: stack = %v, want [%s] after the refusals", got, live)
+		}
+
+		// Concluded: the close-out lands once, a second run is refused.
+		emitCapture(t, "--type", "note", "--area", "x", "--conclude", live, "close-out")
+		code, stderr = emitRefused(t, "--type", "note", "--area", "x", "--conclude", live, "the close-out again")
+		if code != 2 || !strings.Contains(stderr, "--conclude id "+live+" "+wantMsg) {
+			t.Errorf("concluded: exit = %d, stderr = %q; want 2 and the refusal", code, stderr)
 		}
 	})
 

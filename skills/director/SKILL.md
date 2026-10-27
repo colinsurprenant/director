@@ -97,7 +97,8 @@ Two **reserved ref meanings** and one explicit flag, all load-bearing:
 - `director emit --type note --conclude <handoff-ulid>` CONCLUDES a **handoff** — that handoff
   (and the workstream's older ones, a parallel session's included) leaves the digest's resume
   points, staying in the log. Only `/director:complete` does this, to retire a dead workstream's
-  last resume point. `--conclude` takes handoff ULIDs only and is valid only on a note. A note's
+  last resume point. `--conclude` takes ULIDs of handoffs that are still live resume points (a concluded or
+  superseded one is refused) and is valid only on a note. A note's
   `--refs` may not name a handoff: `emit` refuses it and writes nothing, so cite the handoff's ULID
   in the note's body when it is only a cross-link; never reach for `--conclude` to get past the
   refusal. Put every flag before the body (or the stdin `-`) and give `--refs` and `--conclude` once

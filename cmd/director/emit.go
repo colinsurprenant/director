@@ -280,16 +280,18 @@ func warnHandoffRefs(store *event.Store, ev event.Event, refList []string) {
 // positions live in the log minus this note and gone from the log with it are
 // exactly what the note concluded. Both folds read the same snapshot, so a
 // concurrent writer cannot be mistaken for this note's doing. A note that
-// retires no live position (a --conclude naming handoffs at or below a
-// conclusion mark that already stands) prints nothing.
+// retires no live position prints nothing; through emit that needs a concurrent
+// conclusion landing between the vet and the append, since the target is live.
 //
-// The line names whatever the fold retired, which can include an older LIVE
-// position even when the handoff the note named was itself already retired: the
-// fold sets the conclusion mark on ANY referenced handoff, retired or not
-// (fold.go:287-296), and the mark retires every older live position of its
-// workstream (fold.go:373). With R < A < B < C, A and B ref R, and C ref B, A and
-// C are live and B is retired; a note naming B still concludes A, and the line
-// says so (the retired-ref subtest of TestRunEmitNoteConclusionConfirms).
+// The line names whatever the fold retired, which includes older LIVE positions
+// of the target's workstream the author never named: the mark is a high-water
+// mark (fold.go:373), so concluding the newest position also concludes a
+// parallel session's older one. The target itself must be live (vetNoteRefs
+// refuses a retired one before the append): the fold would set the mark on ANY
+// referenced handoff, retired or not (fold.go:287-296), so with R < A < B < C, A
+// and B ref R, and C ref B, a note naming the retired B would conclude the live
+// A. Hand-written logs can still hold that shape and the fold still reads it so;
+// emit does not write it (the refusal subtest of TestRunEmitConclude).
 //
 // It is a confirmation, not an alarm, because the close-out case is legitimate;
 // the note is already written. The recovery clause is the fold's own behavior: a
@@ -353,8 +355,8 @@ func confirmNoteConcluded(store *event.Store, ev event.Event, wsID string) {
 // are handoffs is only knowable from the log, and the shape (a ULID in --refs)
 // is identical for a harmless cross-link and for that retirement, so concluding
 // is explicit: --conclude names the handoffs to conclude (any workstream:
-// /director:complete concludes dead siblings' too), and a --refs that names a
-// handoff is refused. --refs naming open-items, decisions, notes or ULIDs the
+// /director:complete concludes dead siblings' too) and each must be a CURRENTLY
+// LIVE resume point, and a --refs that names a handoff is refused. --refs naming open-items, decisions, notes or ULIDs the
 // log does not hold stays the ordinary cross-link it always was.
 //
 // It fails CLOSED when the log cannot be read (exit 1): a wrong guess silently
@@ -402,6 +404,22 @@ func vetNoteRefs(store *event.Store, refs, conclude []string) (int, error) {
 		isHandoff[e.ID] = isHandoff[e.ID] || e.Type == event.KindHandoff
 	}
 
+	// The live resume points of EVERY workstream, from the same snapshot (no
+	// second read): a conclusion mark set on a handoff the fold already retired
+	// still retires every older live position of its workstream, so naming a
+	// retired B can conclude a live A (R < A < B < C, with A and B ref R and C
+	// ref B), and a stale or mis-copied ULID does the same. Requiring the target
+	// to be live itself means the mark lands on a position the author can see.
+	var live map[string]bool
+	if len(conclude) > 0 {
+		live = make(map[string]bool)
+		for _, stack := range render.Fold(events).ResumeHandoffs {
+			for _, h := range stack {
+				live[h.ID] = true
+			}
+		}
+	}
+
 	concluding := make(map[string]bool, len(conclude))
 	for _, c := range conclude {
 		concluding[c] = true
@@ -410,6 +428,8 @@ func vetNoteRefs(store *event.Store, refs, conclude []string) (int, error) {
 			return 2, fmt.Errorf("--conclude id %s is not in this project's log; it must name a handoff (copy it from the digest's handoffs, or director render)", c)
 		case !isHandoff[c]:
 			return 2, fmt.Errorf("--conclude id %s is not a handoff (kind: %s); --conclude takes handoff ULIDs only (cross-link anything else with --refs)", c, k)
+		case !live[c]:
+			return 2, fmt.Errorf("--conclude id %s is not a live resume point (already concluded or superseded); conclude the NEWEST position from the digest's handoffs, or emit the note without --conclude if this close-out already ran", c)
 		}
 	}
 

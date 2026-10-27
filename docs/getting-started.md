@@ -483,7 +483,9 @@ of its workstream, `director emit` confirms on stderr, per affected workstream, 
 just concluded (`→ note concluded resume point(s) of <workstream>: <ULIDs>`). `/director:complete` does
 this on purpose; for any other note the line says how to restore the positions (one handoff per position,
 each `--refs` naming only that one ULID and re-emitting its body, emitted from that workstream; never one
-handoff naming several, which merges separate positions), and a note that concludes nothing prints nothing.
+handoff naming several, which merges separate positions). `--conclude` must name a handoff the digest still
+offers as a resume point: a concluded or superseded one is refused (a stale or mis-copied ULID would otherwise
+retire an older live position it never named), and `emit` writes nothing.
 A note carrying `--refs` or `--conclude` is refused when the log cannot be read, because a wrong guess would
 silently retire positions (to record it anyway, drop the flag and cite the ULIDs in the body; to conclude, fix
 the log first). Flags go before the body: `emit` refuses one placed after it, and refuses `--refs` or
