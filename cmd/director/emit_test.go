@@ -1025,12 +1025,17 @@ func TestRunEmitConclude(t *testing.T) {
 		}
 	})
 
-	t.Run("a ULID in both flags is the explicit conclusion", func(t *testing.T) {
+	// --conclude alone is the way: a handoff in --refs is refused even when
+	// --conclude names it too, with the log untouched.
+	t.Run("a ULID in both flags is refused", func(t *testing.T) {
 		emitRepo(t)
 		h, _ := emitCapture(t, "--type", "handoff", "--area", "x", "the live position")
-		emitCapture(t, "--type", "note", "--area", "x", "--refs", h, "--conclude", h, "ws complete")
-		if got := resumeStack(t); len(got) != 0 {
-			t.Errorf("stack = %v, want the position concluded", got)
+		code, stderr := emitRefused(t, "--type", "note", "--area", "x", "--refs", h, "--conclude", h, "ws complete")
+		if code != 2 || !strings.Contains(stderr, "a note's --refs cannot name a handoff ("+h+")") {
+			t.Errorf("exit = %d, stderr = %q; want 2 and the --refs refusal naming %s", code, stderr, h)
+		}
+		if got := resumeStack(t); !reflect.DeepEqual(got, []string{h}) {
+			t.Errorf("stack = %v, want [%s] untouched", got, h)
 		}
 	})
 
@@ -1159,7 +1164,7 @@ func TestRunEmitNoteRefsFailClosed(t *testing.T) {
 			}
 			// The refusal must leave a way forward: the harmless option, and the one
 			// that needs the log fixed first.
-			for _, want := range []string{"drop " + name + " and cite the ULIDs in its body", "to conclude, fix the log first", "names the bad line"} {
+			for _, want := range []string{"drop " + name + " and cite the ULIDs in its body", "to conclude, fix what the read error reports first"} {
 				if !strings.Contains(stderr, want) {
 					t.Errorf("%s: stderr lacks the next step %q:\n%s", name, want, stderr)
 				}

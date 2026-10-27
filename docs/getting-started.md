@@ -488,8 +488,8 @@ offers as a resume point: a concluded or superseded one is refused (a stale or m
 retire an older live position it never named), and `emit` writes nothing.
 A note carrying `--refs` or `--conclude` is refused when the log cannot be read, because a wrong guess would
 silently retire positions (to record it anyway, drop the flag and cite the ULIDs in the body; to conclude, fix
-the log first). Flags go before the body: `emit` refuses one placed after it, and refuses `--refs` or
-`--conclude` given twice.
+what the read error reports first). Flags go before the body: `emit` refuses its own flags placed after it
+(anything else there becomes body text), and refuses `--refs` or `--conclude` given twice.
 Your job is to **review**: read `status`/`brief`,
 answer the escalations, edit CHARTERs to steer, not to relay.
 

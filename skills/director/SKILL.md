@@ -102,8 +102,8 @@ Two **reserved ref meanings** and one explicit flag, all load-bearing:
   `--refs` may not name a handoff: `emit` refuses it and writes nothing, so cite the handoff's ULID
   in the note's body when it is only a cross-link; never reach for `--conclude` to get past the
   refusal. Put every flag before the body (or the stdin `-`) and give `--refs` and `--conclude` once
-  each (several ULIDs are one comma-separated list): `emit` refuses a flag after the body and a
-  repeated one.
+  each (several ULIDs are one comma-separated list): `emit` refuses its own flags after the body
+  (anything else there becomes body text) and a repeated one.
 - A `handoff` whose `--refs` names same-workstream **handoff(s)** SUPERSEDES exactly those
   positions and nothing else (nothing older than them, nothing newer): retirement is set
   membership, so a position no handoff ever named still stands. Ref the resume point(s) you

@@ -109,8 +109,10 @@ func runEmit(args []string) int {
 	}
 	// The stored shape is the fold's own: a concluding note is a note whose refs
 	// name the handoff, exactly as before --conclude existed. The flag only moves
-	// the intent to the write site, where it can be checked.
-	refList = mergeIDs(refList, concludeList)
+	// the intent to the write site, where it can be checked. The two lists are
+	// disjoint here (vetNoteRefs refused a handoff in --refs and requires
+	// --conclude to name handoffs), so appending is the whole merge.
+	refList = append(refList, concludeList...)
 	ev, err := event.Emit(store, ws.ID, event.EmitParams{
 		Type:        event.Kind(typ),
 		Area:        area,
@@ -356,14 +358,15 @@ func confirmNoteConcluded(store *event.Store, ev event.Event, wsID string) {
 // is identical for a harmless cross-link and for that retirement, so concluding
 // is explicit: --conclude names the handoffs to conclude (any workstream:
 // /director:complete concludes dead siblings' too) and each must be a CURRENTLY
-// LIVE resume point, and a --refs that names a handoff is refused. --refs naming open-items, decisions, notes or ULIDs the
-// log does not hold stays the ordinary cross-link it always was.
+// LIVE resume point. A --refs that names a handoff is refused outright, even
+// when --conclude also names it: --conclude alone is the way. --refs naming
+// open-items, decisions, notes or ULIDs the log does not hold stays the ordinary
+// cross-link it always was.
 //
 // It fails CLOSED when the log cannot be read (exit 1): a wrong guess silently
 // destroys positions, and the cost of refusing is a retried emit. A missing or
 // empty log reads as no events, so there refs name nothing and the note passes
-// (--conclude cannot, since there is no handoff to name). A ULID in both flags
-// is the explicit conclusion, not a --refs handoff.
+// (--conclude cannot, since there is no handoff to name).
 //
 // The returned code follows runEmit's convention: 2 for misuse, 1 for the
 // unreadable log.
@@ -378,7 +381,7 @@ func vetNoteRefs(store *event.Store, refs, conclude []string) (int, error) {
 			flags = append(flags, "--conclude")
 		}
 		list := strings.Join(flags, " and ")
-		return 1, fmt.Errorf("cannot read this project's log to vet the note's %s (%v); refusing to append, since a handoff ULID there silently retires resume points. To record the note now, drop %s and cite the ULIDs in its body; to conclude, fix the log first (a parse error above names the bad line)", list, err, list)
+		return 1, fmt.Errorf("cannot read this project's log to vet the note's %s (%v); refusing to append, since a handoff ULID there silently retires resume points. To record the note now, drop %s and cite the ULIDs in its body; to conclude, fix what the read error reports first", list, err, list)
 	}
 
 	named := make(map[string]bool, len(refs)+len(conclude))
@@ -420,9 +423,7 @@ func vetNoteRefs(store *event.Store, refs, conclude []string) (int, error) {
 		}
 	}
 
-	concluding := make(map[string]bool, len(conclude))
 	for _, c := range conclude {
-		concluding[c] = true
 		switch k, found := kind[c]; {
 		case !found:
 			return 2, fmt.Errorf("--conclude id %s is not in this project's log; it must name a handoff (copy it from the digest's handoffs, or director render)", c)
@@ -435,7 +436,7 @@ func vetNoteRefs(store *event.Store, refs, conclude []string) (int, error) {
 
 	var offending []string
 	for _, r := range refs {
-		if isHandoff[r] && !concluding[r] {
+		if isHandoff[r] {
 			offending = append(offending, r)
 		}
 	}
@@ -516,20 +517,4 @@ func canonicalIDs(flagName, list string) ([]string, error) {
 		out = append(out, c)
 	}
 	return out, nil
-}
-
-// mergeIDs joins a then b into one de-duplicated list, nil when both are empty,
-// so the stored refs of a note are the same slice shape --refs alone produced.
-func mergeIDs(a, b []string) []string {
-	var out []string
-	seen := make(map[string]bool, len(a)+len(b))
-	for _, list := range [][]string{a, b} {
-		for _, r := range list {
-			if !seen[r] {
-				seen[r] = true
-				out = append(out, r)
-			}
-		}
-	}
-	return out
 }
