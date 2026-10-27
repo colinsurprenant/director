@@ -1132,7 +1132,8 @@ func TestRunEmitConclude(t *testing.T) {
 
 // TestRunEmitNoteRefsFailClosed: with the log unreadable, a note's refs cannot be
 // told from a conclusion, and a wrong guess silently destroys positions, so a
-// note carrying --refs or --conclude is refused (exit 1) instead of appended.
+// note whose --refs or --conclude names any ULID is refused (exit 1) instead of
+// appended.
 // Everything else about the write path stays available.
 func TestRunEmitNoteRefsFailClosed(t *testing.T) {
 	t.Run("a corrupt log", func(t *testing.T) {

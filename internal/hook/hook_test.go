@@ -336,6 +336,7 @@ func TestSessionStartInjectsGroundTruth(t *testing.T) {
 		"the cross-link remedy leads":                        "is refused (cite its ULID in the body instead); `--conclude <ulid>`",
 		"concluding is explicit on the note":                 "`--conclude <ulid>` concludes it and every older position of its workstream",
 		"only complete concludes a handoff":                  "which only `/director:complete` may do",
+		"conclude needs a live resume point":                 "and only on a live resume point",
 		"note refs on a decision retire nothing":             "a note's refs on a decision retire nothing",
 		"full bodies one show away":                          "`director show <ulid>`",
 		"handoff is the boundary suggestion":                 "suggest `/director:handoff`",

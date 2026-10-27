@@ -28,7 +28,7 @@ func runEmit(args []string) int {
 	// refs and conclude are once-only: the stdlib string flag keeps the LAST
 	// value, so a repeated --conclude would silently drop the first handoff.
 	fs.Var(&onceValue{name: "refs", dst: &refs}, "refs", "comma-separated ULIDs this references/supersedes; a handoff ref naming a same-workstream handoff SUPERSEDES that position (see /director:handoff), a decision ref naming a decision SUPERSEDES it (it leaves the digest's active decisions); a note's refs may not name a handoff: cite its ULID in the note's body instead")
-	fs.Var(&onceValue{name: "conclude", dst: &conclude}, "conclude", "note only, and only the /director:complete close-out of a finished workstream: comma-separated handoff ULIDs this note CONCLUDES; each is retired from the digest's resume points together with every older position of its workstream, a parallel session's included")
+	fs.Var(&onceValue{name: "conclude", dst: &conclude}, "conclude", "note only, and only the /director:complete close-out of a finished workstream: comma-separated handoff ULIDs this note CONCLUDES, each a live resume point (a concluded or superseded one is refused); each is retired from the digest's resume points together with every older position of its workstream, a parallel session's included")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
