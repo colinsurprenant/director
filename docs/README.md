@@ -1,12 +1,15 @@
 # Director documentation
 
-Two kinds of documents live here, and the distinction is deliberate (it mirrors Director's own records-vs-living-docs model):
+Three kinds of documents live here, and the distinction is deliberate (it mirrors Director's own records-vs-living-docs model):
 
 **Living documents**: kept current; when anything disagrees with these or the code, these win:
 
 - [`why-director.md`](why-director.md), the positioning: what Director is, where it sits, what it refuses to be, honest comparisons.
 - [`getting-started.md`](getting-started.md), task-oriented first run: install → adopt → first session → cockpit, plus troubleshooting.
 - [`../README.md`](../README.md), the reference.
+- [`architecture/`](architecture/README.md), how Director is built and why, in the arc42 structure (twelve sections, one file each).
+
+**Decision records**: [`adr/`](adr/README.md), one file per architecture decision. An accepted record is never rewritten; a later record supersedes it.
 
 **Frozen records**: dated artifacts kept as-written for provenance, never rewritten, superseded by later decisions in the Director LOG and the living docs. Read them for the design rationale and its adversarial review, not for current behavior:
 
