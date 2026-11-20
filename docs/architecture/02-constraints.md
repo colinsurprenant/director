@@ -2,6 +2,8 @@
 
 Rules the design must obey. A change that breaks one of these is a change of product, not of implementation.
 
+The terms used here (log, event, fold, projection, digest, open-set) are defined at the top of [section 8](08-crosscutting-concepts.md#the-event-model).
+
 ## The write side is frozen; growth is read models
 
 Director records four kinds of event: `decision`, `open-item`, `handoff` and `note`. That set is closed.
@@ -12,10 +14,10 @@ Director records four kinds of event: `decision`, `open-item`, `handoff` and `no
 
 On top of that freeze sits a scope policy borrowed from CQRS (command-query responsibility segregation: one small, validated write path, and read models derived from what it wrote):
 
-- All future growth is read models: views, digests, filters and ceremonies over the existing log. They are cheap, safe and deterministic, because each one is recomputed from the log (`director status` is the exception: it also reads fleet rows and the clock, and sits outside the determinism check; see "The event model" in [section 8](08-crosscutting-concepts.md#the-event-model)).
+- All future growth is read models: views, digests, filters and ceremonies over the existing log. They are cheap, safe and deterministic, because each one is recomputed from recorded state with no clock: `render` from the log alone, `brief` from the log plus the CHARTER file (`director status` is the exception: it also reads fleet rows and the clock, and sits outside the determinism check; see "The event model" in [section 8](08-crosscutting-concepts.md#the-event-model)).
 - A feature that needs a new event kind is presumptively out of scope. It has to make the case for changing the product, not for adding a field.
 
-This sharpens the earlier freeze of the whole surface: four event kinds, the boundary commands (`/director:adopt`, `/director:handoff` and `/director:complete`), and no new subsystems. It does not replace it.
+The rest of the surface is frozen with it: four event kinds, the boundary commands (`/director:adopt`, `/director:handoff` and `/director:complete`), and no new subsystems.
 
 ## The scarce resource is the injection budget
 
@@ -35,7 +37,7 @@ The digest is also bounded per line, and over budget it degrades in a fixed orde
 
 ## A ledger, not a memory
 
-Director is a ledger. It answers "what is the authoritative current state of the work" with a deterministic, verifiable fold and with lifecycle: things open, close and are superseded. A memory store answers by fuzzy recall, has no lifecycle, and nothing in it ever closes. The design stays on the ledger side of that line: the fold, and the `render` and `brief` projections built on it, are pure functions of the log. [`why-director.md`](../why-director.md) covers how this compares with other tools.
+Director is a ledger. It answers "what is the authoritative current state of the work" with a deterministic, verifiable fold and with lifecycle: things open, close and are superseded. A memory store answers by fuzzy recall, has no lifecycle, and nothing in it ever closes. The design stays on the ledger side of that line: the fold and `director render` are pure functions of the log, and `director brief` is deterministic over the log plus the CHARTER file. [`why-director.md`](../why-director.md) covers how this compares with other tools.
 
 The invariants that follow from these constraints (human-rate writes, additive-only schema, the fold as the merge) are in [section 8](08-crosscutting-concepts.md#the-event-model). The reasoning behind the freeze and the growth policy is in the [event-model vision](../specs/2026-07-05-event-model-vision-design.md). Why the log is never compacted is [ADR 0003](../adr/0003-log-is-never-compacted.md).
 

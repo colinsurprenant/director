@@ -19,7 +19,7 @@ After a successful append, `emit` prints one line to stderr naming where the eve
 
 stdout stays the bare ULID and nothing else. The emitting session compares the echoed project and workstream with the ones injected at session start, and corrects on the spot if they differ. A rejected emit wrote nothing, so it prints no route, only its error. Emitting from the repo root remains the cheap habit that avoids the drift in the first place.
 
-In the code, `runEmit` (`cmd/director/emit.go`) writes the ULID to stdout and the route to stderr, and `TestRunEmitRoutingEcho` pins the two streams byte for byte, on success and on a rejected emit.
+In the code, `runEmit` (`cmd/director/emit.go`) writes the ULID to stdout and the route to stderr, and `TestRunEmitRoutingEcho` checks both: on success, stdout is exactly one ULID line and stderr is exactly the route line; on a rejected emit, stdout is empty and stderr carries no route.
 
 ## Alternatives considered
 
