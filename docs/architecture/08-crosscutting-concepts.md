@@ -22,7 +22,7 @@ The rule that follows: **a feature that makes the fold transport-aware or order-
 
 Where the promise is weaker, the code says so:
 
-- A reused event id gives the sort no order to use. For such a log (hand-edited, or written before `Store.Append` began refusing duplicate ids) the fold promises only input-order determinism.
+- A reused event id gives the sort no order to use. For such a log (hand-edited, written before `Store.Append` began refusing duplicate ids, or produced by two appends racing that check) the fold promises only input-order determinism.
 - Same-millisecond ULID ties across machines are not detected yet. One machine has a total order; flagging cross-machine ties is deferred to multi-machine sync, and the fold never reorders to hide one (`internal/render/fold.go`).
 
 Distribution is planned, not built. The intended transport is git: one NDJSON shard per repo and machine merges cleanly, with no server and no protocol, ever. Today there is one log per repo on one machine, and a networked-filesystem hub is a known v1 limitation (the NFS caveat in `internal/event/store.go`).
@@ -84,7 +84,7 @@ A log whose handoffs are all implicit yields at most one resume point per workst
 | handoff | `resumable` | `superseded` (explicit handoff or implicit mark), `concluded` (note) |
 | note | `recorded` | never |
 
-`director show <ulid>` prints the event as recorded and, only when the fold says it is retired, one derived line after the headers: `lifecycle: <verb> by <ulid>` (a promoted decision adds ` to <doc>`). An active event prints with no lifecycle line. The text form shows the id, type, status, area, risk, workstream, timestamp, refs and body, not every stored field; `director show --json` gives the complete record and carries the same vocabulary (`lifecycle`, plus `retired_by` for a retired event), and `director render --json` lists the live records with their `lifecycle`. When several events retire the same target, the lowest ULID is the one named, so the answer is a function of the set. This retirement trail has no weight in the digest.
+`director show <ulid>` prints the event as recorded and, only when the fold says it is retired, one derived line after the headers: `lifecycle: <verb> by <ulid>` (a promoted decision adds ` to <doc>`). An active event prints with no lifecycle line. The text form shows the main fields, not every stored one (`schema_version` and the addressee are left out); `director show --json` gives the complete record and carries the same vocabulary (`lifecycle`, plus `retired_by` for a retired event), and `director render --json` lists the live records with their `lifecycle`. When several events retire the same target, the lowest ULID is the one named, so the answer is a function of the set. This retirement trail has no weight in the digest.
 
 Each `director render` also writes `<hub>/health/render-manifest.<repo-key>.json`: event counts, the last event id, and two lists of handoff ids. Each covers one path only: `concluded_handoffs` holds the handoffs a note named directly (not the older ones the mark swept), and `superseded_handoffs` holds the ones an explicit handoff named (not those under an implicit mark). Neither is the whole of what left the resume stack. The manifest never feeds the digest. It does not list superseded decisions or closed open-items by id; for those, `director show` on the event gives the answer.
 

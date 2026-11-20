@@ -37,7 +37,7 @@ If a concrete trigger ever appears (a measured slow fold, or friction in multi-m
 - One file and one fold keep the model simple: the digest is a pure function of the log, and verification is a re-fold.
 - Every read parses the whole log, and every append scans it for a duplicate id (`Store.Append`, `internal/event/store.go`, which documents the cumulative quadratic cost and accepts it). At the log sizes seen so far both are negligible.
 - The original design sketched a bounded "tail plus open-set" read. It was never built; the shipped fold reads everything (`internal/render/fold.go`).
-- Nothing is ever lost to growth management, because there is none. Events stay reachable through `director show` for the life of the log. The one exception is a log that holds a reused id (hand-edited, or written before `Store.Append` refused duplicates): `show` returns the first match.
+- Nothing is ever lost to growth management, because there is none. Events stay reachable through `director show` for the life of the log. The one exception is a log that holds a reused id (hand-edited, written before `Store.Append` refused duplicates, or produced by two appends racing that check): `show` returns the first match.
 
 ## Sources
 

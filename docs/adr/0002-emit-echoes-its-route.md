@@ -29,7 +29,7 @@ In the code, `runEmit` (`cmd/director/emit.go`) writes the ULID to stdout and th
 
 ## Consequences
 
-- A misroute is visible in the emitting session's own transcript at the moment it happens, at the cost of one stderr line per successful emit.
+- A misroute is visible in the emitting session's own transcript at the moment it happens, at the cost of one more stderr line on each successful emit.
 - The echo detects a misroute and does not prevent it. The event is already in the other project's log by the time the line prints, and catching it depends on the session comparing the line with its injected identity.
 - `resolve` and `promote` print no route. They check their targets against the project's own log, so a drifted working directory fails with an unknown-target error instead of writing to the wrong log.
 - The protocol skill (`skills/director/SKILL.md`) and the README describe the echo, and `TestRunEmitRoutingEcho` keeps the stream contract from drifting.
