@@ -21,4 +21,4 @@ What this makes easy, what it makes hard, and what it rules out.
 
 ## Sources
 
-Director log decisions this record absorbs, by ULID. `director show <ulid>` prints each one in full.
+Director log decisions this record absorbs, by ULID. `director show <ulid>` prints each one (`--json` gives the complete record).

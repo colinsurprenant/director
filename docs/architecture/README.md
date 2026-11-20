@@ -23,7 +23,7 @@ Director's own log is the fast layer: decisions are recorded there the moment th
 
 Three rules keep that move honest:
 
-1. **Cite the source.** Text that came from the log ends with a `Sources:` line listing the ULIDs it absorbed. `director show <ulid>` prints each original in full.
+1. **Cite the source.** Text that came from the log ends with a `Sources:` line listing the ULIDs it absorbed. `director show <ulid>` prints each original (`--json` gives the complete record).
 2. **Write first, promote second.** A decision is promoted only after its content is merged on the default branch.
 3. **State what is true now.** These sections describe the current design. The history of how it got there belongs in the decision records and the log.
 

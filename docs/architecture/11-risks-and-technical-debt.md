@@ -2,44 +2,54 @@
 
 Accepted limitations and known weak points, each with the reason it is accepted.
 
-## Concurrency: shared-write surfaces and accepted races
+## Concurrency: shared-write surfaces and known races
 
-Many short-lived processes write shared files at the same time: several `director` commands, and one hook process per tool call. An audit of the shared-write surfaces (2026-07-02, prompted by the marker race found in PR #6) recorded a verdict for each one it examined, so that nobody has to repeat it. It did not examine every writer: the ones without an audit verdict are under [Surfaces the audit did not cover](#surfaces-the-audit-did-not-cover). A new shared-write surface needs its own entry here.
+Many short-lived processes write shared files at the same time: several `director` commands, and one hook process per tool call. This section records how each shared file is written and which races are known. Of these files only the event log is the system of record. The others hold liveness and health data.
 
-### Clean by construction
+A concurrency audit on 2026-07-02, prompted by the marker race found in PR #6, examined the event log, the health log, the fleet rows and the two nudge files, and accepted the races it found as benign. Later review found cases its reasoning did not cover; they are stated under [Known races](#known-races). The audit has not been redone, so its verdicts are provisional, and this section does not restate them as settled. Redoing it is open work.
 
-- **The event log and the hook health log.** `Store.Append` (`internal/event/store.go`) and the health log (`internal/hook/health.go`) each write one line in a single `O_APPEND` write, so concurrent appenders neither interleave nor drop records on a local filesystem. A networked filesystem such as NFS does not guarantee this, and a networked hub is a known v1 limitation.
-- **Fleet rows.** `internal/fleet/fleet.go` writes each row to a temp file and renames it into place, so a reader never sees a torn row. Each row belongs to one (workstream, session uuid) pair and has one writer, its own session. The exception is `done --workstream`, the cross-workstream close-out, which archives other sessions' rows; it falls under race (b) below.
-- **The flush-nudge counter.** It is opt-in (`DIRECTOR_FLUSH_NUDGE_EVERY`). The count is the size of an append-only file: each bump appends one byte and reads its own end offset, so concurrent bumps never lose an increment (`bumpToolCounter` in `internal/hook/posttooluse.go`). A counter that reads, parses and rewrites a number would lose increments under concurrent hooks, which is why the count is a file size.
+A new shared-write surface needs its own row here.
 
-### Accepted as benign
+### How each surface is written
 
-**(a) Heartbeat lost update.** `fleet.Heartbeat` reads a row, stamps the heartbeat and rewrites it. Two concurrent heartbeats of one row both stamp roughly the current time, so last write wins gives the same result as any other order, and the rewrite is atomic, so a row is never torn.
+| Surface | Write | Code |
+|---|---|---|
+| Event log | one line per event, in a single `O_APPEND` write | `Store.Append`, `internal/event/store.go` |
+| Hook health log | one line per record, in a single `O_APPEND` write | `internal/hook/health.go` |
+| Fleet rows | a temp file, renamed into place | `internal/fleet/fleet.go` |
+| Flush-nudge counter (opt-in, `DIRECTOR_FLUSH_NUDGE_EVERY`) | appends one byte; the count is the file size | `bumpToolCounter`, `internal/hook/posttooluse.go` |
+| Handoff-nudge marker (opt-in, `DIRECTOR_HANDOFF_NUDGE_TOKENS`) | created with `O_EXCL`, removed to re-arm | `internal/hook/handoffnudge.go` |
+| Render manifest | the whole file, with a plain `os.WriteFile` | `WriteManifest`, `internal/render/render.go` |
+| Identity files (the repo key and `.director/workstream-id`) | a plain `os.WriteFile` | `persist`, `internal/identity/repokey.go` |
+| `.director/.gitignore` | an exclusive create, then a guarded completion | `ensureStateIgnored`, `internal/identity/gitignore.go` |
+| CHARTER scaffold | an exclusive create, then a write | `internal/adopt/adopt.go` |
+| Files `director install` and `director uninstall` manage | written by a command the user runs, not by hooks | `internal/install/` |
 
-**(b) `Done` against a straggler `Heartbeat`.** `Heartbeat` is create-or-update, so one that lands after `Done` archived a row re-creates it as a ghost. This is accepted for two reasons.
+What the mechanism gives, and no more:
 
-- The audit judged it close to unreachable: Claude Code blocks on PostToolUse hooks before a turn can end, so a heartbeat should not still be in flight when the session ends. That is the audit's premise about the harness, not re-verified here.
-- A ghost goes quiet, but no timer removes it. A re-created row carries no branch or directory, so the branch-gone check treats it as alive (`branchAliveWith` in `internal/fleet/branchalive.go`) and only heartbeat age applies. It reads active for up to 4 hours, idle after that, and dormant after 48 hours (`IdleAfter` and `DormantAfter` in `internal/render/status.go`). A dormant row stays listed in `director status` until something archives it: the session's own SessionEnd hook, if that has yet to run (`internal/hook/sessionend.go`), or `done --workstream`.
+- A single `O_APPEND` write per line means concurrent appenders neither interleave nor drop records on a local filesystem. A networked filesystem such as NFS does not guarantee this, and a networked hub is a known v1 limitation.
+- A temp file and rename means a reader does not see a torn fleet row. It says nothing about which of two writers wins.
+- A counter that is a file size does not lose an increment when bumps run concurrently. A counter that reads, parses and rewrites a number would.
+- A plain `os.WriteFile` gives neither property: two writers can interleave, and a reader can see a truncated file.
 
-**Known weak point: bare rows are common, not exceptional.** The Stop hook archives the session's row each time a turn is allowed to end (`markFleetDone` in `internal/hook/stop.go`), and the next tool call's heartbeat re-creates it without branch or directory. From a session's second turn until its next session start, its row is bare, and the branch-gone check cannot apply to it. Issue #30 tracks the fleet row lifecycle.
+This table comes from a search of the non-test code for file writes. Treat it as a starting point, not as proof that nothing else writes. The identity files, `.director/.gitignore`, the CHARTER scaffold and the installer files have never been analysed for races.
 
-The same mechanism covers `done --workstream` archiving a workstream that is still active: the live session's next heartbeat re-creates its row, bare, and its branch and directory return at its next session start (see the comment on `fleet.DoneWorkstream`).
+### Known races
 
-**(c) Handoff-nudge re-arm.** The nudge fires once each time context size crosses a token threshold. It is opt-in: the threshold comes from `DIRECTOR_HANDOFF_NUDGE_TOKENS`, and the nudge is off when that is unset. The once-marker is created with `O_EXCL`, so exactly one of several concurrent hook processes wins a crossing. Re-arming removes the marker when usage drops below half the threshold. A race between that removal and a create needs two concurrent hook processes that read context sizes at least half the threshold apart at nearly the same time (200k tokens when the threshold is 400k). The audit judged the outcome to be one duplicate nudge. The code does not enforce that as a bound: the removal is not synchronised with the usage reading, so an unlucky interleaving can produce more than one (`internal/hook/handoffnudge.go`).
+**Heartbeat lost update.** `fleet.Heartbeat` reads a row, stamps the heartbeat and rewrites the row, without comparing against what is stored. Two concurrent heartbeats normally stamp about the same time, so either order gives the same picture. A heartbeat that stalls between its read and its write overwrites a newer one with its older timestamp, so a busy workstream can read staler than it is until its next heartbeat.
 
-### Other accepted windows
+**Archive against a straggling heartbeat.** `Heartbeat` is create-or-update, so one that writes after `Done` archived the row re-creates it as a ghost. If the heartbeat had read the row before the archive, the ghost keeps its branch and directory. If it found no row, the ghost is bare: it carries no branch or directory, the branch-gone check treats it as alive (`branchAliveWith` in `internal/fleet/branchalive.go`), and only heartbeat age applies (active for up to 4 hours, then idle, then dormant after 48 hours; `IdleAfter` and `DormantAfter` in `internal/render/status.go`). No timer removes a row. It stays listed in `director status` until something archives it: the session's own SessionEnd hook, if that has yet to run (`internal/hook/sessionend.go`), or `done --workstream`. The audit judged this race close to unreachable on the premise that Claude Code blocks on PostToolUse hooks before a turn can end. That premise has not been re-verified.
 
-Four validate-then-append windows are also accepted in the code: `event.Resolve` and `event.Promote` check their targets against a read of the log and then append, `emit` checks that a note's `--conclude` targets are live resume points and then appends, and `Store.Append` scans for a duplicate id before appending. Another writer can slip in between. The comments in `internal/event/write.go`, `internal/event/store.go` and `cmd/director/emit.go` give the reasoning; for promotion see also the [promote ceremony](../specs/2026-07-06-promote-ceremony-design.md).
+**Bare rows are common, not exceptional.** The Stop hook archives the session's row each time a turn is allowed to end (`markFleetDone` in `internal/hook/stop.go`), and the next tool call's heartbeat re-creates it without branch or directory. From a session's second turn until its next session start, its row is bare, and the branch-gone check cannot apply to it. The same happens when `done --workstream` archives a workstream that is still active: the live session's next heartbeat re-creates its row, bare, and the branch and directory return at its next session start (see the comment on `fleet.DoneWorkstream`). Issue #30 tracks the fleet row lifecycle.
 
-### Surfaces the audit did not cover
+**Rows with more than one writer.** A session's row is normally written only by that session (its hooks, and `director` verbs run inside it). Three cases break that: `done --workstream` archives other sessions' rows; the fixed `manual` row is shared by every `director register` or `director heartbeat` run by hand without a session id; and the fixed `adopt` row is shared by every adoption of the repository (`ManualUUID` and `AdoptUUID` in `internal/fleet/fleet.go`). The lost-update race above applies to those shared rows too.
 
-- **The render manifest: not atomic.** Each `director render` rewrites `<hub>/health/render-manifest.<repo-key>.json` with a plain `os.WriteFile` (`WriteManifest` in `internal/render/render.go`), neither an append nor a temp file and rename. Two concurrent renders of one repository can interleave, and a reader can see a truncated or inconsistent file. This is a weaker guarantee than the event log's, and it is contained: the manifest is a health artifact that no Director code reads back, it never feeds the digest, and the next render rewrites it whole. The digest a render printed is unaffected.
-- **No verdict recorded.** These writers have not been analysed here:
-  - the persisted identity files, the repo key and `.director/workstream-id`, both written by `persist` in `internal/identity/repokey.go` with a plain `os.WriteFile`;
-  - `.director/.gitignore` (`ensureStateIgnored` in `internal/identity/gitignore.go`), an exclusive create followed by a guarded completion;
-  - the CHARTER scaffold (`internal/adopt/adopt.go`), an exclusive create followed by a write;
-  - the files `director install` and `director uninstall` manage (`internal/install/`), written by a command the user runs, not by hooks.
+**Handoff-nudge re-arm.** The nudge fires when context size crosses a token threshold, and the marker's exclusive create lets one hook process win a given create. A hook that reads usage under half the threshold removes the marker to re-arm it. That removal acts on the hook's own earlier reading and is not synchronised with creates, so a slow hook can remove a marker that a later crossing created, and the next hook over the threshold nudges again. Each occurrence is one redundant nudge. Nothing bounds how many can occur.
 
-  This list comes from a search of the non-test code for file writes. Treat it as a starting point, not as proof that nothing else writes.
+**Validate-then-append windows.** `event.Resolve` and `event.Promote` check their targets against a read of the log and then append, `emit` checks that a note's `--conclude` targets are live resume points and then appends, and `Store.Append` scans for a duplicate id before appending. Another writer can slip in between. The comments in `internal/event/write.go`, `internal/event/store.go` and `cmd/director/emit.go` give the reasoning; for promotion see also the [promote ceremony](../specs/2026-07-06-promote-ceremony-design.md).
 
-Sources: `01KWJ7F9GKDJEP1VKQPQGMN5AY`
+**The render manifest is not atomic.** Two concurrent renders of one repository can interleave, and a reader can see a truncated or inconsistent file. It is contained: the manifest is a health artifact that no Director code reads back, it never feeds the digest, and the next render rewrites it whole. The digest a render printed is unaffected.
+
+The fleet and nudge races change what `director status` shows and how often an opt-in nudge fires. Neither code path writes to the event log.
+
+Sources: none absorbed. Reference: `01KWJ7F9GKDJEP1VKQPQGMN5AY`, the 2026-07-02 audit. It stays active in the log, and `director show` prints it, until the audit is redone.
