@@ -314,7 +314,7 @@ Added 2026-11-19. The sections above are the design as settled on 2026-10-02. Th
 
 ### Promote no longer waits for triage
 
-Decision `01M7VH6YTADFQTPY2FSNHKRW02` replaces `01M3ZAMPCPE12K5MEGHMSDAX91` and `01M3ZAQE08Y6WWJE5KB2KV25N9`. Triage and promote remain separate ceremonies. What changed is the order, and with it three passages above:
+Decision `01M7VH6YTADFQTPY2FSNHKRW02` replaces `01M3ZAMPCPE12K5MEGHMSDAX91` and `01M3ZAQE08Y6WWJE5KB2KV25N9`. Triage and promote remain separate ceremonies. What changed is the order, and with it these passages above:
 
 - **The sequence in [Relation to the other ceremonies](#relation-to-the-other-ceremonies) and resolved question 5.** "Triage first, through the ingest dogfood; then revive promote" no longer holds. The home promote was waiting for is decided (decision `01M7GRT5DXVHGNT99HRMAD7QMP`: arc42 in `docs/architecture/`, decision records in `docs/adr/`), and promote's first pass runs by hand, independently of the triage build.
 - **The promotion-candidates line in step 5 of [The walk](#the-walk).** The example criterion, decisions older than 60 days, is not adopted as written: a classification of the active decisions found that age does not separate the ones worth promoting from the rest. The line's wording is decided after the hand pass.

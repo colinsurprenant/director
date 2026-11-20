@@ -7,7 +7,7 @@ One file per decision, numbered in the order they were written: `NNNN-short-titl
 - **A record is for a choice.** Write one when there were real alternatives and the choice has consequences. Rules that always hold and descriptions of how something works go in [`../architecture/`](../architecture/README.md).
 - **An accepted record is never rewritten.** To change a decision, write a new record that supersedes the old one, and set the old one's status to `Superseded by NNNN`. Fixing a typo or a broken link is fine.
 - **Cite the source.** A record written from Director log decisions lists their ULIDs under Sources. The replaced and rejected decisions in that chain are the raw material for the Alternatives section.
-- **Write first, promote second.** The log decisions are promoted (`director promote <ulid>... --to docs/adr/README.md`) only after the record is merged on the default branch.
+- **Write first, promote second.** The log decisions are promoted to the record that absorbed them (`director promote <ulid>... --to docs/adr/NNNN-short-title.md`), and only after that record is merged on the default branch.
 
 ## Index
 

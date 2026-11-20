@@ -33,7 +33,7 @@ Three mechanisms already exist, and they are the scaling mechanisms:
 
 Promotion is semantic snapshotting. It folds facts out of the fast read model into the slow layer along a relevance axis (is this still worth injecting?) instead of a time axis (how old is it?). Nothing is lost by any of the three: the events stay in the log, and `director show <ulid>` prints any of them in full.
 
-Each digest line is capped, and over budget the payload degrades in a fixed order that never drops an open loop or a resume point (see `injectionBudgetUnits` in `internal/hook/sessionstart.go`). The budget is a target, not a hard cap: because open-items and resume points are never dropped, a payload that is still over after every rung is injected as it is, and the overflow is written to the hook health log (`buildGroundTruth` in the same file). An ungroomed open-set or a deep resume stack therefore still grows the digest.
+Each entry's body headline is capped (its other fields, such as a long `--area`, are printed in full), and over budget the payload degrades in a fixed order that never drops an open loop or a resume point (see `injectionBudgetUnits` in `internal/hook/sessionstart.go`). The budget is a target, not a hard cap: because open-items and resume points are never dropped, a payload that is still over after every rung is injected as it is, and the overflow is written to the hook health log (`buildGroundTruth` in the same file). An ungroomed open-set or a deep resume stack therefore still grows the digest.
 
 ## A ledger, not a memory
 
