@@ -11,7 +11,7 @@ Retiring that handoff had to fit three constraints: no new event kind (the [writ
 
 ## Decision
 
-A note can conclude a handoff. A concluded handoff, and every older handoff of the same workstream, leaves the workstream's resume stack and therefore the digest. The handoffs stay in the log, and `director show` prints them with a `lifecycle: concluded by <note>` line. The fold applies this as a per-workstream high-water mark, so concluding the newest position can never resurface an older, staler one as the resume point. It is the same shape as `resolve` for open-items.
+A note can conclude a handoff. A concluded handoff, and every older handoff of the same workstream, leaves the workstream's resume stack and therefore the digest. The handoffs stay in the log, and `director show` prints each with a lifecycle line. That line names the lowest-ULID event that retired the handoff, so it reads `concluded by <note>` only where the note is that event: an older position that an earlier handoff had already superseded keeps its `superseded by <handoff>` line. The fold applies this as a per-workstream high-water mark, so concluding the newest position can never resurface an older, staler one as the resume point. It is the same shape as `resolve` for open-items.
 
 Two rules at the write site keep a conclusion deliberate:
 

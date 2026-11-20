@@ -4,7 +4,7 @@ Accepted limitations and known weak points, each with the reason it is accepted.
 
 ## Concurrency: shared-write surfaces and accepted races
 
-Many short-lived processes write shared files at the same time: several `director` commands, and one hook process per tool call. An audit of every shared-write surface (2026-07-02, prompted by the marker race found in PR #6) recorded a verdict for each, so that nobody has to repeat it. A new shared-write surface needs its own entry here.
+Many short-lived processes write shared files at the same time: several `director` commands, and one hook process per tool call. An audit of every shared-write surface that existed at the time (2026-07-02, prompted by the marker race found in PR #6) recorded a verdict for each, so that nobody has to repeat it. A new shared-write surface needs its own entry here; the ones added since the audit are under [Surfaces added since the audit](#surfaces-added-since-the-audit).
 
 ### Clean by construction
 
@@ -30,5 +30,10 @@ The same mechanism covers `done --workstream` archiving a workstream that is sti
 ### Other accepted windows
 
 Four validate-then-append windows are also accepted in the code: `event.Resolve` and `event.Promote` check their targets against a read of the log and then append, `emit` checks that a note's `--conclude` targets are live resume points and then appends, and `Store.Append` scans for a duplicate id before appending. Another writer can slip in between. The comments in `internal/event/write.go`, `internal/event/store.go` and `cmd/director/emit.go` give the reasoning; for promotion see also the [promote ceremony](../specs/2026-07-06-promote-ceremony-design.md).
+
+### Surfaces added since the audit
+
+- **The render manifest: not atomic.** Each `director render` rewrites `<hub>/health/render-manifest.<repo-key>.json` with a plain `os.WriteFile` (`WriteManifest` in `internal/render/render.go`), neither an append nor a temp file and rename. Two concurrent renders of one repository can interleave, and a reader can see a truncated or inconsistent file. This is a weaker guarantee than the event log's, and it is contained: the manifest is a health artifact that no Director code reads back, it never feeds the digest, and the next render rewrites it whole. The digest a render printed is unaffected.
+- **Not yet audited.** The persisted repo-key file (`persist` in `internal/identity/repokey.go`, also a plain `os.WriteFile`) and the `.director/.gitignore` writer (`ensureStateIgnored` in `internal/identity/gitignore.go`, an exclusive create followed by a guarded completion) have no verdict recorded here.
 
 Sources: `01KWJ7F9GKDJEP1VKQPQGMN5AY`

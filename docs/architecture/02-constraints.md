@@ -21,7 +21,7 @@ The rest of the surface is frozen with it: four event kinds, the boundary comman
 
 ## The scarce resource is the injection budget
 
-Storage and compute are not what limits Director. The limit is how much of a coding agent's context window the injected digest may occupy. Scaling therefore means one thing: history grows monotonically, while the digest stays constant-size and constant-relevance.
+Storage and compute are not what limits Director. The limit is how much of a coding agent's context window the injected digest may occupy. Scaling therefore means one thing: history grows monotonically, while the digest should stay roughly constant in size and in relevance. That is the goal the mechanisms below serve, not a bound the code enforces.
 
 Three mechanisms already exist, and they are the scaling mechanisms:
 
@@ -33,7 +33,7 @@ Three mechanisms already exist, and they are the scaling mechanisms:
 
 Promotion is semantic snapshotting. It folds facts out of the fast read model into the slow layer along a relevance axis (is this still worth injecting?) instead of a time axis (how old is it?). Nothing is lost by any of the three: the events stay in the log, and `director show <ulid>` prints any of them in full.
 
-The digest is also bounded per line, and over budget it degrades in a fixed order that never drops an open loop or a resume point (see `injectionBudgetUnits` in `internal/hook/sessionstart.go`).
+Each digest line is capped, and over budget the payload degrades in a fixed order that never drops an open loop or a resume point (see `injectionBudgetUnits` in `internal/hook/sessionstart.go`). The budget is a target, not a hard cap: because open-items and resume points are never dropped, a payload that is still over after every rung is injected as it is, and the overflow is written to the hook health log (`buildGroundTruth` in the same file). An ungroomed open-set or a deep resume stack therefore still grows the digest.
 
 ## A ledger, not a memory
 
