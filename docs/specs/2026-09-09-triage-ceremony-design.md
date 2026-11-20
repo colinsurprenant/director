@@ -307,3 +307,17 @@ The review session (2026-10-02) settled all eight; the answers are folded into t
 6. **Does the pointer need a surface?** No render surface. Auditability is enough once it is reachable, so `resolve --to` is built with triage. Decision `01M3ZAYZKBMNJ0VD8TQMMFZPX9`, extended by `01M42CA2SKDMV060P68WCX8N4P` (the destination is a `resolved-to:` body, read back only when it validates).
 7. **Does emission discipline ship with this or after the dogfood?** Split: the review-leftovers rule and the emit-guard fix before, the general narrowing after. Decision `01M3ZB7RYTY0MHYC8MR1TDQNV2`; with no `Tracker:` line the rule falls back to an open-item, and adopt asks the tracker question, decision `01M3ZPJV4CFHXSHZCQEK8CN6MF`.
 8. **The planning-doc seam.** An existing planning doc is a MIGRATE destination only when the CHARTER `Tracker:` line names it; never inferred, never created. Decision `01M3ZBB3DFZP3VZJRRW3BHQQ0E`.
+
+## Amendments
+
+Added 2026-11-19. The sections above are the design as settled on 2026-10-02. This section is the pointer table for what changed since: each entry names the change and the ULID that holds the reasoning, readable with `director show <ulid>`.
+
+### Promote no longer waits for triage
+
+Decision `01M7VH6YTADFQTPY2FSNHKRW02` replaces `01M3ZAMPCPE12K5MEGHMSDAX91` and `01M3ZAQE08Y6WWJE5KB2KV25N9`. Triage and promote remain separate ceremonies. What changed is the order, and with it three passages above:
+
+- **The sequence in [Relation to the other ceremonies](#relation-to-the-other-ceremonies) and resolved question 5.** "Triage first, through the ingest dogfood; then revive promote" no longer holds. The home promote was waiting for is decided (decision `01M7GRT5DXVHGNT99HRMAD7QMP`: arc42 in `docs/architecture/`, decision records in `docs/adr/`), and promote's first pass runs by hand, independently of the triage build.
+- **The promotion-candidates line in step 5 of [The walk](#the-walk).** The example criterion, decisions older than 60 days, is not adopted as written: a classification of the active decisions found that age does not separate the ones worth promoting from the rest. The line's wording is decided after the hand pass.
+- **The "not in this build" paragraph in [Work breakdown](#work-breakdown).** The `/director:promote` command and the remedy text on the decisions-elided line are still not part of the triage build. They now wait for the hand pass, not for the ingest dogfood.
+
+The eleven review decisions this spec cites in its header were promoted to this file on 2026-11-19 (marker `01M7VH752Q2ANEE0AS3XK28BXY`).
